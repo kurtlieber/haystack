@@ -1,0 +1,199 @@
+"""SQLite schema and helpers (~/.local/share/haystack/discovery.db)."""
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import config
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS local_tracks (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    size INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,          -- short audio-content hash (mdat samples); fallback key, never mtime
+    artist_raw TEXT, artists_json TEXT,  -- artists_json: normalised list (comma-joined strings split)
+    artist_key TEXT,                     -- key of the first artist
+    title_raw TEXT, title_base TEXT, title_key TEXT, version_suffix TEXT,
+    album TEXT, genre TEXT, year TEXT,
+    duration REAL,
+    spotify_id TEXT,                     -- 22-char Spotify track id from the (mis-named) MusicBrainz Track Id tag
+    spotify_artist_ids TEXT,
+    isrc TEXT,
+    present INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT, last_seen TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS local_tracks_hash ON local_tracks(content_hash);
+CREATE INDEX IF NOT EXISTS local_tracks_sid ON local_tracks(spotify_id);
+
+CREATE TABLE IF NOT EXISTS local_embeddings (
+    content_hash TEXT PRIMARY KEY,
+    status TEXT NOT NULL,                -- ok | error
+    attempts INTEGER NOT NULL DEFAULT 0,
+    n_windows INTEGER, file TEXT, error TEXT, seconds REAL, updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS spotify_tracks (
+    spotify_id TEXT PRIMARY KEY,
+    name TEXT, artists_json TEXT, artist_key TEXT, title_key TEXT, version_suffix TEXT,
+    duration REAL, isrc TEXT, album TEXT, updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS likes (
+    spotify_id TEXT PRIMARY KEY,
+    added_at TEXT, first_seen TEXT, last_seen TEXT,
+    removed_at TEXT                      -- set when no longer in Liked Songs on a full resync
+);
+
+CREATE TABLE IF NOT EXISTS plays (
+    spotify_id TEXT NOT NULL, played_at TEXT NOT NULL, context TEXT,
+    PRIMARY KEY (spotify_id, played_at)
+);
+
+CREATE TABLE IF NOT EXISTS liked_map (
+    spotify_id TEXT PRIMARY KEY,
+    local_id INTEGER,                    -- NULL = not in library
+    method TEXT, confidence TEXT, dt REAL, version TEXT, reason TEXT,
+    review TEXT,                         -- NULL | pending | accepted | rejected
+    use_local INTEGER NOT NULL DEFAULT 0,
+    deezer_id INTEGER,                   -- preview vector source when use_local = 0
+    vector_status TEXT,                  -- NULL | ok | not_found | error
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deezer_vectors (
+    deezer_id INTEGER PRIMARY KEY,
+    e512 BLOB NOT NULL, e1280 BLOB, n_patches INTEGER, seconds REAL, created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS candidates (
+    id INTEGER PRIMARY KEY,
+    deezer_id INTEGER UNIQUE,
+    artist TEXT, artist_key TEXT, title TEXT, title_key TEXT, version_suffix TEXT, song_key TEXT,
+    duration REAL, isrc TEXT, mbid TEXT, deezer_artist_id INTEGER,
+    source TEXT NOT NULL,                -- first source that produced it (like-rate attribution)
+    harvested_at TEXT,
+    vector_status TEXT,                  -- NULL | ok | no_preview | error
+    spotify_id TEXT, spotify_status TEXT, -- NULL | ok | not_found
+    state TEXT NOT NULL DEFAULT 'pool',  -- pool | offered | liked | negative | retired | excluded
+    exclude_reason TEXT,
+    unplayed_expiries INTEGER NOT NULL DEFAULT 0,
+    score REAL, raw_cos REAL, nearest TEXT, scored_at TEXT
+);
+CREATE INDEX IF NOT EXISTS candidates_state ON candidates(state);
+CREATE INDEX IF NOT EXISTS candidates_song ON candidates(song_key);
+
+CREATE TABLE IF NOT EXISTS candidate_sources (
+    candidate_id INTEGER NOT NULL, source TEXT NOT NULL, detail TEXT, seen_at TEXT,
+    PRIMARY KEY (candidate_id, source, detail)
+);
+
+CREATE TABLE IF NOT EXISTS batches (
+    id INTEGER PRIMARY KEY, created_at TEXT, size INTEGER, n_explore INTEGER, note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS offers (
+    id INTEGER PRIMARY KEY,
+    candidate_id INTEGER NOT NULL, spotify_id TEXT NOT NULL, batch_id INTEGER,
+    source TEXT, score REAL, exploration INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL, removed_at TEXT,
+    played INTEGER NOT NULL DEFAULT 0, first_played_at TEXT,
+    outcome TEXT                         -- NULL (active) | liked | negative | unplayed | manual_removed
+);
+CREATE INDEX IF NOT EXISTS offers_active ON offers(removed_at);
+
+-- Every track the bot ever put into one of its playlists. Hourly sync only removes rows here.
+-- The pre-batch Discoveries clear removes every playlist track, then closes these rows.
+CREATE TABLE IF NOT EXISTS playlist_adds (
+    id INTEGER PRIMARY KEY,
+    playlist TEXT NOT NULL,              -- discoveries | to_rip
+    playlist_id TEXT NOT NULL, spotify_id TEXT NOT NULL,
+    added_at TEXT NOT NULL, snapshot_id TEXT,
+    removed_at TEXT, removed_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS playlist_adds_active ON playlist_adds(playlist, removed_at);
+
+-- Discoveries clear, written before the Spotify delete and removed after local bookkeeping.
+-- A retry or the next sync finishes these rows once the track is gone, without a second verdict
+-- and without reading the delete as a hand removal.
+CREATE TABLE IF NOT EXISTS clear_pending (
+    playlist_id TEXT NOT NULL,
+    spotify_id TEXT NOT NULL,
+    reason TEXT NOT NULL,                -- liked | unliked | recent
+    verdict TEXT,                        -- 'no' or NULL (liked and recent record nothing)
+    candidate_id INTEGER,
+    added_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (playlist_id, spotify_id)
+);
+
+CREATE TABLE IF NOT EXISTS to_rip (
+    spotify_id TEXT PRIMARY KEY, added_at TEXT, removed_at TEXT, local_id INTEGER, match_method TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deezer_artists (
+    name_key TEXT PRIMARY KEY, deezer_artist_id INTEGER, name TEXT, checked_at TEXT
+);
+
+-- Spotify track -> Deezer track whose preview stands in for it (on-demand Readings for tracks the server hadn't seen)
+CREATE TABLE IF NOT EXISTS spotify_deezer (
+    spotify_id TEXT PRIMARY KEY, deezer_id INTEGER,
+    status TEXT,                         -- ok | no_preview | not_found | error
+    method TEXT, checked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY, job TEXT, started_at TEXT, finished_at TEXT, ok INTEGER, summary TEXT, error TEXT
+);
+"""
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    path = Path(path or config.DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path, timeout=120, isolation_level=None)  # autocommit; explicit BEGIN where needed
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=120000")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.executescript(SCHEMA)
+    _migrate(con)
+    from . import playlists, traits, verdicts
+    verdicts.ensure(con)
+    traits.ensure(con)
+    playlists.ensure(con)
+    return con
+
+
+def _add_column(con, table: str, col: str, decl: str) -> None:
+    if col in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
+        return
+    try:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    except sqlite3.OperationalError as e:      # another process added it first
+        if "duplicate column" not in str(e):
+            raise
+
+
+def _migrate(con) -> None:
+    _add_column(con, "deezer_vectors", "style400", "BLOB")       # genre_discogs400 activations, f16
+    _add_column(con, "candidates", "neg_penalty", "REAL")         # score drop from the negative penalty
+    _add_column(con, "candidates", "nearest_negative", "TEXT")    # the rejected track that set it
+    for col in ("album_type", "release_date", "image_url", "image_url_small"):   # needle's track cards
+        _add_column(con, "spotify_tracks", col, "TEXT")
+
+
+def kv_get(con, k: str, default=None):
+    r = con.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+    return r[0] if r else default
+
+
+def kv_set(con, k: str, v) -> None:
+    con.execute("INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, None if v is None else str(v)))

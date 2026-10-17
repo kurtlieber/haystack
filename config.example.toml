@@ -1,0 +1,64 @@
+# haystack's settings. Copy this to ~/.config/haystack/config.toml and keep only what you change: every value
+# below is the default, and a key you leave out keeps it. The commented lines are examples. Every key and what
+# it does: src/haystack_music/config.py.
+
+[library]
+# Your music folder (MP4/M4A files), only ever read. Empty: no local library, so your taste comes from Liked
+# Songs and Ratings alone.
+root = ""
+# root = "/srv/music"
+extensions = [".m4a"]
+workers = 6                    # embedding processes
+threads_per_worker = 3         # TensorFlow threads per process
+
+[secrets]
+# "files": one 0600 file per secret in dir (default ~/.config/haystack/secrets). "1password": see [onepassword].
+backend = "files"
+# dir = "~/.config/haystack/secrets"
+
+[onepassword]
+# Only with secrets.backend = "1password". Items by id, or by a name that is valid in an op:// reference.
+op_binary = "op"
+# vault = "haystack"
+# token_file = "~/.config/op/service-account-token"   # the service-account token, a 0600 file
+# client_item = "spotify-app"                          # fields "client id", "client secret"
+# token_item = "spotify-refresh-token"                 # field "refresh token"; haystack adds the dates
+# api_token_item = "haystack-api-token"                # field "password"
+# alert_item = "haystack-alert-webhook"                # fields "url", "key"
+
+[spotify]
+# Add this exact URI to your Spotify app's Redirect URIs. Spotify accepts only 127.0.0.1 for loopback.
+redirect_uri = "http://127.0.0.1:8518/spotify/callback"
+discoveries_name = "Discoveries"
+# To Rip: a second private playlist of the songs you rate 3 stars or more that aren't in the local library.
+to_rip = false
+to_rip_name = "To Rip"
+
+[batch]
+size = 15                      # tracks per weekly batch
+max_per_artist = 1
+expiry_days = 14               # an unliked discovery leaves Discoveries after this many days
+clear_recent = "remove"        # before a batch, tracks added less than a day ago: "remove" (no penalty) or "keep"
+
+[scoring]
+variant = "auto"               # or pin one: raw, topk_mean, centred, csls, csls_centred, genre, genre_blend
+
+[harvest]
+sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
+           "deezer_artist_radio", "deezer_related", "listenbrainz_similar"]
+retired_sources = []
+# An email or URL for the ListenBrainz User-Agent, as MetaBrainz asks of API users.
+listenbrainz_contact = ""
+# listenbrainz_contact = "you@example.com"
+
+[api]
+# needle's API. Its token: `haystack token new`.
+host = "0.0.0.0"
+port = 8517
+# Who besides loopback may connect. Narrow this to your LAN and VPN, and have the host firewall say the same.
+allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+# allow_networks = ["192.168.1.0/24", "100.64.0.0/10"]
+
+[alert]
+# A JSON POST to the alert-webhook-url secret when a job fails or the Spotify login needs renewing.
+enabled = false

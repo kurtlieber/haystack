@@ -1,0 +1,123 @@
+# Alfred relay: forwards Kurt's GitHub activity to Alfred's Grok Bot webhook
+# routine "GitHub activity from Kurt". ADR 0056; docs/agents/tracking.md.
+#
+# Canonical copy: kurtlieber/dotfiles tools/alfred-relay/alfred-relay.yml.
+# Installed byte-identical as .github/workflows/alfred-relay.yml in each repo
+# listed in tools/alfred-relay-secrets. Edit here, then copy.
+#
+# Native routine triggers already cover pr-merged, review-changes-requested and
+# pr-closed. This covers what they miss on bot-authored PRs and on issues.
+#
+# Loop guard: runs only when the actor is kurtlieber and nothing was posted via a
+# GitHub App (Cursor app comments act as kurtlieber). Bot replies (kurts-bots[bot])
+# never trigger it. Secrets are passed through env, never interpolated into the
+# script, and event text is never evaluated by the shell.
+#
+# Debounce: one concurrency group per issue/PR with cancel-in-progress, plus a
+# 90 s sleep before the POST, so a burst (opened + labeled + assigned) sends only
+# the last event. Noise filter: skips bodies containing "Generated with Claude
+# Code", and labeled/assigned events within 60 s of the issue/PR's created_at.
+name: alfred-relay
+
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, edited, labeled, assigned, closed, reopened]
+
+permissions: {}
+
+concurrency:
+  group: relay-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    # Skip anything posted through a GitHub App, even when the actor is
+    # kurtlieber (bots commenting via the Cursor GitHub app act as kurtlieber).
+    # A missing field is null, so these are null-safe for every event type.
+    # The issue check is limited to issues events: on issue_comment, the issue
+    # object describes the issue's author, not the comment's.
+    if: >-
+      github.actor == 'kurtlieber' && !endsWith(github.actor, '[bot]') &&
+      github.event.comment.performed_via_github_app == null &&
+      github.event.review.performed_via_github_app == null &&
+      (github.event_name != 'issues' || github.event.issue.performed_via_github_app == null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Filter noise
+        id: filter
+        env:
+          R_ACTION: ${{ github.event.action }}
+          R_CREATED: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
+          # Comment/review events check only that text, so Kurt's own comment on
+          # a Claude-authored PR still relays; issues events check the issue body.
+          R_TEXT: ${{ github.event.comment.body || github.event.review.body || (github.event_name == 'issues' && github.event.issue.body) || '' }}
+        run: |
+          set -euo pipefail
+          skip=false
+          case "$R_TEXT" in *"Generated with Claude Code"*) skip=true; echo "skip: Claude Code text";; esac
+          case "$R_ACTION" in
+            labeled|assigned)
+              if [ -n "$R_CREATED" ]; then
+                age=$(( $(date -u +%s) - $(date -u -d "$R_CREATED" +%s) ))
+                if [ "$age" -lt 60 ]; then skip=true; echo "skip: $R_ACTION ${age}s after creation"; fi
+              fi ;;
+          esac
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+      - name: Debounce
+        if: steps.filter.outputs.skip != 'true'
+        run: sleep 90
+      - name: POST to Alfred
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          ALFRED_WEBHOOK_URL: ${{ secrets.ALFRED_WEBHOOK_URL }}
+          ALFRED_WEBHOOK_KEY: ${{ secrets.ALFRED_WEBHOOK_KEY }}
+          R_REPO: ${{ github.repository }}
+          R_EVENT: ${{ github.event_name }}
+          R_ACTION: ${{ github.event.action }}
+          R_ACTOR: ${{ github.actor }}
+          R_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          R_IS_PR: ${{ github.event.pull_request != null || github.event.issue.pull_request != null }}
+          R_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          R_URL: ${{ github.event.comment.html_url || github.event.review.html_url || github.event.issue.html_url || github.event.pull_request.html_url }}
+          R_BODY: ${{ github.event.comment.body || github.event.review.body || (github.event_name == 'issues' && github.event.action == 'opened' && github.event.issue.body) || '' }}
+          R_REVIEW_STATE: ${{ github.event.review.state }}
+          R_LABEL: ${{ github.event.label.name }}
+          R_ASSIGNEE: ${{ github.event.assignee.login }}
+          R_PATH: ${{ github.event.comment.path }}
+          R_LINE: ${{ github.event.comment.line }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ALFRED_WEBHOOK_URL}" ] || [ -z "${ALFRED_WEBHOOK_KEY}" ]; then
+            echo "::warning::ALFRED_WEBHOOK_URL/KEY not set; run tools/alfred-relay-secrets in dotfiles"
+            exit 0
+          fi
+          case "${ALFRED_WEBHOOK_URL}" in https://*) ;; *) echo "::error::webhook URL must be https"; exit 1;; esac
+          body="$(jq -cn \
+            --arg repo "$R_REPO" --arg event "$R_EVENT" --arg action "$R_ACTION" \
+            --arg actor "$R_ACTOR" --arg number "$R_NUMBER" --arg is_pr "$R_IS_PR" \
+            --arg title "$R_TITLE" --arg url "$R_URL" --arg body "$R_BODY" \
+            --arg review_state "$R_REVIEW_STATE" --arg label "$R_LABEL" \
+            --arg assignee "$R_ASSIGNEE" --arg path "$R_PATH" --arg line "$R_LINE" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{repo:$repo, event:$event, action:$action, actor:$actor,
+              number:($number|tonumber? // null), is_pr:($is_pr=="true"),
+              title:$title, url:$url, body:($body|.[0:8000]),
+              review_state:(if $review_state=="" then null else $review_state end),
+              label:(if $label=="" then null else $label end),
+              assignee:(if $assignee=="" then null else $assignee end),
+              path:(if $path=="" then null else $path end),
+              line:($line|tonumber? // null), ts:$ts}')"
+          # Same header convention as backup-alert.sh / quota-check (ADR 0025).
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$ALFRED_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' -H 'User-Agent: alfred-relay/1' \
+            -H "Authorization: Bearer ${ALFRED_WEBHOOK_KEY}" \
+            --data "$body")" || code=000
+          echo "alfred-relay: HTTP $code"
+          case "$code" in 2*) ;; *) exit 1;; esac

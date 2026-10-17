@@ -1,0 +1,17 @@
+[Unit]
+Description=haystack: harvest + embed candidates (Deezer, ListenBrainz)
+Documentation=https://github.com/kurtlieber/haystack#readme
+Wants=network-online.target
+After=network-online.target
+OnFailure=haystack-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/haystack/venv/bin/haystack harvest
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=3h
+SyslogIdentifier=haystack-harvest
+

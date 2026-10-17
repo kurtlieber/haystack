@@ -1,0 +1,86 @@
+haystack
+Copyright (C) 2026 Kurt Lieber
+
+haystack is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. It comes with NO WARRANTY. The full text is in LICENSE.
+
+If you run a modified haystack for other people over a network (needle's API is one), section 13 of the
+license asks you to offer them the source of the version you run.
+
+haystack is not affiliated with, or endorsed by, Spotify, Deezer, the MetaBrainz Foundation or the Music
+Technology Group. Their names are used only to say what haystack talks to.
+
+What follows is what haystack uses but does not include. Nothing below is in this repository: it is installed
+by pip, downloaded by `haystack models fetch`, or reached over the network at run time. Check each license
+yourself before you use haystack for anything but private use.
+
+
+Essentia (the `embed` extra, essentia-tensorflow)
+-------------------------------------------------
+Music Technology Group, Universitat Pompeu Fabra. https://essentia.upf.edu/
+License: GNU Affero General Public License v3. A commercial license is available from the MTG.
+The essentia-tensorflow wheel bundles TensorFlow (Apache License 2.0).
+
+
+The Essentia models (`haystack models fetch`)
+---------------------------------------------
+Copyright Universitat Pompeu Fabra. https://essentia.upf.edu/models.html
+haystack downloads these from https://essentia.upf.edu/models/ into its data dir (models/); it never ships or
+redistributes them:
+
+  discogs_track_embeddings-effnet-bs64-1, discogs-effnet-bs64-1     Discogs-EffNet embeddings
+  genre_discogs400-discogs-effnet-1                                 style vectors
+  danceability-, mood_acoustic-, voice_instrumental-discogs-effnet-1
+  msd-musicnn-1, deam-msd-musicnn-2                                 Readings
+
+License: NonCommercial. The models page says "All the models created by the MTG are licensed under CC
+BY-NC-SA 4.0 and are also available under proprietary license upon request". The LICENSE file in
+https://essentia.upf.edu/models/ names CC BY-NC-ND 4.0 and links the BY-NC-SA text. Either way, commercial use
+needs a license from the MTG (https://www.upf.edu/web/mtg/contact), and so does haystack used commercially
+with these models.
+
+The MTG asks that research using the models cite:
+  P. Alonso-Jiménez, D. Bogdanov, J. Pons, X. Serra. Tensorflow Audio Models in Essentia. ICASSP 2020.
+  P. Alonso-Jiménez, X. Serra, D. Bogdanov. Music Representation Learning Based on Editorial Metadata from
+    Discogs. ISMIR 2022.  (Discogs-EffNet)
+  J. Pons, X. Serra. musicnn: Pre-trained convolutional neural networks for music audio tagging. ISMIR 2019,
+    late-breaking demo.  (MSD-MusiCNN)
+  D. Bogdanov, X. Lizarraga-Seijas, P. Alonso-Jiménez, X. Serra. MusAV: A dataset of relative arousal-valence
+    annotations for validation of audio models. ISMIR 2022.  (DEAM arousal and valence)
+
+
+Deezer (candidates and 30 s previews)
+-------------------------------------
+haystack calls Deezer's public API (https://developers.deezer.com/) for charts, editorial picks, artist radio,
+related artists and 30 s previews. The previews are decoded in memory and only their vectors are kept.
+Deezer's terms of use limit the API to non-commercial, private use, and Deezer may end access at any time:
+https://developers.deezer.com/termsofuse. Read the Deezer notice in the README before you run the harvest.
+
+
+ListenBrainz (similar recordings)
+---------------------------------
+The MetaBrainz Foundation. https://listenbrainz.org/
+haystack calls the ListenBrainz API, within its rate limits, and sends `harvest.listenbrainz_contact` in its
+User-Agent. MetaBrainz asks commercial users of its data to support it: https://metabrainz.org/supporters.
+
+
+Spotify (likes, plays and the playlists)
+----------------------------------------
+haystack uses the Spotify Web API through your own Spotify app, under the Spotify Developer Terms
+(https://developer.spotify.com/terms). It never analyses Spotify audio: taste comes from your local files and
+Deezer previews.
+
+
+Python packages (installed by pip)
+----------------------------------
+  numpy      BSD-3-Clause
+  requests   Apache-2.0
+  mutagen    GPL-2.0-or-later
+  pytest     MIT (tests only)
+
+
+Programs haystack runs
+----------------------
+  ffmpeg     LGPL-2.1-or-later or GPL-2.0-or-later, depending on the build (decodes audio through a pipe)
+  op         1Password CLI, proprietary (only with `secrets.backend = "1password"`)
