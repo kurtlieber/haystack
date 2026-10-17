@@ -1,0 +1,22 @@
+[Unit]
+Description=haystack: needle's private API (Review queues, Verdicts, Readings)
+Documentation=https://github.com/kurtlieber/haystack/blob/main/docs/api.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/haystack/venv/bin/haystack api
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+# The server admits only api.allow_networks; have the host firewall allow the port from the same networks.
+# (No IPAddressAllow= here: it would also cut the worker off from Spotify and Deezer.)
+Restart=on-failure
+RestartSec=10
+Nice=10
+MemoryHigh=4G
+NoNewPrivileges=yes
+PrivateTmp=yes
+SyslogIdentifier=haystack-api
+
+[Install]
+WantedBy=default.target

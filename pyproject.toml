@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "haystack-music"
+version = "0.1.0"
+description = "Personal Spotify music discovery driven by local-audio taste vectors"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["numpy>=2", "requests>=2.31", "mutagen>=1.47"]
+
+[project.optional-dependencies]
+embed = ["essentia-tensorflow==2.1b6.dev1438"]
+test = ["pytest>=8"]
+
+[project.scripts]
+haystack = "haystack_music.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

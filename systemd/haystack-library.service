@@ -1,0 +1,19 @@
+[Unit]
+Description=haystack: library rescan + embed (+ To Rip check once authorised)
+Documentation=https://github.com/kurtlieber/haystack#readme
+Wants=network-online.target
+After=network-online.target
+OnFailure=haystack-alert@%n.service
+# One-time first Discoveries batch once the full embedding has finished (no-op afterwards)
+OnSuccess=haystack-first-batch.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/haystack/venv/bin/haystack library update
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=infinity
+SyslogIdentifier=haystack-library
+

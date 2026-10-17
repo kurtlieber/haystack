@@ -1,0 +1,17 @@
+[Unit]
+Description=haystack: hourly Spotify sync (likes, plays, Discoveries outcomes, To Rip, token expiry)
+Documentation=https://github.com/kurtlieber/haystack#readme
+Wants=network-online.target
+After=network-online.target
+OnFailure=haystack-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/haystack/venv/bin/haystack sync
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=45min
+SyslogIdentifier=haystack-sync
+# exit 3 = Spotify not authorised yet: run `haystack auth`

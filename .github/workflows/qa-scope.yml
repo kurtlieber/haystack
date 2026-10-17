@@ -1,0 +1,66 @@
+# qa-scope: automatic `qa/verdict` for pull requests outside Peer Review scope.
+# dotfiles #120; ADR 0049 (amendment 2026-10-15); docs/github-app-tokens.md.
+#
+# Canonical copy: kurtlieber/dotfiles tools/qa-scope/qa-scope.yml.
+# Installed byte-identical as .github/workflows/qa-scope.yml in each repo that
+# requires `qa/verdict` on master. Edit here, then copy.
+#
+# A ruleset that requires `qa/verdict` would block every small PR that never goes
+# through Peer Review. This posts the status for those, as kurt-bot-qa[bot]:
+#   - no `peer-review` label -> success, "Not in Peer Review scope"
+#   - `peer-review` label    -> pending, "Awaiting Peer Review"; Peer Review
+#                               later sets success/failure by hand as today.
+# Adding the label after a success flips it back to pending. Removing it posts
+# success again. A new push re-runs it on the new head.
+#
+# The auto-pass is NOT a Peer Review pass: the docs-only self-merge gate also
+# needs an APPROVE review from kurt-bot-qa[bot] (ADR 0049 amendment).
+#
+# Safety: pull_request_target runs this file from the base branch, never the
+# PR's copy, and nothing checks out or runs PR code. The QA key is only handed
+# to actions/create-github-app-token, and the minted token is limited to
+# statuses on this repo.
+#
+# Repo secrets (Kurt sets them): QA_APP_ID, QA_APP_PRIVATE_KEY (kurt-bot-qa).
+name: qa-scope
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+    branches: [master, main]
+
+permissions: {}
+
+concurrency:
+  group: qa-scope-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verdict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Mint kurt-bot-qa token (statuses only)
+        id: qa
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.QA_APP_ID }}
+          private-key: ${{ secrets.QA_APP_PRIVATE_KEY }}
+          permission-statuses: write
+
+      - name: Post qa/verdict
+        env:
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          IN_SCOPE: ${{ contains(github.event.pull_request.labels.*.name, 'peer-review') }}
+        run: |
+          set -euo pipefail
+          if [ "$IN_SCOPE" = "true" ]; then
+            state=pending; desc="Awaiting Peer Review"
+          else
+            state=success; desc="Not in Peer Review scope"
+          fi
+          gh api "repos/${REPO}/statuses/${SHA}" \
+            -f state="$state" -f context=qa/verdict -f description="$desc" >/dev/null
+          echo "qa/verdict=${state} (${desc}) on ${SHA}"

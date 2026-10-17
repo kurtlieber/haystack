@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+# never commit data, vectors, audio or secrets
+*.db
+*.db-*
+*.npz
+*.npy
+*.mp3
+*.m4a
+*.pb
+status.json

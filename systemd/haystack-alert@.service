@@ -1,0 +1,9 @@
+[Unit]
+Description=haystack: failure alert for %i (alert.enabled: a webhook POST)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/haystack/venv/bin/haystack alert-failure %i
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=2min
+SyslogIdentifier=haystack-alert

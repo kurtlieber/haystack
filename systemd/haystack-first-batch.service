@@ -1,0 +1,20 @@
+[Unit]
+Description=haystack: one-time FIRST Discoveries batch + taste sanity check
+Documentation=https://github.com/kurtlieber/haystack#readme
+# Triggered by OnSuccess= of haystack-library.service. Runs only once: after a successful batch the
+# command writes this file and the unit is skipped from then on. It also waits (exit 0, status message) while
+# the library embedding is incomplete.
+ConditionPathExists=!%S/haystack/first-batch.done
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The batch clears Discoveries first. Recent tracks are removed with no verdict, same as the weekly unit.
+ExecStart=%h/.local/share/haystack/venv/bin/haystack first-batch --clear-recent remove --clear-min-age-hours 24
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=1h
+SyslogIdentifier=haystack-first-batch

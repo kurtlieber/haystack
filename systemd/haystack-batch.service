@@ -1,0 +1,20 @@
+[Unit]
+Description=haystack: clear Discoveries, then add the weekly batch
+Documentation=https://github.com/kurtlieber/haystack#readme
+Wants=network-online.target
+After=network-online.target
+OnFailure=haystack-alert@%n.service
+
+[Service]
+Type=oneshot
+# Clear Discoveries first (inside `batch`). Tracks younger than --clear-min-age-hours are removed
+# and closed as unplayed (no negative). Pass --no-penalty to close every non-like that way.
+# Use --clear-recent keep, or batch.clear_recent = "keep" on a manual run, to leave recent tracks.
+ExecStart=%h/.local/share/haystack/venv/bin/haystack batch --clear-recent remove --clear-min-age-hours 24
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=1h
+SyslogIdentifier=haystack-batch
+# exit 3 = Spotify not authorised yet: run `haystack auth`

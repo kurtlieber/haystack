@@ -1,0 +1,10 @@
+[Unit]
+Description=haystack: daily candidate harvest
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target
