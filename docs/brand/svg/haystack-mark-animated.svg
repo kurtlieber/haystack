@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="256" height="256"><title>haystack</title><style>
+.s{transform-box:fill-box;transform-origin:center;animation:grow .5s cubic-bezier(.3,.7,.3,1) both}
+.arm,.dot,.halo{transform-box:view-box;transform-origin:12px 14px}
+.arm{animation:find 1.2s .5s cubic-bezier(.3,.7,.3,1) both}
+.dot{animation:land .3s .5s ease-out both}
+.halo{animation:ping 2.4s 1.7s ease-out infinite}
+@keyframes grow{from{transform:scaleX(0)}}
+@keyframes find{from{transform:rotate(80deg);opacity:0}15%{opacity:1}60%{transform:rotate(-6deg)}
+80%{transform:rotate(2deg)}to{transform:none}}
+@keyframes land{from{transform:scale(0)}}
+@keyframes ping{from{opacity:.5;transform:none}40%,to{opacity:0;transform:scale(3.6)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style><mask id="a" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><rect width="24" height="24" fill="#fff"/><path class="arm" d="M12 14 19 6.5" stroke="#000" stroke-width="4.6" stroke-linecap="round"/><circle class="dot" cx="12" cy="14" r="3.5"/></mask><g fill="none" stroke="#d8c079" stroke-width="2" stroke-linecap="round" mask="url(#a)"><path class="s" d="M3 20H21" style="animation-delay:0s"/><path class="s" d="M3.8 16H20.2" style="animation-delay:0.08s"/><path class="s" d="M4.8 12H19.2" style="animation-delay:0.16s"/><path class="s" d="M6.5 8H17.5" style="animation-delay:0.24s"/><path class="s" d="M9.5 4H14.5" style="animation-delay:0.32s"/></g><circle class="halo" cx="12" cy="14" r="2.2" fill="#e68e0d" opacity="0"/><path class="arm" d="M12 14 19 6.5" stroke="#e68e0d" stroke-width="2" stroke-linecap="round"/><circle class="dot" cx="12" cy="14" r="2.2" fill="#e68e0d"/></svg>
