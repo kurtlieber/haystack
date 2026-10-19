@@ -1,0 +1,43 @@
+{
+ "_note": "Every key and JSON type of /v1 that docs/api.md documents, checked by tests/test_api_contract.py. A pull request may add entries, never remove or change one: that would break a client already in use (docs/api.md, Versioning). Spec: a type name (string, integer, number, boolean, null, object, array); a list is any of its members; an object lists required keys; {\"$array\": spec} each item; {\"$map\": spec} each value; {\"$ref\": name} a definition below; {\"$all\": [specs]} every one of them.",
+ "health": {"ok": "boolean", "version": "string", "time": "string", "server": {"$ref": "server"}},
+ "server": {"version": "string", "api": "string", "features": {"$array": "string"}},
+ "state": {
+  "generated_at": "string",
+  "baseline": {"tracks": "integer",
+               "traits": {"tempo": ["null", {"$ref": "trait_baseline"}], "valence": ["null", {"$ref": "trait_baseline"}],
+                          "energy": ["null", {"$ref": "trait_baseline"}], "danceability": ["null", {"$ref": "trait_baseline"}],
+                          "acousticness": ["null", {"$ref": "trait_baseline"}],
+                          "instrumentalness": ["null", {"$ref": "trait_baseline"}],
+                          "loudness": ["null", {"$ref": "trait_baseline"}]}},
+  "queues": {"discoveries": {"total": "integer", "done": "integer", "next_batch_at": ["string", "null"],
+                             "items": {"$array": {"$ref": "card"}}},
+             "likes": {"total": "integer", "items": {"$array": {"$ref": "card"}}}},
+  "playlists": {"synced_at": ["string", "null"], "items": {"$array": {"$ref": "playlist_summary"}},
+                "verdicts": {"$map": {"$ref": "verdict"}}},
+  "spotify": {"pending_writes": "integer", "error": ["string", "null"]},
+  "server": {"$ref": "server"}
+ },
+ "trait_baseline": {"mean": "number", "lo": "number", "hi": "number", "n": "integer"},
+ "card": {
+  "id": "string", "title": ["string", "null"], "artists": {"$array": "string"}, "album": ["string", "null"],
+  "album_type": ["string", "null"], "year": ["integer", "null"], "duration_ms": ["integer", "null"],
+  "cover": ["string", "null"], "cover_small": ["string", "null"], "verdict": ["null", {"$ref": "verdict"}],
+  "why": ["null", {"$ref": "why"}], "styles": {"$array": {"$array": ["string", "number"]}},
+  "readings": ["null", {"$map": "number"}], "measure": "string"
+ },
+ "why": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
+         "similarity": ["number", "null"], "source": "string", "source_label": "string", "exploration": "boolean"},
+ "verdict": {"kind": "string", "stars": ["integer", "null"], "given_at": "string"},
+ "playlist_summary": {"id": "string", "name": "string", "cover": ["string", "null"], "mine": "boolean",
+                      "owner": ["string", "null"], "total": ["integer", "null"], "snapshot_id": ["string", "null"],
+                      "tracks": ["null", {"$array": "string"}], "current": "boolean", "reader": "string",
+                      "artists": {"$array": "string"}},
+ "playlist": {"$all": [{"$ref": "playlist_summary"}, {"items": {"$array": {"$ref": "playlist_card"}}}]},
+ "playlist_card": {"$all": [{"$ref": "card"},
+                            {"playlists": {"$array": "string"}, "liked": "boolean", "in_library": "boolean"}]},
+ "verdicts_response": {"accepted": {"$array": "string"}, "rejected": {"$array": {"$ref": "rejected"}}},
+ "plays_response": {"accepted": {"$array": "string"}, "rejected": {"$array": {"$ref": "rejected"}}},
+ "rejected": {"id": ["string", "null"], "error": "string"},
+ "playlist_put_response": {"stored": "integer", "snapshot_id": ["string", "null"]}
+}

@@ -17,10 +17,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import db, playlists, review, verdicts
+from . import __version__, db, playlists, review, verdicts
 
 log = logging.getLogger("haystack_music.api")
 VERSION = "1"
+# Capabilities beyond /v1 as first shipped (docs/api.md, "Server and features"). A client shows a newer element
+# only when its feature name is listed; a server without the `server` object has none of them.
+FEATURES: tuple[str, ...] = ()
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
@@ -56,6 +59,11 @@ def parse_verdict(v: dict) -> dict:
         raise ValueError(f"queue must be one of {', '.join(QUEUES)}")
     stars = verdicts.validate(v.get("track"), v.get("kind"), v.get("stars"))
     return {"spotify_id": v["track"], "kind": v["kind"], "stars": stars, "given_at": given, "id": vid, "queue": q}
+
+
+def server_info() -> dict:
+    """The `server` object of /v1/health and /v1/state: haystack's version, the API version and its features."""
+    return {"version": __version__, "api": VERSION, "features": list(FEATURES)}
 
 
 class Worker(threading.Thread):
@@ -204,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         if path == "/v1/health":
-            return self._send(200, {"ok": True, "version": VERSION, "time": db.now()})
+            return self._send(200, {"ok": True, "version": VERSION, "time": db.now(), "server": server_info()})
         if path == "/v1/state":
             cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
             cards.pending = set(self.server.worker.measuring) if self.server.worker else set()
@@ -215,6 +223,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.server.worker.measure(c["id"])
             if self.server.worker:
                 self.server.worker.playlists(PLAYLISTS_EVERY)
+            st["server"] = server_info()
             return self._send(200, st)
         m = PLAYLIST_PATH.match(path)
         if m:
