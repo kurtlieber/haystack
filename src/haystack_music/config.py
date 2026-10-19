@@ -138,6 +138,11 @@ DEFAULTS: dict = {
         "topk": 10,                    # topk_mean / genre: k nearest positives
         "ref_size": 4000,              # CSLS: fixed random reference set of library + pool vectors
         "ref_seed": 20261008,
+        # ADR 0012: map every preview vector into the library's space before scoring, fitted on the liked songs that
+        # have both a preview and a local file. auto: used once align_min_pairs pairs exist, the fit improved
+        # cross-validated self-retrieval and the eval does not find it worse; off: never. No library: no map.
+        "align": "auto",
+        "align_min_pairs": 100,
         # Rank candidates that sound like rejected tracks lower, whatever the variant:
         #   final = score - w * sd(score over the pool) * max_j(strength_j * excess_j)
         #   excess_j = max(0, sim_j - margin_j) / (1 - margin_j), sim in the variant's space (style vector for

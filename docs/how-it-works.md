@@ -36,6 +36,9 @@ artists. It only hears sound.
 For your own files, haystack listens to nine 30-second slices spread across the song, so a song with a quiet
 intro and a loud chorus gets credit for both.
 
+The new songs it finds are 30-second previews, and a preview and your own file of the same song are measured a
+little differently, so haystack learns the difference from the songs you have both ways and corrects for it.
+
 ## 2. Finding candidates
 
 Every day haystack collects new songs to consider from:

@@ -36,14 +36,15 @@ from datetime import datetime
 
 import numpy as np
 
-from . import db, embed, status, vectors
+from . import align, db, embed, status, vectors
 from .scoring import (EMBED_VARIANTS, GENRE_VARIANTS, VARIANTS, choose_variant, hubness, is_centred, is_csls, l2norm,
-                      negative_penalty, owner_max, topk_mean, zblend)
+                      nearest_positive, negative_penalty, owner_max, topk_mean, zblend)
 from .textnorm import song_key
 
 log = logging.getLogger("haystack_music.evaluate")
 TOP = 50                 # recall@50 and the top-50 spread
 DEGENERATE_SD = 0.25     # a top 50 spanning less than this many pool-score sd is degenerate
+DOMAIN_TOP = 100         # the domain block: the nearest positives of the pool's top 100
 
 
 def _chunks(seq, n=500):
@@ -113,7 +114,7 @@ def _verdict_queries(con, cfg: dict, liked_q: list[dict], liked_ids: set, known:
     for r in con.execute("SELECT spotify_id, local_id FROM liked_map WHERE local_id IS NOT NULL UNION "
                          "SELECT spotify_id, id FROM local_tracks WHERE spotify_id IS NOT NULL"):
         local.setdefault(r[0], set()).add(f"local:{r[1]}")
-    vec = vectors.get_deezer_vectors(con, [t["deezer_id"] for t in tv.values()])
+    vec = vectors.preview_vectors(con, cfg, [t["deezer_id"] for t in tv.values()])
     out, vecs = [], []
     for kind, sids in (("kept", yes), ("turned down", no)):
         for sid in sids:
@@ -137,7 +138,7 @@ def load(con, cfg: dict) -> dict:
     """Everything the eval needs, loaded once (vectors in raw space)."""
     pos, owners, bonus = vectors.positives(con, cfg)
     lib = vectors._library_windows(con)
-    pool_ids, pool_m, pool_rows = vectors.pool_vectors(con)
+    pool_ids, pool_m, pool_rows = vectors.pool_vectors(con, cfg=cfg)
     space = vectors.build_space(cfg, lib, (pool_ids, pool_m))
     # contiguous owner runs -> owner-level max via reduceat
     starts = [i for i in range(len(owners)) if i == 0 or owners[i] != owners[i - 1]]
@@ -152,7 +153,7 @@ def load(con, cfg: dict) -> dict:
                            WHERE l.removed_at IS NULL""").fetchall()
     liked_ids = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
     liked_keys = {song_key(_first_artist(r["artists_json"]), r["name"]) for r in liked if r["name"]}
-    dzv = vectors.get_deezer_vectors(con, [r["deezer_id"] for r in liked if r["vector_status"] == "ok"])
+    dzv = vectors.preview_vectors(con, cfg, [r["deezer_id"] for r in liked if r["vector_status"] == "ok"])
     queries, qvecs = [], []
     for r in liked:
         owner = f"local:{r['local_id']}" if r["use_local"] else f"like:{r['spotify_id']}"
@@ -181,7 +182,7 @@ def load(con, cfg: dict) -> dict:
         jrows = feedback.judged(con, cfg)
     except Exception:  # noqa: BLE001
         jrows = []
-    jv = vectors.get_deezer_vectors(con, [r["deezer_id"] for r in jrows])
+    jv = vectors.preview_vectors(con, cfg, [r["deezer_id"] for r in jrows])
     js = vectors.get_styles(con, [r["deezer_id"] for r in jrows])
     judged = [dict(label=f"{r['artist']} - {r['title']}", verdict=r["verdict"], weight=r["weight"],
                    owner=f"manual:{r['candidate_id']}", candidate_id=r["candidate_id"], vec=jv[r["deezer_id"]],
@@ -526,6 +527,39 @@ def run(con, cfg: dict, data: dict | None = None, variants=VARIANTS) -> dict:
         out["liked_genres"] = liked_genres(con, cfg)
     except Exception as e:  # noqa: BLE001
         out["liked_genres"] = {"error": repr(e)}
+    try:
+        out["domain"] = domain(con, cfg, d)
+    except Exception as e:  # noqa: BLE001
+        out["domain"] = {"status": "error", "error": repr(e)}
+    return out
+
+
+def domain(con, cfg: dict, d: dict) -> dict:
+    """The gap between preview vectors and library files (ADR 0012), in the space d was loaded in. pairs: the
+    liked songs with both a preview and a matched local file; self-retrieval: of the library's files and the other
+    liked songs' previews, is a pair's own file the nearest to its (unaligned) preview, and is it among the 10
+    nearest (library_only: among the files alone)? top: the pool's top 100 by the raw nearest-positive score, by
+    the kind of that positive (local: a library file; like, discovery, manual, rated: a preview)."""
+    if not cfg["library"].get("root"):
+        return {"status": "no library"}
+    out: dict = {"status": "ok", "aligned": align.active(con, cfg) is not None}
+    p = align._pairs(con)
+    out["pairs"] = 0 if p is None else len(p["own"])
+    if out["pairs"]:
+        out["self_retrieval"] = align._summary(*align.ranks(p, p["P"], range(out["pairs"])))
+    m = align.load()
+    if m is not None:
+        out["map"] = {k: m.meta.get(k) for k in ("version", "n_pairs", "method", "lam", "target", "cv", "improved")}
+    if len(d["pool_m"]) and len(d["pos"]):
+        unit = vectors.star_unit(cfg, l2norm(d["pool_m"]), l2norm(d["pos"]))
+        sc, _, idx = nearest_positive(d["pool_m"], d["pos"], d["bonus"] * unit)
+        top = np.argsort(-sc, kind="stable")[:DOMAIN_TOP]
+        kinds: dict = {}
+        for i in idx[top]:
+            k = d["owners"][int(i)].split(":", 1)[0]
+            kinds[k] = kinds.get(k, 0) + 1
+        out["top"] = {"n": len(top), "by_kind": dict(sorted(kinds.items())),
+                      "preview_share": round(1 - kinds.get("local", 0) / len(top), 3)}
     return out
 
 
@@ -557,20 +591,27 @@ def choose(con, cfg: dict, trigger: str = "set", *, write: bool = True, data: di
     (`batch --plan`, `batch --dry-run`) nothing is written and 'used' is the variant the batch would use."""
     if trigger not in ("set", "weekly", "report"):
         raise ValueError(f"unknown trigger {trigger!r}")
-    ev = run(con, cfg, data=data)
     pinned = cfg["scoring"].get("variant", "auto")
     current = vectors.active_variant(con, cfg)
-    used, why = current, None
-    if pinned != "auto":
-        why = "pinned in config"
-    elif not ev.get("chosen"):
-        why = f"kept: {ev.get('reason') or 'no choice'}"
-    elif trigger == "set":
-        used, why = ev["chosen"], "set by the eval"
-    elif trigger == "weekly":
-        used, why = _hysteresis(ev, current, cfg["eval"]["switch_margin"])
-    else:
-        why = "kept: report only"
+    cand = align.candidate(con, cfg) if data is None else None
+    if cand is None:
+        ev = run(con, cfg, data=data)
+        used, why = _decide(ev, current, pinned, trigger, cfg)
+    else:   # a preview alignment exists (ADR 0012): run both, keep it unless it is worse for the variant used
+        ev_a, ev_u = run(con, _with_align(cfg, "candidate")), run(con, _with_align(cfg, "off"))
+        used, why = _decide(ev_a, current, pinned, trigger, cfg)
+        g = align_gate(ev_a, ev_u, used, cfg) | {"map_version": cand.meta.get("version")}
+        ev = ev_a
+        if not g["ok"]:
+            ev = ev_u
+            used, why = _decide(ev_u, current, pinned, trigger, cfg)
+        ev["align"] = {"gate": g, "domain": {"aligned": ev_a.get("domain"), "unaligned": ev_u.get("domain")},
+                       "variants": {v: {k: {"aligned": x.get(k), "unaligned": (ev_u["variants"].get(v) or {}).get(k)}
+                                        for k in ("auc", "mean_pct", f"recall_at_{ev_a['recall_k']}")}
+                                    for v, x in (ev_a.get("variants") or {}).items()}}
+        log.info("preview alignment: %s", g["why"])
+        if write:
+            db.kv_set(con, "preview_align_gate", json.dumps(g))
     ev.update(pinned=pinned if pinned != "auto" else None, previous=current, used=used, switched=used != current,
               decision=why, trigger=trigger)
     log.info("scoring variant: eval chose %s by %s; using %s (%s)", ev.get("chosen"), ev.get("objective_used"), used, why)
@@ -580,6 +621,43 @@ def choose(con, cfg: dict, trigger: str = "set", *, write: bool = True, data: di
         record(con, ev)
         status.update(None, scoring_eval=ev)
     return ev
+
+
+def _with_align(cfg: dict, mode: str) -> dict:
+    return align.with_mode(cfg, mode)
+
+
+def _decide(ev: dict, current: str, pinned: str, trigger: str, cfg: dict) -> tuple[str, str]:
+    if pinned != "auto":
+        return current, "pinned in config"
+    if not ev.get("chosen"):
+        return current, f"kept: {ev.get('reason') or 'no choice'}"
+    if trigger == "set":
+        return ev["chosen"], "set by the eval"
+    if trigger == "weekly":
+        return _hysteresis(ev, current, cfg["eval"]["switch_margin"])
+    return current, "kept: report only"
+
+
+def align_gate(ev_a: dict, ev_u: dict, variant: str, cfg: dict) -> dict:
+    """Is the aligned scorer worse for `variant` (ADR 0012)? It is when the eval's objective (AUC, or the mean
+    percentile on the fallback) is lower by more than its tie (eval.auc_tie, eval.tie_tolerance), or recall@K by
+    more than one held-out song per seed. Not evaluated (a skipped eval, a variant left out): not worse."""
+    a, u = (ev_a.get("variants") or {}).get(variant), (ev_u.get("variants") or {}).get(variant)
+    obj = "auc" if ev_a.get("objective_used") == "auc" and ev_u.get("objective_used") == "auc" else "mean_pct"
+    out = {"variant": variant, "objective": obj, "at": db.now()}
+    if not a or not u or a.get(obj) is None or u.get(obj) is None:
+        return {**out, "ok": True, "why": f"kept: {variant} was not evaluated both ways"}
+    k = f"recall_at_{ev_a['recall_k']}"
+    tie = cfg["eval"]["auc_tie"] if obj == "auc" else cfg["eval"]["tie_tolerance"]
+    held = (ev_a.get("held_out_per_seed") or {}).get("preview") or 1
+    out.update(aligned={obj: a[obj], k: a[k]}, unaligned={obj: u[obj], k: u[k]})
+    if a[obj] < u[obj] - tie:
+        return {**out, "ok": False, "why": f"off: {obj} {a[obj]} aligned against {u[obj]} for {variant}"}
+    if a[k] < u[k] - 1 / held:
+        return {**out, "ok": False, "why": f"off: {k} {a[k]} aligned against {u[k]} for {variant}"}
+    return {**out, "ok": True, "why": f"kept: {obj} {a[obj]} aligned against {u[obj]}, {k} {a[k]} against {u[k]} "
+                                      f"for {variant}"}
 
 
 def record(con, ev: dict) -> None:
@@ -599,6 +677,62 @@ def summary(ev: dict) -> dict:
 
 def _num(x, fmt: str) -> str:
     return "-" if x is None else format(x, fmt)
+
+
+def _sr(x: dict | None) -> str:
+    if not x:
+        return "-"
+    lo = x.get("library_only") or {}
+    return (f"{x['top1']:.1%} / {x[f'top{align.TOP}']:.1%} (library files alone {lo.get('top1', 0):.1%} / "
+            f"{lo.get(f'top{align.TOP}', 0):.1%})")
+
+
+def _share(x: dict | None) -> str:
+    t = (x or {}).get("top")
+    if not t:
+        return "-"
+    return f"{t['preview_share']:.0%} (" + ", ".join(f"{k} {v}" for k, v in t["by_kind"].items()) + ")"
+
+
+def _align_md(r: dict) -> list[str]:
+    """The domain block and, with a preview alignment, the aligned and unaligned eval side by side (ADR 0012)."""
+    a, dm = r.get("align") or {}, r.get("domain") or {}
+    if not dm:
+        return []
+    lines = ["### Previews and the library's files (ADR 0012)", ""]
+    if dm.get("status") != "ok":
+        why = "no library: no pairs and no alignment" if dm.get("status") == "no library" else dm.get("error")
+        return lines + [f"Not measured ({why}).", ""]
+    du = (a.get("domain") or {}).get("unaligned") or dm
+    da = (a.get("domain") or {}).get("aligned")
+    m = dm.get("map")
+    lines += [f"Pairs: {dm.get('pairs', 0)} liked songs with both a preview vector and a matched local file. "
+              f"Self-retrieval: is a pair's own file the nearest (top 1), or among the {align.TOP} nearest, of the "
+              f"library's files and the other liked songs' previews? Top {DOMAIN_TOP}: the share of the pool's top "
+              f"{DOMAIN_TOP} by raw nearest-positive score whose nearest positive is a preview rather than a library "
+              "file.", "", "| | unaligned | aligned |", "|---|---|---|",
+              f"| self-retrieval top 1 / top {align.TOP} | {_sr(dm.get('self_retrieval'))} | "
+              f"{_sr((m or {}).get('cv'))}{' (cross-validated)' if m else ''} |",
+              f"| top {DOMAIN_TOP}: nearest positive a preview | {_share(du)} | {_share(da) if da else '-'} |", ""]
+    if m:
+        lam = "" if m.get("method") != "ridge" else (" (mean shift)" if m.get("lam") is None else f" lambda {m['lam']}")
+        lines += [f"Map: {m.get('method')}{lam}, target the {m.get('target')} window, fitted on {m.get('n_pairs')} "
+                  f"pairs ({m.get('version')}); " + ("it improved self-retrieval." if m.get("improved") else
+                                                     "not used: it did not improve self-retrieval."), ""]
+    if a.get("variants"):
+        K = r["recall_k"]
+        lines += [f"| variant | AUC aligned / unaligned | mean percentile aligned / unaligned | recall@{K} aligned / "
+                  "unaligned |", "|---|---|---|---|"]
+        for v, x in a["variants"].items():
+            au, mp, rc = x.get("auc") or {}, x.get("mean_pct") or {}, x.get(f"recall_at_{K}") or {}
+            lines.append(f"| {v} | {_num(au.get('aligned'), '.3f')} / {_num(au.get('unaligned'), '.3f')} | "
+                         f"{_num(mp.get('aligned'), '.2f')} / {_num(mp.get('unaligned'), '.2f')} | "
+                         f"{_num(rc.get('aligned'), '.3f')} / {_num(rc.get('unaligned'), '.3f')} |")
+        lines.append("")
+    if a.get("gate"):
+        lines += [f"Preview alignment {a['gate']['why']}. The tables above "
+                  f"are the {'aligned' if a['gate']['ok'] else 'unaligned'} run.", ""]
+    return lines
 
 
 def markdown(r: dict, title: str = "Scoring variant eval") -> str:
@@ -670,6 +804,7 @@ def markdown(r: dict, title: str = "Scoring variant eval") -> str:
                      f"{x[f'chart_share_top{K}']:.0%} | {band[0]:.4f}-{band[1]:.4f} | "
                      f"{'-' if lf is None else f'{lf:.2f}'} |")
     lines.append("")
+    lines += _align_md(r)
     jc = r.get("judged_check")
     if jc and jc.get("variants"):
         vs = list(jc["variants"])

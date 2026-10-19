@@ -163,11 +163,12 @@ def _rerank(con, cfg: dict, variant: str, res: dict | None, write: bool) -> dict
 
 
 def _rechoose(con, cfg: dict, write: bool) -> dict | None:
-    """The weekly re-choice of the scoring variant (ADR 0009) when scoring.variant is auto: token-free, takes
-    seconds, and never blocks the batch. Without write it only says which variant the batch would use."""
-    if cfg["scoring"].get("variant", "auto") != "auto":
+    """The weekly re-choice of the scoring variant (ADR 0009) when scoring.variant is auto, and the check that a
+    preview alignment is not worse (ADR 0012) when there is one: token-free, takes seconds, and never blocks the
+    batch. Without write it only says which variant the batch would use."""
+    from . import align, evaluate
+    if cfg["scoring"].get("variant", "auto") != "auto" and align.candidate(con, cfg) is None:
         return None
-    from . import evaluate
     try:
         return evaluate.summary(evaluate.choose(con, cfg, "weekly", write=write))
     except Exception as e:  # noqa: BLE001
