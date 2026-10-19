@@ -178,13 +178,15 @@ def negative_penalty(excess: np.ndarray, strength, scale: float, w: float,
     return (w * scale * best).astype(np.float32), np.where(best > 0, j, -1)
 
 
-def choose_variant(mean_pct: dict[str, float], tol: float = 0.5) -> str:
-    """Best mean percentile rank; anything within `tol` of the best counts as a tie -> simplest wins."""
-    best = max(mean_pct.values())
+def choose_variant(score: dict[str, float], tol: float = 0.5, exclude=()) -> str:
+    """Best score (the eval's mean percentile or AUC); anything within `tol` of the best counts as a tie -> simplest
+    wins. Variants in `exclude` (degenerate ones) are left out, unless that leaves none."""
+    score = {v: s for v, s in score.items() if v not in exclude} or score
+    best = max(score.values())
     for v in VARIANTS:
-        if v in mean_pct and mean_pct[v] >= best - tol:
+        if v in score and score[v] >= best - tol:
             return v
-    return max(mean_pct, key=mean_pct.get)
+    return max(score, key=score.get)
 
 
 @dataclass

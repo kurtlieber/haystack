@@ -504,6 +504,8 @@ def test_batch_clears_before_scoring(tmp_path, monkeypatch):
                     clear_min_age_hours=3, no_penalty=True)
     assert order == ["ensure", "clear", "score"]
     assert out["clear"]["dry_run"] is True and out["dry_run"] is True
+    assert out["variant_choice"]["used"] == out["variant"] == "raw"            # the weekly eval ran, and wrote nothing
+    assert con.execute("SELECT COUNT(*) FROM eval_runs").fetchone()[0] == 0 and db.kv_get(con, "scoring_variant") is None
 
 
 def test_a_verdict_the_listener_gave_survives_the_clear(tmp_path):

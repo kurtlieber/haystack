@@ -92,6 +92,22 @@ def test_plan_scores_in_memory_and_writes_nothing(tmp_path, monkeypatch):
     assert con.execute("SELECT COUNT(*) FROM candidates WHERE score IS NOT NULL").fetchone()[0] == 0
 
 
+
+def test_plan_rechecks_an_auto_variant_without_writing(tmp_path, monkeypatch):
+    """scoring.variant auto: the plan runs the weekly eval in memory and says which variant the batch would use."""
+    con, cfg, path = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(config, "STATUS_PATH", tmp_path / "state" / "status.json")
+    _no_network(monkeypatch)
+    cfg["scoring"]["variant"] = "auto"
+    con.close()
+    before = _digest(path)
+    out = batch.plan(db.connect_readonly(path), cfg, rng=random.Random(1))
+    c = out["variant_choice"]
+    assert out["variant"] == c["used"] == "raw" and c["switched"] is False
+    assert c["decision"].startswith("kept: not enough data")             # three liked songs: too few for an eval
+    assert _digest(path) == before and not config.STATUS_PATH.exists()
+
 def test_plan_picks_what_the_live_selection_picks(tmp_path, monkeypatch):
     """Same pool, same seed: the in-memory scores (--plan) and the stored scores (the live batch) select the same
     candidates with the same exploration flags."""

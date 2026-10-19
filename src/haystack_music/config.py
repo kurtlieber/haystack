@@ -116,7 +116,7 @@ DEFAULTS: dict = {
             "dislike_strength": 2.0,
         },
         # raw | topk_mean | centred | csls | csls_centred | genre | genre_blend | auto
-        # (auto = the variant the first-batch eval chose, else raw)
+        # (auto = the variant the eval chose: at the first batch, then re-checked at every batch, ADR 0009)
         "variant": "auto",
         "csls_k": 10,                  # CSLS: neighbours in the reference set
         "topk": 10,                    # topk_mean / genre: k nearest positives
@@ -145,6 +145,11 @@ DEFAULTS: dict = {
         "seeds": [1, 2, 3, 4, 5],
         "recall_k": 15,
         "tie_tolerance": 0.5,          # mean-percentile points; ties go to the simpler variant
+        # ADR 0009: choose by how a variant ranks the kept offers above the turned-down ones (AUC), every batch
+        "objective": "auc",            # auc | mean_pct (the rule before 0.2: held-out liked songs only)
+        "min_verdicts": 15,            # kept and turned-down offers each needed for auc; fewer -> the mean_pct rule
+        "auc_tie": 0.02,               # AUC within this of the best is a tie; the simpler variant wins
+        "switch_margin": 0.03,         # the weekly re-choice switches only for an AUC gain above this
         "chart_sources": ["deezer_chart", "deezer_editorial"],
         "preview_all_likes": True,     # sync also fetches Deezer previews for locally matched likes (eval queries)
         "min_queries": 20,             # preview-vector liked songs needed before the eval may choose a variant

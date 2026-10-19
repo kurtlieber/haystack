@@ -148,6 +148,16 @@ CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY, job TEXT, started_at TEXT, finished_at TEXT, ok INTEGER, summary TEXT, error TEXT
 );
+
+-- every scoring-variant eval (ADR 0009): what it chose, what the batch used, and whether the variant switched
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id INTEGER PRIMARY KEY, at TEXT,
+    trigger TEXT,                        -- weekly (a batch) | set (first batch, eval --choose) | report (eval)
+    objective TEXT,                      -- the objective used: auc | mean_pct
+    chosen TEXT, used TEXT, n_pos INTEGER, n_neg INTEGER,
+    auc_json TEXT,                       -- {variant: AUC or null}
+    switched INTEGER
+);
 """
 
 
