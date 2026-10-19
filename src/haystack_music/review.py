@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -157,8 +157,9 @@ def unrated_likes(con) -> list[str]:
             if r[0] not in cur]
 
 
-def next_batch_at(now: datetime | None = None) -> str | None:
-    """When the batch timer fires next (UTC ISO), from systemd; else the repo default, Mondays 08:00 here."""
+def next_batch_at(now: datetime | None = None, schedule: str = "Mon 08:00") -> str | None:
+    """When the batch runs next (UTC ISO): the batch timer's next time from systemd; without systemd (`haystack
+    serve`), the next time of `schedule`, schedule.batch in the config. None when that is off."""
     try:
         r = subprocess.run(["systemctl", "--user", "show", "haystack-batch.timer", "-p",
                             "NextElapseUSecRealtime", "--value", "--timestamp=unix"],
@@ -168,12 +169,12 @@ def next_batch_at(now: datetime | None = None) -> str | None:
             return datetime.fromtimestamp(int(v), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (OSError, subprocess.SubprocessError):
         pass
-    now = (now or datetime.now()).astimezone()
-    days = (7 - now.weekday()) % 7
-    nxt = (now + timedelta(days=days)).replace(hour=8, minute=0, second=0, microsecond=0)
-    if nxt <= now:
-        nxt += timedelta(days=7)
-    return nxt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from .scheduler import next_after, parse
+    spec = parse(schedule)
+    if not spec:
+        return None
+    local = (now or datetime.now()).astimezone().replace(tzinfo=None)
+    return next_after(spec, local).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def state(con, cfg: dict, cards: Cards | None = None) -> dict:
@@ -192,7 +193,8 @@ def state(con, cfg: dict, cards: Cards | None = None) -> dict:
         "generated_at": db.now(),
         "baseline": baseline.compute(con, cfg),
         "queues": {
-            "discoveries": {"total": len(d_cards), "done": len(reviewed), "next_batch_at": next_batch_at(),
+            "discoveries": {"total": len(d_cards), "done": len(reviewed),
+                            "next_batch_at": next_batch_at(schedule=cfg["schedule"]["batch"]),
                             "items": d_cards},
             "likes": {"total": len(l_sids), "items": cards.build(l_sids)},
         },

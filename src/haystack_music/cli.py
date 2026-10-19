@@ -340,6 +340,32 @@ def cmd_api(cfg, a) -> int:
     return 0
 
 
+def cmd_serve(cfg, a) -> int:
+    """needle's API and the job schedule in one process: the container's entry point, where there is no systemd."""
+    import signal
+    from . import api, scheduler, secrets, traits
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    if traits.missing_models():
+        log.warning("Essentia models missing (%s): run `haystack models fetch`; the library and harvest jobs "
+                    "fail until then", ", ".join(traits.missing_models()))
+    try:
+        sch = scheduler.Scheduler(cfg)
+    except ValueError as e:
+        log.error("%s (in %s)", e, config.CONFIG_FILE)
+        return 2
+    sch.start()
+    try:
+        if not a.no_api:
+            try:
+                api.serve(cfg)
+            except secrets.SecretError as e:
+                log.warning("needle's API is off: %s, then restart haystack", e)
+        while True:
+            time.sleep(3600)
+    finally:
+        sch.stop()
+
+
 def cmd_genres(cfg, a) -> int:
     from . import evaluate
     print(json.dumps(evaluate.liked_genres(db.connect(), a.top), indent=1))
@@ -516,7 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="haystack", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("auth", help="one-time Spotify login (prints a URL, listens on the loopback callback)")
+    s = sub.add_parser("auth", help="one-time Spotify login (prints a URL; paste back the address the browser "
+                                    "lands on, or let the loopback listener catch it)")
     s.add_argument("--timeout", type=int, default=900)
     s.add_argument("--ready-file", help="write a markdown file with the authorize URL and instructions")
     s.add_argument("--log-file", help="also append log lines to this file")
@@ -597,6 +624,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("api", help="needle's private HTTP API (the haystack-api unit runs this)")
     s.set_defaults(fn=cmd_api)
+
+    s = sub.add_parser("serve", help="needle's API plus the scheduled jobs ([schedule]) in one process: for hosts "
+                                     "without systemd, such as the container")
+    s.add_argument("--no-api", action="store_true", help="run only the scheduled jobs")
+    s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("genres", help="genre makeup of the liked songs (genre_discogs400 styles of their previews)")
     s.add_argument("--top", type=int, default=15)

@@ -35,7 +35,7 @@ to_rip = false
 to_rip_name = "To Rip"
 
 [batch]
-size = 15                      # tracks per weekly batch
+size = 15                      # songs per weekly batch
 max_per_artist = 1
 expiry_days = 14               # an unliked discovery leaves Discoveries after this many days
 clear_recent = "remove"        # before a batch, tracks added less than a day ago: "remove" (no penalty) or "keep"
@@ -50,6 +50,14 @@ retired_sources = []
 # An email or URL for the ListenBrainz User-Agent, as MetaBrainz asks of API users.
 listenbrainz_contact = ""
 # listenbrainz_contact = "you@example.com"
+
+[schedule]
+# When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",
+# "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off". The systemd units ignore this.
+sync = "hourly"
+library = "daily 03:15"
+harvest = "daily 05:00"
+batch = "Mon 08:00"
 
 [api]
 # needle's API. Its token: `haystack token new`.
