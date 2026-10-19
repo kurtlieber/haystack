@@ -12,8 +12,8 @@ in Discoveries and it counts as a no. The next week's picks get better.
 
 haystack is a small server, with no screen of its own. It runs on an always-on machine (a home server, a NAS, a
 cheap VPS) and you set it up once in a single settings file, `config.toml`. Its companion app,
-[needle](#needle), is where you rate songs and play what haystack found.  Haystack learns based on
-your Spotify likes alone.  Needle is when you want to get far more granular with your ratings.
+[needle](#needle), is where you rate songs and play what haystack found.  haystack learns based on
+your Spotify likes alone.  needle is when you want to get far more granular with your ratings.
 
 - [The easiest setup: ask your AI agent](#the-easiest-setup-ask-your-ai-agent)
 - [What you need](#what-you-need)
