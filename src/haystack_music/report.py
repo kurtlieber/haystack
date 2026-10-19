@@ -132,8 +132,8 @@ def head(con, classes: list[str] | None = None, tracks: bool = False) -> dict:
 
 
 def eval_table(status_doc: dict | None) -> dict | None:
-    """The latest `haystack eval` (status.json scoring_eval): per-variant mean percentile, recall and the judged
-    tracks' mean percentile. The judged tracks are counted, never named."""
+    """The latest eval (status.json scoring_eval): per-variant AUC (kept vs turned-down offers), mean percentile,
+    recall and the judged tracks' mean percentile. The judged tracks are counted, never named."""
     e = (status_doc or {}).get("scoring_eval") or {}
     if not e.get("variants"):
         return None
@@ -143,11 +143,13 @@ def eval_table(status_doc: dict | None) -> dict | None:
     n = Counter(t.get("verdict") for t in jc.get("tracks") or [])
     out = {"at": e.get("at"), "chosen": e.get("chosen"), "used": e.get("used"), "pinned": e.get("pinned"),
            "queries": sum((e.get("queries_by_kind") or {}).values()), "pool": e.get("pool"), "recall_k": k,
-           "judged_yes": n.get("yes", 0), "judged_no": n.get("no", 0), "variants": {}}
+           "judged_yes": n.get("yes", 0), "judged_no": n.get("no", 0), "objective": e.get("objective_used"),
+           "n_pos": e.get("n_pos"), "n_neg": e.get("n_neg"), "variants": {}}
     order = [v for v in scoring.VARIANTS if v in e["variants"]] + sorted(set(e["variants"]) - set(scoring.VARIANTS))
     for v in order:
         x, j = e["variants"][v], jv.get(v) or {}
-        out["variants"][v] = {"mean_pct": x.get("mean_pct"), "recall": x.get(f"recall_at_{k}"),
+        out["variants"][v] = {"auc": x.get("auc"), "degenerate": x.get("degenerate"),
+                              "mean_pct": x.get("mean_pct"), "recall": x.get(f"recall_at_{k}"),
                               "judged_yes": j.get("mean_yes"), "judged_no": j.get("mean_no"),
                               "judged_yes_pen": j.get("mean_yes_pen"), "judged_no_pen": j.get("mean_no_pen")}
     return out
@@ -220,10 +222,13 @@ def text(r: dict) -> str:
         out += [f"  at {e['at']}; chosen {e['chosen']}, used {e['used']}"
                 f"{'' if not e['pinned'] else ', pinned ' + str(e['pinned'])}; {e['queries']} held-out queries, "
                 f"pool {e['pool']}; judged tracks: {e['judged_yes']} yes, {e['judged_no']} no",
-                f"  {'variant':14} {'mean pct':>8} {'recall@' + str(e['recall_k']):>9} {'judged yes/no':>15} "
-                f"{'penalised':>13}"]
+                f"  chosen by {e['objective'] or 'mean pct'}"
+                + ("" if e["n_neg"] is None else f"; offers: {e['n_pos']} kept, {e['n_neg']} turned down"),
+                f"  {'variant':14} {'AUC':>11} {'mean pct':>8} {'recall@' + str(e['recall_k']):>9} "
+                f"{'judged yes/no':>15} {'penalised':>13}"]
         for name, x in e["variants"].items():
             jd = f"{_num(x['judged_yes'])} / {_num(x['judged_no'])}"
             jp = f"{_num(x['judged_yes_pen'])} / {_num(x['judged_no_pen'])}"
-            out.append(f"  {name:14} {_num(x['mean_pct']):>8} {_num(x['recall'], '.3f'):>9} {jd:>15} {jp:>13}")
+            a = _num(x["auc"], ".3f") + (" deg" if x["degenerate"] else "")
+            out.append(f"  {name:14} {a:>11} {_num(x['mean_pct']):>8} {_num(x['recall'], '.3f'):>9} {jd:>15} {jp:>13}")
     return "\n".join(out) + "\n"

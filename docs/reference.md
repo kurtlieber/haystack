@@ -101,7 +101,8 @@ haystack batch [--size N] [--dry-run] [--force] [--variant V] [--no-penalty]
 haystack batch --plan [--size N] [--variant V]   the would-be picks, scored in memory: no Spotify, no writes
 haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] [--clear-recent keep|remove]
                                               empty Discoveries and record nos (also run by batch)
-haystack eval [--seeds 1,2,3] [--choose]  offline scoring-variant eval (no Spotify calls)
+haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
+                                              offline scoring-variant eval (no Spotify calls); --choose stores its pick
 haystack genres [--top 15]           genre makeup of the liked songs (400 Discogs styles)
 haystack harvest --broad [N] [--shard i/N] [--no-retry] [--styles N]   stratified broad harvest
 haystack feedback yes|no ARTIST TITLE [--strength mild|normal|strong] [--note T] [--to-rip]
@@ -150,8 +151,9 @@ genre_discogs400 style vector and its k=10 most similar liked songs' style vecto
 raw + genre), `centred` (subtract the
 mean of library + pool vectors, re-normalise), `csls` (raw minus the candidate's mean cosine to its k=10 nearest
 vectors in a fixed, seeded random reference set of library + pool vectors: penalises hubs that are close to
-everything) and `csls_centred`. `auto` (default) uses the variant the first-batch eval chose (kv
-`scoring_variant`), else `raw`; set an explicit name to pin it.
+everything) and `csls_centred`. `auto` (default) uses the variant the eval chose (kv `scoring_variant`), else
+`raw`: the first batch sets it and every later batch re-checks it (see **Eval**); set an explicit name to pin it,
+and the eval then only reports.
 
 **Negative penalty** (`scoring.negative_penalty`, applied after whichever variant scores the pool, so the weekly
 batch and the first batch both get it): candidates that sound like tracks you rejected rank lower.
@@ -168,8 +170,8 @@ Turn it off with
 [scoring.negative_penalty]
 w = 0
 ```
-The eval's held-out queries are unaffected; its sanity table on your verdicts also shows the penalised ranks
-(leave-one-out for the rejected tracks).
+The eval scores without the penalty: a turned-down offer would otherwise be pushed down by its own rejection.
+Its sanity table on your verdicts also shows the penalised ranks (leave-one-out for the rejected tracks).
 
 **Styles.** Each preview also gets a 400-d Discogs style vector: the official `discogs-effnet-bs64-1`
 backbone + `genre_discogs400-discogs-effnet-1` head on the same mel patches. The track-similarity model's
@@ -182,15 +184,51 @@ genre buckets (sqrt-weighted, liked songs first) and ListenBrainz similar-record
 `--shard i/N` splits the seeds across parallel processes (the 1.1 s Deezer throttle is shared). Chart +
 editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the pool.
 
-**Eval** (`haystack eval`): hold out 20 % of the liked songs (5 seeds), remove them (and any library
+**Eval** (`haystack eval`, ADR 0009): each variant scores the past offers like candidates, and the eval asks how
+well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a Rating) above the ones you
+**turned down** (a Pass or a Dislike, or expired after a play or removed by hand). A kept offer is weighted by its
+stars (an Unrated like counts as 3★) and is left out of its own positives, with any library file of the same song;
+a turned-down offer that is a liked or library song is skipped. Reported per variant:
+
+- **AUC**: the chance that a kept offer outscores a turned-down one (0.5 = chance). The objective.
+- **gap**: mean percentile of the kept offers minus that of the turned-down ones, among the pool.
+- **top-50 spread**: how far the pool's top 50 scores span, in pool-score sd. Under 0.25 the variant is
+  *degenerate* (its top picks are near-ties, so the batch is decided by noise) and is not chosen unless
+  every variant is.
+
+Only offers count: both sides were picked from the top of the pool the same way. Held-out liked songs were never
+picked, and set against offers they make whichever variant did the picking look worst.
+
+The choice is the best AUC among the variants that are not degenerate; within `eval.auc_tie` (0.02) is a tie and
+the simpler variant wins (simplest first: raw, topk_mean, centred, csls, csls_centred, genre, genre_blend). It
+needs `eval.min_verdicts` (15) kept and 15 turned-down offers with a preview vector; with fewer, the eval falls
+back to the rule before 0.2 and says so (`objective_note`).
+
+The fallback, and a diagnostic always: hold out 20 % of the liked songs (5 seeds), remove them (and any library
 file of the same song) from the positives, and rank each among the harvested pool. Reports mean percentile
-(50 = chance), recall@15, and the Deezer-chart share of the pool's top 15. Queries are the liked songs' Deezer
+(50 = chance), recall@15 and @50, and the Deezer-chart share of the pool's top 15; the best mean percentile wins
+(ties within `eval.tie_tolerance`, 0.5 points, go to the simpler variant). Queries are the liked songs' Deezer
 *preview* vectors, the same audio domain as the candidates (the sync fetches previews for all likes for this;
 scoring still uses the local file for locally matched likes). Local-file-only queries are shown as a
 diagnostic and never drive the choice: a local window is closer to the local-file positives than any preview,
-and centring/CSLS amplify that domain gap. The first batch runs the eval, picks the best mean percentile (ties
-within 0.5 points go to the simpler variant), and logs the table to `sanity-check.md` and `status.json`
-(`scoring_eval`).
+and centring/CSLS amplify that domain gap. `eval.objective = "mean_pct"` (or `--objective mean_pct`) uses this
+rule always.
+
+When it runs: the first batch (and `haystack eval --choose`) stores the eval's choice. Every later batch re-runs
+it first (seconds, token-free) and switches only on the AUC objective, and only when the current variant is
+degenerate or the winner's AUC is more than `eval.switch_margin` (0.03) higher; on the fallback it keeps the
+current variant. `haystack eval` alone reports (and records the run) but keeps the variant; `batch --plan` and `--dry-run` say which
+variant the batch would use and write nothing. A pinned `scoring.variant` is never changed. Each run is a row in
+`eval_runs` (trigger, objective, chosen, used, offers per side, AUC per variant, switched) and the latest is in
+`status.json` (`scoring_eval`); the first batch also logs its table to `sanity-check.md`.
+
+```toml
+[eval]
+objective = "auc"      # or "mean_pct"
+min_verdicts = 15      # kept and turned-down offers each, before the AUC is used
+auc_tie = 0.02
+switch_margin = 0.03
+```
 
 **Embedding guard.** A real batch skips (exit 0, `status.json` job message `skipped: library embedding
 incomplete: ...`) until at least `batch.min_embedded_fraction` (default 0.98) of library files are embedded or
@@ -205,8 +243,9 @@ would-be pick with its score, whether it is an exploration pick, its source, the
 the variant. A candidate with no Spotify id yet is marked `unmapped` instead of being looked up, so the picks can
 differ from a real batch's only where a lookup would have failed or found a known track, or where Spotify reports a
 pick already saved in Liked Songs (a real batch then drops it). Both paths share one selection function
-(`batch.select_for_batch`), so with the same scores and seed they pick the same candidates. It ignores the
-embedding guard and says so when the library is not fully embedded.
+(`batch.select_for_batch`), so with the same scores and seed they pick the same candidates. With
+`scoring.variant = auto` it first re-checks the variant as a batch does and shows the outcome (`variant_choice`),
+recording nothing. It ignores the embedding guard and says so when the library is not fully embedded.
 
 **Report.** `haystack report` is token-free and opens the database read-only. Offers: offered, decided (an outcome
 is set), judged (decided, minus tracks that went unplayed and have no Verdict), kept (the current Verdict keeps the
@@ -215,7 +254,8 @@ heart, or the offer was liked and has no Verdict), with kept/decided, kept/judge
 kind and stars and how many Liked Songs are rated; the pool (size, embedded, scored, active and scored variant); of
 the top 100 by stored score, how many have a library window as their nearest positive and how many a preview (by owner
 kind: like, discovery, manual, rated); the top 30's score range, distinct nearest positives and top-1 Discogs
-style; and the latest eval's per-variant table from `status.json`, with judged tracks counted, never named. It
+style; and the latest eval from `status.json`: the objective it chose by, the kept and turned-down offers it
+counted, and per variant the AUC (marked when degenerate) and mean percentile, with tracks never named. It
 prints counts and shares only, so it can be pasted into an issue; `--tracks` adds the top 30 by name and `--json`
 prints everything as JSON.
 
@@ -264,7 +304,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
 | sync | hourly | plays, likes, outcomes, expiry, To Rip, your playlists, token check | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
-| first batch | once | sanity check + scoring eval/variant choice + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
+| first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |
 
 Heavy jobs run at nice 19.

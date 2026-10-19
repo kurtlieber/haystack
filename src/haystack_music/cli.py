@@ -193,13 +193,22 @@ def cmd_batch(cfg, a) -> int:
                         no_penalty=a.no_penalty)
         if out.get("clear"):
             _print_clear(out["clear"])
-        print(f"variant: {out.get('variant')}")
+        print(f"variant: {out.get('variant')}{_choice_note(out.get('variant_choice'))}")
         if a.dry_run or out.get("tracks"):
             for t in out.get("tracks", []):
                 print(f"  {t['score']:.4f}  {'explore' if t['exploration'] else 'top    '}  {t['source']:22} "
                       f"{t['artist']} - {t['title']}")
         return out
     return job("batch", run, needs_spotify=True)
+
+
+def _choice_note(c: dict | None) -> str:
+    if not c:
+        return ""
+    if c.get("error"):
+        return f" (the variant eval failed: {c['error']})"
+    auc = "" if c.get("auc_used") is None else f", AUC {c['auc_used']:.3f}"
+    return f" (eval by {c.get('objective_used') or '-'}{auc}; {c.get('decision')})"
 
 
 def _batch_plan(cfg, a) -> int:
@@ -211,7 +220,8 @@ def _batch_plan(cfg, a) -> int:
     out = batch.plan(con, cfg, size=a.size, variant=a.variant)
     if out["embedding_note"]:
         print(f"note: {out['embedding_note']} (the weekly batch skips unless --force)")
-    print(f"plan: variant {out['variant']}, {out['positives']} positive rows, {out['pool']} scored in the pool; "
+    print(f"plan: variant {out['variant']}{_choice_note(out['variant_choice'])}")
+    print(f"plan: {out['positives']} positive rows, {out['pool']} scored in the pool; "
           f"{out['picked']} picks, {out['exploration']} exploration, {out['unmapped']} unmapped")
     for t in out["tracks"]:
         sl = t["sounds_like"]
@@ -255,14 +265,14 @@ def cmd_first_batch(cfg, a) -> int:
 
 
 def cmd_eval(cfg, a) -> int:
-    from . import evaluate, firstbatch
+    from . import evaluate
     if a.seeds:
         cfg["eval"]["seeds"] = [int(x) for x in a.seeds.split(",")]
+    if a.objective:
+        cfg["eval"]["objective"] = a.objective
 
     def run(con):
-        ev = firstbatch.choose(con, cfg) if a.choose else evaluate.run(con, cfg)
-        if not a.choose:
-            status.update(None, scoring_eval=ev)
+        ev = evaluate.choose(con, cfg, "set" if a.choose else "report")
         print(evaluate.markdown(ev))
         return ev
     return job("eval", run)
@@ -682,8 +692,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--top", type=int, default=15)
     s.set_defaults(fn=cmd_genres)
 
-    s = sub.add_parser("eval", help="offline scoring-variant eval on held-out liked songs (no Spotify calls)")
+    s = sub.add_parser("eval", help="offline scoring-variant eval on your verdicts and held-out liked songs "
+                                    "(no Spotify calls)")
     s.add_argument("--seeds", help="comma-separated seeds (default from config)")
+    s.add_argument("--objective", choices=("auc", "mean_pct"), help="how to choose (default eval.objective)")
     s.add_argument("--choose", action="store_true",
                    help="persist the winner as the scoring variant (ignored when scoring.variant is pinned)")
     s.set_defaults(fn=cmd_eval)

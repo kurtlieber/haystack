@@ -244,7 +244,7 @@ def liked_styles(con, cfg: dict | None = None) -> tuple[list[str], np.ndarray, n
 
 
 def active_variant(con, cfg: dict) -> str:
-    """Pinned scoring.variant, else (auto) the variant the first-batch eval chose, else raw."""
+    """Pinned scoring.variant, else (auto) the variant the eval chose (kv scoring_variant), else raw."""
     v = cfg["scoring"].get("variant", "auto")
     if v == "auto":
         v = db.kv_get(con, "scoring_variant") or "raw"

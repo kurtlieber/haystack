@@ -87,7 +87,8 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
     cleared = clear_discoveries(con, cfg, sp, playlist_id=pl.get("discoveries"), resolve_playlist=False,
                                 min_age_hours=clear_min_age_hours, recent=clear_recent, no_penalty=no_penalty,
                                 dry_run=dry_run)
-    variant = variant or vectors.active_variant(con, cfg)
+    choice = _rechoose(con, cfg, write=not dry_run) if variant is None else None
+    variant = variant or (choice or {}).get("used") or vectors.active_variant(con, cfg)
     scored = vectors.score_candidates(con, cfg, variant=variant)
     dz = Deezer(cfg["harvest"]["deezer_min_interval"])
     tol = cfg["matching"]["duration_tolerance"]
@@ -112,7 +113,7 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
             chosen.remove(p)
     out = {"scored": scored, "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
            "by_source": {}, "dry_run": dry_run, "embedding": prog,
-           "variant": variant, "clear": cleared}
+           "variant": variant, "variant_choice": choice, "clear": cleared}
     for p in chosen:
         out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
     if dry_run or not chosen:
@@ -130,6 +131,19 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
     out["batch_id"] = bid; out["snapshot_id"] = snap
     out["tracks"] = _describe(con, chosen)
     return out
+
+
+def _rechoose(con, cfg: dict, write: bool) -> dict | None:
+    """The weekly re-choice of the scoring variant (ADR 0009) when scoring.variant is auto: token-free, takes
+    seconds, and never blocks the batch. Without write it only says which variant the batch would use."""
+    if cfg["scoring"].get("variant", "auto") != "auto":
+        return None
+    from . import evaluate
+    try:
+        return evaluate.summary(evaluate.choose(con, cfg, "weekly", write=write))
+    except Exception as e:  # noqa: BLE001
+        log.exception("scoring eval failed; keeping the stored variant")
+        return {"error": repr(e)}
 
 
 def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: int | None = None,
@@ -191,17 +205,19 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
 
 def plan(con, cfg: dict, size: int | None = None, variant: str | None = None,
          rng: random.Random | None = None) -> dict:
-    """`batch --plan`: the batch's scoring and selection with no Spotify calls and no writes. The pool is scored in
-    memory under the active variant; a pick with no stored Spotify id is marked unmapped (the live batch maps it
-    first and may drop it)."""
-    variant = variant or vectors.active_variant(con, cfg)
+    """`batch --plan`: the batch's scoring and selection with no Spotify calls and no writes. Like the batch it runs
+    the weekly variant re-choice (in memory) unless a variant is given, and scores the pool in memory under the
+    variant the batch would use; a pick with no stored Spotify id is marked unmapped (the live batch maps it first
+    and may drop it)."""
+    choice = _rechoose(con, cfg, write=False) if variant is None else None
+    variant = variant or (choice or {}).get("used") or vectors.active_variant(con, cfg)
     r = vectors.compute_scores(con, cfg, variant)
     scores = {}
     for (cid, _), sc, i in zip(r["rows"], r.get("score", ()), r.get("idx", ())):
         scores[cid] = (None if math.isnan(sc) else float(sc), r["owners"][int(i)])
     done, msg, prog = embedding_progress(con, cfg)
     chosen = select_for_batch(con, cfg, rng, size=size, scores=scores)
-    out = {"plan": True, "variant": variant, "positives": r["n_pos"],
+    out = {"plan": True, "variant": variant, "variant_choice": choice, "positives": r["n_pos"],
            "pool": sum(1 for s, _ in scores.values() if s is not None),
            "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
            "unmapped": sum(1 for p in chosen if not p.spotify_id), "by_source": {},
