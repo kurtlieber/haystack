@@ -60,7 +60,12 @@ Then it fills the batch (15 songs, unless you changed `batch.size`):
 
 - **Most picks are the closest matches.**
 - **About one in five is a deliberate stretch**: a song that's a decent match but not a top one. Without
-  these, haystack would only ever find more of exactly what you already have.
+  these, haystack would only ever find more of exactly what you already have. The share follows what you keep:
+  when the stretches do better than the closest matches, there are more of them (up to two in five), and fewer
+  when they do worse (down to one in ten).
+- **The picks are spread across the styles you like.** No more than about two in five of the closest matches
+  share a style, and no more than two picks are closest to the same song of yours, so one corner of your taste
+  can't fill the week. Among close matches, a song unlike the ones already picked goes first.
 - **One song per artist**, so one band can't take over the week.
 - **Songs that sound like ones you turned down rank lower.** A Pass or a Dislike in needle, or a discovery you
   heard and didn't like, pushes down candidates that sound very like it.

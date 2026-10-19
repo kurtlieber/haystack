@@ -23,7 +23,7 @@ log = logging.getLogger("haystack_music.api")
 VERSION = "1"
 # Capabilities beyond /v1 as first shipped (docs/api.md, "Server and features"). A client shows a newer element
 # only when its feature name is listed; a server without the `server` object has none of them.
-FEATURES: tuple[str, ...] = ()
+FEATURES: tuple[str, ...] = ("why.band",)
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")

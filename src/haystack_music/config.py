@@ -84,9 +84,21 @@ DEFAULTS: dict = {
     },
     "batch": {
         "size": 15,                    # songs per weekly batch (`haystack batch --size N` for one run)
-        "exploration_fraction": 0.2,
+        "exploration_fraction": 0.2,   # the prior; each batch moves it by the outcomes (ADR 0010)
         "explore_band": [0.40, 0.75],  # score-percentile band the exploration picks come from
         "max_per_artist": 1,
+        # Spread (ADR 0010): a top pick's score loses diversity * score sd * its closest cosine to a song already
+        # picked (preview vectors centred on the pool); 0 picks by score alone. At most max_style_share of the top
+        # picks share a top-1 Discogs style and at most max_per_nearest picks share a nearest liked song (0: no
+        # cap). The caps give way when the pool can't fill the batch otherwise.
+        "diversity": 0.5,
+        "max_style_share": 0.4,
+        "max_per_nearest": 2,
+        # Exploration share: prior + 0.5 * (explore keep rate - top keep rate) over the last explore_window_batches
+        # batches, clipped to exploration_bounds, once each side has explore_min_judged judged offers (0: off).
+        "explore_window_batches": 8,
+        "explore_min_judged": 8,
+        "exploration_bounds": [0.1, 0.4],
         "expiry_days": 14,
         "max_unplayed_expiries": 2,
         "map_attempts_factor": 4,      # try mapping up to size*factor candidates to Spotify

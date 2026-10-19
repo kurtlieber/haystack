@@ -27,7 +27,7 @@ clients have moved.
 `GET /v1/health` and `GET /v1/state` both carry a `server` object:
 
 ```json
-{"version": "0.1.0", "api": "1", "features": []}
+{"version": "0.2.0", "api": "1", "features": ["why.band"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -36,7 +36,9 @@ clients have moved.
   feature's name is listed, and treats every field a feature adds as optional. A server without a `server`
   object predates features: a client behaves as it did before any of them.
 
-No features are defined yet. Each one is added here with the fields it brings, and in "Changes" below.
+Each feature is listed here with the fields it brings, and in "Changes" below:
+
+- `why.band`: a Discoveries offer's `why` carries `band` (Track card).
 
 ## Endpoints
 
@@ -60,7 +62,7 @@ No features are defined yet. Each one is added here with the fields it brings, a
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
- "server": {"version": "0.1.0", "api": "1", "features": []}}
+ "server": {"version": "0.2.0", "api": "1", "features": ["why.band"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):
@@ -87,7 +89,8 @@ Readings, and refreshes the playlists at most every 10 minutes.
  "year": 2018, "duration_ms": 179000, "cover": "https://…", "cover_small": "https://…",
  "verdict": {"kind": "rating", "stars": 4, "given_at": "…Z"},
  "why": {"sounds_like": {"title": "…", "artist": "…"}, "similarity": 0.96, "source": "deezer_artist_radio",
-         "source_label": "Deezer artist radio", "exploration": true},
+         "source_label": "Deezer artist radio", "exploration": true,
+         "band": {"kind": "explore", "percentile": 58.2}},
  "styles": [["Dubstep", 0.25], ["Bassline", 0.11], ["Downtempo", 0.10]],
  "readings": {"tempo": 102.0, "valence": 0.14, "energy": 0.83, "danceability": 0.61, "acousticness": 0.02,
               "instrumentalness": 0.77, "loudness": -7.1},
@@ -99,6 +102,10 @@ Readings, and refreshes the playlists at most every 10 minutes.
 - `verdict` is the track's current Verdict, or `null`.
 - `why` is set only for a Discoveries offer: the liked track it sounded most like, the raw similarity, and where
   the candidate came from. `null` otherwise.
+- `why.band` (feature `why.band`): which part of the ranking the offer was picked from. `kind` is `top` (the
+  best-scored picks) or `explore` (a random pick from the middle of the ranking, the same as `exploration`), and
+  `percentile` is the offer's score percentile, 0–100, in the pool its batch was picked from. `percentile` is
+  `null` for offers made before haystack 0.2.0.
 - `styles`: the top three Discogs styles with their scores; empty when unmeasured.
 - `readings`: only the Traits that were measured; `null` when none. `tempo` is BPM, `loudness` integrated LUFS,
   the rest 0–1.
@@ -187,3 +194,4 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 `tests/fixtures/v1-contract.json` lists every documented key and type; a change may add to it, never remove.
 
 - 2026-10-19, haystack 0.1.0: the `server` object on `GET /v1/health` and `GET /v1/state`; `features` is empty.
+- 2026-10-19, haystack 0.2.0, `why.band`: `band` (`kind`, `percentile`) in a track card's `why`.
