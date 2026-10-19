@@ -195,7 +195,8 @@ The ones people change most:
 | `spotify.discoveries_name` | `"Discoveries"` | The playlist's name. |
 | `spotify.to_rip` | `false` | Also keep a **To Rip** playlist of songs you rate 3 stars or more that aren't in your music folder, to buy later. |
 | `harvest.listenbrainz_contact` | `""` | Your email or website. ListenBrainz asks API users for one. |
-| `harvest.retired_sources` | `[]` | Candidate sources to stop using. `haystack sources` shows how well each one does for you. |
+| `harvest.retired_sources` | `[]` | Candidate sources to stop using. `haystack sources` shows how well each one does for you, and by the seed it started from. |
+| `harvest.seed_policy` | `"verdicts"` | Where the harvest starts looking: your 4-5 star Ratings and kept discoveries first, then your liked songs, then your music folder. `"recent"` starts from your most recent liked songs. |
 | `api.allow_networks` | private ranges | Which networks may reach needle's API. Narrow it to your home network and VPN. In Docker, keep `172.16.0.0/12` if needle runs on the same machine. |
 | `alert.enabled` | `false` | Send a webhook when a job fails or the Spotify sign-in is running out. Set the `alert-webhook-url` secret first. |
 
@@ -212,8 +213,8 @@ batch = "Fri 18:00"
 root = "/music"
 ```
 
-`[schedule]` also sets when the other jobs run: `sync` (hourly), `library` (daily 03:15) and `harvest` (daily
-05:00). Any of them can be `"off"`. Every other setting, including the scoring options, is in
+`[schedule]` also sets when the other jobs run: `sync` (hourly), `library` (daily 03:15), `harvest` (daily
+05:00) and `harvest_broad` (a wider harvest, Sundays 04:00). Any of them can be `"off"`. Every other setting, including the scoring options, is in
 [docs/reference.md](docs/reference.md).
 
 ## Day to day

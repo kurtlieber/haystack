@@ -1,0 +1,10 @@
+[Unit]
+Description=haystack: weekly broad harvest
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

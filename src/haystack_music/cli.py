@@ -129,18 +129,18 @@ def cmd_library(cfg, a) -> int:
 def cmd_harvest(cfg, a) -> int:
     import random
     from . import vectors
-    from .harvest import Harvester, stratified_seeds
+    from datetime import date
+    from .harvest import Harvester, broad_liked_seeds, stratified_seeds
 
     def run(con):
         seeds = liked = None
         out = {}
         if a.broad:
-            rng = random.Random(a.seed_rng or cfg["harvest"]["broad_seed_rng"])
+            # the week's seeds: the same for every shard started this ISO week, different from last week's
+            year, week, _ = date.today().isocalendar()
+            rng = random.Random(a.seed_rng or f"{cfg['harvest']['broad_seed_rng']}:{year}-W{week:02d}")
             seeds = stratified_seeds(con, a.broad, rng)
-            liked = [(json.loads(r[0] or "[]")[0], r[1]) for r in con.execute(
-                """SELECT s.artists_json, s.name FROM likes l JOIN spotify_tracks s ON s.spotify_id=l.spotify_id
-                   WHERE l.removed_at IS NULL ORDER BY l.spotify_id""") if json.loads(r[0] or "[]") and r[1]]
-            rng.shuffle(liked)
+            liked = broad_liked_seeds(con, cfg, rng)
             buckets = {}
             for x in seeds:
                 buckets[x["bucket"]] = buckets.get(x["bucket"], 0) + 1
@@ -161,7 +161,8 @@ def cmd_harvest(cfg, a) -> int:
         out["pool"] = con.execute("SELECT COUNT(*) FROM candidates WHERE state='pool' AND vector_status='ok'").fetchone()[0]
         status.update("candidates", _candidate_stats(con))
         return out
-    return job("harvest" + (f"-{a.shard.replace('/', 'of')}" if a.shard else ""), run)
+    name = "harvest_broad" if a.broad else "harvest"
+    return job(name + (f"-{a.shard.replace('/', 'of')}" if a.shard else ""), run)
 
 
 def cmd_score(cfg, a) -> int:
@@ -602,17 +603,33 @@ def cmd_sources(cfg, a) -> int:
     con = db.connect()
     rates = like_rates([dict(r) for r in con.execute("SELECT source, outcome, played FROM offers")])
     if a.action == "list":
+        from . import sources
         cand = _candidate_stats(con)["by_source"]
-        print(f"{'source':24} {'cands':>6} {'embedded':>8} {'offered':>7} {'liked':>5} {'like rate':>9}")
-        for s in sorted(set(cand) | set(rates["per_source"]) | set(cfg["harvest"]["sources"])):
-            c = cand.get(s, {}); r = rates["per_source"].get(s, {})
-            lr = r.get("like_rate")
-            flag = " (retired)" if s in cfg["harvest"].get("retired_sources", []) else ""
-            print(f"{s:24} {c.get('total', 0):6} {c.get('embedded', 0):8} {r.get('offered', 0):7} {r.get('liked', 0):5} "
-                  f"{'-' if lr is None else f'{lr:.0%}':>9}{flag}")
-        o = rates["overall"]
-        lr = o["like_rate"]
-        print(f"\noverall: offered {o['offered']}, liked {o['liked']}, like rate {'-' if lr is None else f'{lr:.0%}'}")
+        kept = sources.rates(con)
+        h = cfg["harvest"]
+        live = [x for x in h["sources"] if x not in h.get("retired_sources", [])]
+        caps = sources.caps(cfg, live, kept)
+
+        def pct(v):
+            return "-" if v is None else f"{v:.0%}"
+
+        print(f"{'source':24} {'cands':>6} {'embedded':>8} {'offered':>7} {'decided':>7} {'kept':>5} {'kept rate':>9}"
+              f"  cap")
+        for s in sorted(set(cand) | set(kept["per_source"]) | set(h["sources"])):
+            c = cand.get(s, {}); r = kept["per_source"].get(s, {})
+            cap = (f"{caps[s]['cap']} (x{caps[s]['multiplier']:.2f})" if s in caps else
+                   "retired" if s in h.get("retired_sources", []) else "-")
+            print(f"{s:24} {c.get('total', 0):6} {c.get('embedded', 0):8} {r.get('offered', 0):7} "
+                  f"{r.get('decided', 0):7} {r.get('kept', 0):5} {pct(r.get('kept_rate')):>9}  {cap}")
+        print(f"\n{'seed':24} {'offered':>7} {'decided':>7} {'kept':>5} {'kept rate':>9}")
+        for s, r in kept["per_seed"].items():
+            print(f"{s:24} {r['offered']:7} {r['decided']:7} {r['kept']:5} {pct(r['kept_rate']):>9}")
+        o = kept["overall"]
+        print(f"\noverall: offered {o['offered']}, decided {o['decided']}, kept {o['kept']}, "
+              f"kept rate {pct(o['kept_rate'])}")
+        print("kept: a Rating of 3 stars or more, or liked without a Rating. cap: new candidates per harvest"
+              + (f", scaled by the kept rate from {cfg['sources']['min_offers_before_retire']} decided offers."
+                 if h.get("adaptive_caps", True) else "."))
         return 0
     s = a.name
     n = cfg["sources"]["min_offers_before_retire"]
@@ -721,7 +738,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--shard", help="i/N: this process takes every N-th seed starting at i (parallel harvesters)")
     s.add_argument("--no-retry", action="store_true", help="skip retrying failed previews and the style backfill")
     s.add_argument("--per-seed", type=int, help="broad mode: new candidates per seed (overrides the config)")
-    s.add_argument("--seed-rng", type=int, help="broad mode: a different seed sample (default from config)")
+    s.add_argument("--seed-rng", type=int,
+                   help="broad mode: a different seed sample (default: harvest.broad_seed_rng and the ISO week)")
     s.add_argument("--no-score", action="store_true", help="don't re-score the pool afterwards")
     s.add_argument("--styles", type=int, metavar="N", help="also backfill style vectors for up to N older previews")
     s.set_defaults(fn=cmd_harvest)
@@ -841,7 +859,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="print the report as JSON")
     s.set_defaults(fn=cmd_report)
 
-    s = sub.add_parser("sources", help="like rate per source; retirement check")
+    s = sub.add_parser("sources", help="kept rate per source and per seed, harvest caps; retirement check")
     s.add_argument("action", nargs="?", default="list", choices=["list", "retire"])
     s.add_argument("name", nargs="?")
     s.set_defaults(fn=cmd_sources)

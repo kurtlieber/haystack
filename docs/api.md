@@ -27,7 +27,7 @@ clients have moved.
 `GET /v1/health` and `GET /v1/state` both carry a `server` object:
 
 ```json
-{"version": "0.3.1", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}
+{"version": "0.4.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -65,7 +65,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
- "server": {"version": "0.3.1", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}}
+ "server": {"version": "0.4.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):

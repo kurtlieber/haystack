@@ -34,7 +34,8 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 | `spotify.py` | **the only code that talks to Spotify**: token refresh + rotation write-back, 429/Retry-After, saved tracks, recently-played, `/me/playlists`, `/playlists/{id}/items` (add/remove with `snapshot_id`), `/me/library/contains`, search (limit 10) |
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
-| `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), 1 req / 1.1 s cross-process throttle |
+| `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), 1 req / 1.1 s cross-process throttle |
+| `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013) |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
 | `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
@@ -81,7 +82,7 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 * **Unheard by design.** `recently-played` only returns the last 50 plays. The server is always on and syncs
   hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
   tracks count as "unplayed" (the conservative direction). Not a bug.
-* **Metric.** Like rate, overall and per source (`haystack sources`), and the fuller `haystack report`. A source
+* **Metric.** Kept rate, overall, per source and per seed (`haystack sources`), and the fuller `haystack report`. A source
   can't be retired before 30 offered tracks. No skip inference yet (skips later from the Extended Streaming
   History export). The second stage (Re-ranking) learns from Verdicts and outcomes only, and switches itself on
   once it has 40 labels and beats similarity alone.
@@ -122,7 +123,7 @@ haystack first-batch [--no-penalty] [--clear-min-age-hours H] [--clear-recent ke
 haystack sanity-check [-n 10 -k 10]  write sanity-check.md in the state dir
 haystack status                      status.json + live counts
 haystack review [list|accept ID..|reject ID..]   uncertain liked-song -> library matches
-haystack sources [list|retire NAME]  like rate per source
+haystack sources [list|retire NAME]  kept rate per source and per seed, this harvest's caps
 haystack report [--tracks] [--json]  like rates, Verdict counts, the pool's make-up, latest eval (read-only)
 haystack check-secrets [--write]     which secrets are set (lengths only); --write: the token record is writable
 haystack secret set NAME             store a secret, from a hidden prompt or stdin
@@ -146,9 +147,31 @@ hearts and playlists). `--pending` leaves them for the next sync (or `verdict ap
 Spotify jobs exit with code **3** and `status.json` -> `auth.ok=false` when no refresh token exists.
 
 Sources: `deezer_chart`, `deezer_editorial` (genre charts), `deezer_new_releases` (editorial releases),
-`deezer_artist_radio`, `deezer_related` (related artists' top tracks) and `listenbrainz_similar` (labs
-`recording-search` + `similar-recordings`; the keyless `api.listenbrainz.org` lookup/radio endpoints now need a
-token). Seeds are the positives: recent likes first, then library tracks.
+`deezer_artist_radio`, `deezer_related` (related artists' top tracks), `deezer_style_search` (Deezer playlists
+named after your top styles) and `listenbrainz_similar` (labs `recording-search` + `similar-recordings`; the
+keyless `api.listenbrainz.org` lookup/radio endpoints now need a token).
+
+**Seeds** (ADR 0013). Artist radio, related artists and ListenBrainz start from seed tracks. With
+`harvest.seed_policy = "verdicts"` (default) they come from three buckets, by `harvest.seed_quotas` (40 / 30 / 30
+%; a share a bucket can't fill passes to the next): **top**, the tracks you Rated 4-5 stars and the discoveries you
+kept in the last `seed_recent_days` (90), 5 stars first; **mid**, your other liked songs (Unrated or 3 stars or
+more); **library**, your files. Seeds have distinct artists, and an artist seeded for a source in the last week is
+skipped while there are others (`harvest_seeds` keeps the history). Each candidate's source detail ends in
+`seed=<stars or origin>`, so `haystack sources` can show the kept rate by seed. With no Ratings yet this is about
+70 % liked songs and 30 % library, as before; `"recent"` keeps the 0.3 rule (70 % from the 200 most recent liked
+songs, the rest library, untagged).
+
+**`deezer_style_search`** takes your `style_search_styles` (8) top Discogs styles by mean activation over the
+liked songs (`haystack eval` shows them), searches Deezer's playlists for each style's name, and takes up to 25
+new tracks, in playlist order, from each of the `style_search_playlists` (3) with the most fans among the first 6
+results. Each style gets at most its share of the source's cap. It skips with a log line until liked songs have
+style vectors.
+
+**Caps.** Each source finds at most `harvest.max_new_per_source` (60) new candidates per run, or its own
+`harvest.caps.<source>`. With `harvest.adaptive_caps` (default on) a source with at least
+`sources.min_offers_before_retire` (30) decided offers has that cap scaled by its kept rate over the kept rate of
+all sources, clipped to 0.25-2x; `haystack sources` shows the rates and the caps. `--limit-per-source` sets a
+fixed cap for one run.
 
 ## Scoring and batches
 
@@ -189,9 +212,12 @@ second backbone pass. Library files have no style vectors (a second full pass wo
 variants use the liked songs' previews as positives. Older previews are backfilled by the daily harvest.
 
 **Broad harvest.** `harvest --broad 150` seeds artist radio and related artists from 150 artists stratified over
-genre buckets (sqrt-weighted, liked songs first) and ListenBrainz similar-recordings from every liked song;
-`--shard i/N` splits the seeds across parallel processes (the 1.1 s Deezer throttle is shared). Chart +
-editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the pool.
+genre buckets (sqrt-weighted, liked songs first) and ListenBrainz similar-recordings from every liked song (with
+`seed_policy = "verdicts"`, 5-star ones first and Passed ones left out). It runs weekly (`harvest_broad`, Sundays);
+the seed sample follows `harvest.broad_seed_rng` and the ISO week, so each week draws different artists and every
+shard of one week draws the same. `--shard i/N` splits the seeds across parallel processes (the 1.1 s Deezer
+throttle is shared). Chart + editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the
+pool, and of each batch (3 of 15).
 
 **Eval** (`haystack eval`, ADR 0009): each variant scores the past offers like candidates, and the eval asks how
 well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a Rating) above the ones you
@@ -382,8 +408,8 @@ the second stage out, to compare the two orders.
 
 **Report.** `haystack report` is token-free and opens the database read-only. Offers: offered, decided (an outcome
 is set), judged (decided, minus tracks that went unplayed and have no Verdict), kept (the current Verdict keeps the
-heart, or the offer was liked and has no Verdict), with kept/decided, kept/judged and liked/decided (the
-`haystack sources` rate), overall, exploit vs exploration, per batch and per source. Then the current Verdicts by
+heart, or the offer was liked and has no Verdict), with kept/decided (the `haystack sources` rate), kept/judged
+and liked/decided (the like rate in `status.json`), overall, exploit vs exploration, per batch and per source. Then the current Verdicts by
 kind and stars and how many Liked Songs are rated; the pool (size, embedded, scored, active and scored variant); of
 the top 100 by stored score, how many have a library window as their nearest positive and how many a preview (by owner
 kind: like, discovery, manual, rated); the top 30's score range, distinct nearest positives and top-1 Discogs
@@ -439,6 +465,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 |---|---|---|---|
 | library | daily 03:15 | rescan + embed new/changed files (+ To Rip check if signed in) | no |
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
+| harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
 | sync | hourly | plays, likes, outcomes, expiry, To Rip, your playlists, token check | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
@@ -453,7 +480,8 @@ One process: needle's API in a thread, and a scheduler that starts each job as a
 
 * A run missed while haystack was down starts when it comes back. The last start of each job comes from the
   database's `runs` table, which the units write too, so moving from the units to the container doesn't replay a
-  batch. A job that has never run starts at once, except the batch, which waits for its time.
+  batch. A job that has never run starts at once, except the batch and the broad harvest, which wait for their
+  time.
 * Until the first batch is done, it follows every good library or harvest run. Without a library, a new install
   gets it the day it is signed in; with one, it waits for the library embedding.
 * A job still running at its next time is skipped, not doubled. Different jobs may overlap.
@@ -469,7 +497,7 @@ publish `ghcr.io/kurtlieber/haystack:0.2.0`, `:0.2` and `:latest`.
 
 ### systemd user units (no container)
 
-`systemd/` holds the four oneshot services + timers above (all `Persistent=true`, `Nice=19`,
+`systemd/` holds the five oneshot services + timers above (all `Persistent=true`, `Nice=19`,
 `IOSchedulingClass=idle`), the one-shot `haystack-first-batch.service` (via `OnSuccess=` of the library unit,
 `ConditionPathExists=!` on `first-batch.done`) and the always-on `haystack-api.service`. They ignore `[schedule]`.
 
@@ -480,7 +508,7 @@ python3.14 -m venv ~/.local/share/haystack/venv
 ln -s ~/.local/share/haystack/venv/bin/haystack ~/.local/bin/haystack
 ~/source/haystack/scripts/install-units.sh   # symlinks into ~/.config/systemd/user/, daemon-reload; enables nothing
 haystack models fetch
-systemctl --user enable --now haystack-library.timer haystack-harvest.timer
+systemctl --user enable --now haystack-library.timer haystack-harvest.timer haystack-harvest-broad.timer
 # after `haystack auth`:
 systemctl --user enable --now haystack-sync.timer haystack-batch.timer
 systemctl --user enable --now haystack-api.service   # needle

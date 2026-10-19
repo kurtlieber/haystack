@@ -193,20 +193,34 @@ DEFAULTS: dict = {
     "matching": {"duration_tolerance": 3.0, "confident_dt": 2.0},
     "harvest": {
         "sources": ["deezer_chart", "deezer_editorial", "deezer_new_releases",
-                    "deezer_artist_radio", "deezer_related", "listenbrainz_similar"],
+                    "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar"],
         "retired_sources": [],
-        "max_new_per_source": 40,
+        "max_new_per_source": 60,
+        "caps": {},                    # per-source base caps instead of max_new_per_source, e.g. {deezer_chart = 20}
+        "adaptive_caps": True,         # scale each base cap by the source's kept rate against the mean (ADR 0013)
+        # Seeds (ADR 0013): "verdicts" starts from the tracks Rated 4-5 stars and the kept discoveries of the last
+        # seed_recent_days, then the other liked songs, then the library, by seed_quotas; "recent" is the
+        # 0.3 rule: 70 % from the 200 most recent liked songs, the rest from the library.
+        "seed_policy": "verdicts",
+        "seed_quotas": {"top": 0.4, "mid": 0.3, "library": 0.3},
+        "seed_recent_days": 90,
         "seed_artists": 10,
         "seed_recordings": 10,
+        "style_search_styles": 8,      # deezer_style_search: the listener's top styles searched by name
+        "style_search_playlists": 3,   # and the playlists with the most fans taken per style
+        # Deezer editorials (charts and new-release selections): 0 All, 106 Electro, 113 Dance, 116 Rap/Hip Hop,
+        # 152 Rock, 464 Metal
         "deezer_editorial_ids": [0, 106, 113, 116, 152, 464],
         "deezer_min_interval": 1.1,
         "listenbrainz_min_interval": 1.2,
         "listenbrainz_contact": "",    # an email or URL for the User-Agent, as MetaBrainz asks of API users
         "listenbrainz_algorithm": "session_based_days_7500_session_300_contribution_5_threshold_15_limit_50_skip_30",
         "chart_sources": ["deezer_chart", "deezer_editorial"],
-        "chart_max_share": 0.2,        # chart + editorial-chart candidates: at most this share of the pool
+        "chart_max_share": 0.2,        # chart + editorial-chart candidates: at most this share of the pool, and
+                                       # of each batch
         "broad_seeds": 150,            # `harvest --broad`: stratified seed artists (genre buckets)
-        "broad_seed_rng": 20261008,    # fixed so parallel shards agree on the seed list
+        "broad_seed_rng": 20261008,    # with the ISO week, so parallel shards agree on the week's seed list
+        "broad_max_new_per_source": 1000,  # `harvest --broad`: the per-seed limits below do the limiting
         "broad_radio_per_seed": 6,
         "broad_related_per_seed": 4,
         "broad_lb_per_seed": 3,
@@ -230,6 +244,7 @@ DEFAULTS: dict = {
         "sync": "hourly",
         "library": "daily 03:15",
         "harvest": "daily 05:00",
+        "harvest_broad": "Sun 04:00",  # `harvest --broad 150`, weekly (ADR 0013)
         "batch": "Mon 08:00",
     },
     # Webhook alerts (alert.py): a JSON POST to the alert-webhook-url secret, with the alert-webhook-key secret

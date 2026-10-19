@@ -144,6 +144,14 @@ CREATE TABLE IF NOT EXISTS spotify_deezer (
     method TEXT, checked_at TEXT
 );
 
+-- the seeds each harvest source started from (ADR 0013): an artist is seeded at most once a week per source
+CREATE TABLE IF NOT EXISTS harvest_seeds (
+    at TEXT NOT NULL, source TEXT NOT NULL, artist_key TEXT NOT NULL,
+    stars INTEGER,                       -- the seed's Rating, if any
+    origin TEXT                          -- rating | discovery | like | library | broad (NULL: seed_policy "recent")
+);
+CREATE INDEX IF NOT EXISTS harvest_seeds_source ON harvest_seeds(source, at);
+
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 
 CREATE TABLE IF NOT EXISTS runs (

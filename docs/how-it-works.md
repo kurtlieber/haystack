@@ -43,12 +43,18 @@ little differently, so haystack learns the difference from the songs you have bo
 
 Every day haystack collects new songs to consider from:
 
-- **Deezer**: charts, editorial picks and new releases, plus "artist radio" and related artists starting from
-  artists you like.
+- **Deezer**: charts, editorial picks and new releases, "artist radio" and related artists starting from artists
+  you like, and playlists named after the styles you like most.
 - **ListenBrainz**: an open music database that knows which recordings people tend to listen to together.
 
+Artist radio, related artists and ListenBrainz start from **seeds**: the songs you rated 4 or 5 stars and the
+discoveries you kept lately come first, then your other liked songs, then your music folder. An artist is a seed
+at most once a week per source, so the harvest keeps moving. Once a week a wider harvest draws artists from
+across all the styles you like.
+
 These sources only *suggest*. They never decide whether a song is good for you. Each candidate gets
-fingerprinted from its 30-second preview, exactly like your own songs.
+fingerprinted from its 30-second preview, exactly like your own songs. Sources that find songs you keep get to
+bring more each day, and those that don't get to bring fewer. At most a fifth of each batch comes from the charts.
 
 ## 3. Picking the week's songs
 
@@ -94,8 +100,9 @@ You don't have to do anything special. haystack watches what happens to each dis
 
 Songs added less than a day before a new batch get a pass, so a late Sunday batch doesn't count against you.
 
-haystack also keeps score of where its good finds come from. `haystack sources` shows the like rate of each
-source, so you can turn off the ones that don't work for you. `haystack report` gives the bigger picture: how
+haystack also keeps score of where its good finds come from. `haystack sources` shows how many of each
+source's songs you kept, and how many of the songs found from each kind of seed, so you can turn off the sources
+that don't work for you. `haystack report` gives the bigger picture: how
 many offers you kept, week by week, how you've rated things, and what the next batch is drawing on. It shows
 numbers only, never song names, so it's safe to share when asking for help.
 

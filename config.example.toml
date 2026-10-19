@@ -50,8 +50,11 @@ enabled = true                 # once 40 judged picks teach it more than similar
 
 [harvest]
 sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
-           "deezer_artist_radio", "deezer_related", "listenbrainz_similar"]
+           "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar"]
 retired_sources = []
+# Where artist radio, related artists and ListenBrainz start: "verdicts" (your 4-5 star Ratings and kept
+# discoveries first, then liked songs, then the library) or "recent" (recent liked songs, then the library).
+seed_policy = "verdicts"
 # An email or URL for the ListenBrainz User-Agent, as MetaBrainz asks of API users.
 listenbrainz_contact = ""
 # listenbrainz_contact = "you@example.com"
@@ -62,6 +65,7 @@ listenbrainz_contact = ""
 sync = "hourly"
 library = "daily 03:15"
 harvest = "daily 05:00"
+harvest_broad = "Sun 04:00"    # a wider harvest from the week's seeds
 batch = "Mon 08:00"
 
 [api]

@@ -8,7 +8,8 @@ not wait for it).
 
 A run missed while haystack was down is caught up on start, like the timers' Persistent=true. The last start of
 each job comes from the runs table, which the units fill too, so moving from the units to the container doesn't
-replay a batch. A job that has never run starts at once, except the batch, which waits for its time. Until the
+replay a batch. A job that has never run starts at once, except the batch and the weekly broad harvest, which
+wait for their time. Until the
 first batch is done, it follows every good library or harvest run (the units: OnSuccess= of the library unit). The
 harvest fills the pool, so without a library a new install gets its first batch the same day; with one, the
 first batch skips until the library is embedded. A failure (any exit but 3, needs auth) sends an alert."""
@@ -33,10 +34,11 @@ JOBS = {
     "sync": ["sync"],
     "library": ["library", "update"],
     "harvest": ["harvest"],
+    "harvest_broad": ["harvest", "--broad", "150"],     # weekly (ADR 0013)
     "batch": ["batch", *CLEAR],
 }
 FIRST_BATCH = ["first-batch", *CLEAR]
-WAIT_IF_NEVER_RUN = {"batch"}
+WAIT_IF_NEVER_RUN = {"batch", "harvest_broad"}
 TICK = 30            # seconds between checks: a job starts at most this late
 
 
