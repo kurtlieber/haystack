@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import sys
 import time
 import traceback
@@ -187,6 +188,9 @@ def cmd_batch(cfg, a) -> int:
     from . import batch
     if a.plan:
         return _batch_plan(cfg, a)
+    if a.stage1:
+        print("--stage1 goes with --plan", file=sys.stderr)
+        return 2
     def run(con):
         out = batch.run(con, cfg, size=a.size, dry_run=a.dry_run, force=a.force, variant=a.variant,
                         clear_min_age_hours=a.clear_min_age_hours, clear_recent=a.clear_recent,
@@ -217,13 +221,15 @@ def _batch_plan(cfg, a) -> int:
     con = _readonly_db()
     if con is None:
         return 1
-    out = batch.plan(con, cfg, size=a.size, variant=a.variant, classes=_style_classes())
+    out = batch.plan(con, cfg, size=a.size, variant=a.variant, classes=_style_classes(), stage1=a.stage1)
     if out["embedding_note"]:
         print(f"note: {out['embedding_note']} (the weekly batch skips unless --force)")
     print(f"plan: variant {out['variant']}{_choice_note(out['variant_choice'])}")
     print(f"plan: {out['positives']} positive rows, {out['pool']} scored in the pool; "
           f"{out['picked']} picks, {out['exploration']} exploration, {out['unmapped']} unmapped")
     print(f"plan: exploration share {out['exploration_fraction_used']:.2f} ({out['exploration_share']['why']})")
+    rr = out["rerank"]
+    print(f"plan: {'re-ranked' if rr['used'] else 'stage 1 only'} ({rr['reason']})")
     s = out["spread"]
     print(f"plan: at most {s['max_same_style']} of {s['top_picks']} top picks share a style, "
           f"at most {s['max_same_nearest']} picks share a nearest liked song")
@@ -234,7 +240,49 @@ def _batch_plan(cfg, a) -> int:
         print(f"  {t['score']:.4f}  {pct}{'explore' if t['exploration'] else 'top    '}  {t['source']:22} "
               f"{t['artist']} - {t['title']}{'' if t['spotify_id'] else '  [unmapped]'}  "
               f"(style: {t['style'] or '-'}; nearest: {near})")
+        if t["confidence"] is not None:
+            held = f"; held back: {', '.join(t['held_back'])}" if t["held_back"] else ""
+            why = f": {', '.join(t['reasons'])}" if t["reasons"] else ""
+            print(f"           chance {t['confidence']:.2f}{why}{held}")
     return 0
+
+
+def cmd_rerank(cfg, a) -> int:
+    from . import rerank, vectors
+    if a.action == "show":
+        con = _readonly_db()
+        if con is None:
+            return 1
+        try:
+            m, runs = rerank.last(con), rerank.runs(con, a.limit)
+        except sqlite3.OperationalError:          # a database from before 0.3.0: no re-ranker yet
+            m, runs = None, []
+        if m is None:
+            print("no re-ranker fit yet (the next batch or `haystack rerank fit` makes one)")
+            return 0
+        print(_rerank_line(m))
+        if m.get("beta"):
+            w = sorted(zip(m["features"], m["beta"][1:]), key=lambda x: -abs(x[1]))
+            print("weights (per pool sd, largest first): " + ", ".join(f"{f} {b:+.2f}" for f, b in w[:a.limit]))
+        for r in runs:
+            print(f"  {r['at']}  {r['trigger']:5}  {r['variant']:12}  {'used' if r['used'] else 'off '}  "
+                  f"{r['n_pos']}+/{r['n_neg']}-  AUC {r['loo_auc_model']} vs {r['loo_auc_stage1']}  {r['reason']}")
+        return 0
+
+    def run(con):
+        variant = vectors.active_variant(con, cfg)
+        r = rerank.run(con, cfg, variant, vectors.compute_scores(con, cfg, variant), "fit")
+        rerank.record(con, r)
+        print(_rerank_line(r))
+        return rerank.summary(r)
+    return job("rerank", run)
+
+
+def _rerank_line(r: dict) -> str:
+    auc = ("" if r.get("loo_auc_model") is None else
+           f"; leave-one-out AUC {r['loo_auc_model']:.3f} vs stage 1 {r['loo_auc_stage1']:.3f}")
+    return (f"re-ranker ({r.get('variant')}): {'used' if r.get('used') else 'not used'}, {r.get('n_labels')} labels "
+            f"({r.get('n_pos')} yes, {r.get('n_neg')} no){auc}" + ("" if r.get("used") else f". {r.get('reason')}"))
 
 
 def _style_classes() -> list[str]:
@@ -644,6 +692,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--plan", action="store_true",
                    help="no Spotify calls and no writes (token-free): score in memory and print the would-be picks "
                         "with their nearest positive; picks not mapped to Spotify yet are marked unmapped")
+    s.add_argument("--stage1", action="store_true",
+                   help="with --plan: leave the re-ranker out, to compare its order with stage 1 alone (ADR 0011)")
     s.add_argument("--force", action="store_true", help="run even if the library embedding is incomplete")
     s.add_argument("--variant", choices=["raw", "topk_mean", "centred", "csls", "csls_centred", "genre", "genre_blend"],
                    help="scoring variant for this run (default: configured / last chosen)")
@@ -708,6 +758,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--choose", action="store_true",
                    help="persist the winner as the scoring variant (ignored when scoring.variant is pinned)")
     s.set_defaults(fn=cmd_eval)
+
+    s = sub.add_parser("rerank", help="the second stage (ADR 0011): fit it on the current Verdicts and record the "
+                                      "result (token-free; the pool's order is left alone), or show the last fit")
+    s.add_argument("action", choices=["fit", "show"])
+    s.add_argument("--limit", type=int, default=10, help="show: how many weights and past fits")
+    s.set_defaults(fn=cmd_rerank)
 
     s = sub.add_parser("first-batch", help="one-time first real batch + taste sanity check (library OnSuccess hook)")
     _add_clear_args(s)

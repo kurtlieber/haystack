@@ -166,7 +166,7 @@ def test_cmd_batch_without_plan_still_runs_the_job(monkeypatch):
     seen = []
     monkeypatch.setattr(cli, "job", lambda name, fn, needs_spotify=False: seen.append((name, needs_spotify)) or 0)
     a = SimpleNamespace(plan=False, size=None, dry_run=True, force=False, variant=None, clear_min_age_hours=None,
-                        clear_recent=None, no_penalty=None)
+                        clear_recent=None, no_penalty=None, stage1=False)
     assert cli.cmd_batch({}, a) == 0 and seen == [("batch", True)]
 
 

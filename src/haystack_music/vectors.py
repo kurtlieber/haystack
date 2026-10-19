@@ -8,7 +8,7 @@ import warnings
 
 import numpy as np
 
-from . import config, db, embed
+from . import config, db, embed, verdicts
 from .scoring import (VARIANTS, Space, is_centred, is_csls, l2norm, nearest_positive, negative_excess,
                       negative_penalty, score_variant, style_topk, topk_owner_mean, zblend)
 
@@ -116,10 +116,16 @@ def positives(con, cfg: dict):
     Positives = the local library (one row per window) + Liked Songs + liked discoveries + every Rated track
     (ADR 0002). A liked track uses its local vector only if liked_map.use_local (confident, same version, <=2 s),
     otherwise its Deezer-preview vector. The bonus comes from the verdict (stars) or, for an Unrated like, counts
-    as 3 stars; library tracks the listener hasn't liked get bonus_library. A track whose current verdict is a Pass or
-    a Dislike is never a positive. One owner per track."""
-    from . import verdicts
+    as 3 stars; library tracks the listener hasn't liked get bonus_library (0 with star_weight_sd). A track whose
+    current verdict is a Pass or a Dislike is never a positive. One owner per track. With star_weight_sd the
+    bonus is in pool-score sd (verdicts.stars_in_sd): the scorer resolves it (star_unit)."""
+    return positives_with_stars(con, cfg)[:3]
+
+
+def positives_with_stars(con, cfg: dict):
+    """positives() plus each row's stars [m] (NaN: a library file the listener hasn't liked or rated)."""
     sc = cfg["scoring"]
+    in_sd = verdicts.stars_in_sd(cfg)
     cur = verdicts.current(con)
     liked = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
     disc_liked = {r[0] for r in con.execute("SELECT spotify_id FROM offers WHERE outcome='liked'")}
@@ -131,22 +137,29 @@ def positives(con, cfg: dict):
     def bonus_of(sid, is_liked):
         return verdicts.positive_bonus(cfg, cur.get(sid), liked=is_liked)
 
+    def stars_of(sid, is_liked):
+        s = verdicts.positive_stars(cfg, cur.get(sid), liked=is_liked)
+        return np.nan if s is None else float(s)
+
     local_like = {}
     for r in con.execute("""SELECT m.spotify_id, m.local_id FROM liked_map m JOIN likes l ON l.spotify_id=m.spotify_id
                             WHERE l.removed_at IS NULL AND m.use_local=1 AND m.local_id IS NOT NULL"""):
         local_like[r[1]] = r[0]
     tagged = {r[0]: r[1] for r in con.execute("SELECT id, spotify_id FROM local_tracks WHERE present=1 AND spotify_id IS NOT NULL")}
-    mats, owners, bonus = [], [], []
+    mats, owners, bonus, stars = [], [], [], []
     covered: set[str] = set()
     ids, wins = _library_windows(con)
+    lib_bonus = 0.0 if in_sd else sc["bonus_library"]
     for i, w in zip(ids, wins):
         sid = local_like.get(i) or tagged.get(i)
         if sid and rejected(sid):
             continue
-        b = bonus_of(sid, sid in local_like.values() or sid in liked or sid in disc_liked) if sid else None
+        is_liked = sid in local_like.values() or sid in liked or sid in disc_liked
+        b = bonus_of(sid, is_liked) if sid else None
         if sid in local_like.values():
             covered.add(sid)
-        mats.append(w); owners += [f"local:{i}"] * len(w); bonus += [sc["bonus_library"] if b is None else b] * len(w)
+        mats.append(w); owners += [f"local:{i}"] * len(w); bonus += [lib_bonus if b is None else b] * len(w)
+        stars += [stars_of(sid, is_liked) if sid else np.nan] * len(w)
     # liked tracks represented by preview vectors
     rows = con.execute("""SELECT m.spotify_id, m.deezer_id FROM liked_map m JOIN likes l ON l.spotify_id=m.spotify_id
                           WHERE l.removed_at IS NULL AND m.use_local=0 AND m.vector_status='ok'""").fetchall()
@@ -154,7 +167,7 @@ def positives(con, cfg: dict):
     for sid, did in rows:
         if did in vec and sid not in covered and not rejected(sid):
             mats.append(vec[did][None, :]); owners.append(f"like:{sid}"); bonus.append(bonus_of(sid, True))
-            covered.add(sid)
+            stars.append(stars_of(sid, True)); covered.add(sid)
     # liked discoveries: the candidate's own preview vector
     rows = con.execute("""SELECT o.spotify_id, c.deezer_id FROM offers o JOIN candidates c ON c.id=o.candidate_id
                           WHERE o.outcome='liked'""").fetchall()
@@ -162,7 +175,7 @@ def positives(con, cfg: dict):
     for sid, did in rows:
         if did in vec and sid not in covered and not rejected(sid):
             mats.append(vec[did][None, :]); owners.append(f"discovery:{sid}"); bonus.append(bonus_of(sid, True))
-            covered.add(sid)
+            stars.append(stars_of(sid, True)); covered.add(sid)
     # every other Rated track: its preview vector
     rated = [sid for sid, v in cur.items() if v.kind == "rating" and sid not in covered]
     tv = track_vectors(con, rated)
@@ -172,10 +185,11 @@ def positives(con, cfg: dict):
         if t and t["deezer_id"] in vec:
             mats.append(vec[t["deezer_id"]][None, :])
             owners.append(f"manual:{t['candidate_id']}" if t["candidate_id"] is not None else f"rated:{sid}")
-            bonus.append(bonus_of(sid, True))
+            bonus.append(bonus_of(sid, True)); stars.append(stars_of(sid, True))
     if not mats:
-        return np.zeros((0, 512), np.float32), [], np.zeros(0, np.float32)
-    return np.vstack(mats).astype(np.float32), owners, np.asarray(bonus, np.float32)
+        return np.zeros((0, 512), np.float32), [], np.zeros(0, np.float32), np.zeros(0, np.float32)
+    return (np.vstack(mats).astype(np.float32), owners, np.asarray(bonus, np.float32),
+            np.asarray(stars, np.float32))
 
 
 def pool_vectors(con, states=("pool",)) -> tuple[list[int], np.ndarray, list]:
@@ -221,7 +235,6 @@ def liked_styles(con, cfg: dict | None = None) -> tuple[list[str], np.ndarray, n
     liked song with a preview, locally matched or not), liked discoveries and Rated tracks; Passes and Dislikes
     are left out. The library has no style vectors (that would need a second full backbone pass over every
     file). -> (labels, styles [n,400], bonus [n])."""
-    from . import config, verdicts
     cfg = cfg or config.load()
     cur = verdicts.current(con)
     rows = con.execute("""SELECT m.spotify_id, m.deezer_id FROM liked_map m JOIN likes l ON l.spotify_id=m.spotify_id
@@ -258,7 +271,6 @@ def negatives(con, cfg: dict) -> list[dict]:
     discovery offers that expired after being played without a like (outcome 'negative') and offers taken off
     Discoveries by hand (outcome 'manual_removed') at the configured weights. One entry per track (the strongest
     wins); only tracks with a preview vector can be compared, so others are dropped."""
-    from . import verdicts
     npc = cfg["scoring"]["negative_penalty"]
     by: dict = {}
 
@@ -324,11 +336,20 @@ def penalty_excess(variant: str, negs: list[dict], cand_vec: np.ndarray, cand_st
     return np.nan_to_num(out, nan=0.0).astype(np.float32)
 
 
+def star_unit(cfg: dict, cands: np.ndarray, pos: np.ndarray) -> float:
+    """What one unit of a star_weight_sd bonus is worth in this space: the sd over the scored rows of their
+    nearest-positive similarity with no bonus (both sides already prepared). 1.0 with the fixed star_bonus."""
+    if not verdicts.stars_in_sd(cfg) or not len(cands) or not len(pos):
+        return 1.0
+    return float(np.std(nearest_positive(cands, pos)[0]))
+
+
 def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) -> dict | None:
     """Score the embedded pool under `variant` without writing anything.
-    -> dict(rows, score (penalised), base (unpenalised), raw, idx, owners, penalty, neg_idx, negs, n_pos), or None
-    if there are no positives / candidates. The negative penalty (scoring.negative_penalty) is applied after the
-    variant's score: final = score - w * sd(score over the pool) * max_j(strength_j * excess_j)."""
+    -> dict(rows, score (penalised), base (unpenalised), raw, idx, owners, penalty, neg_idx, negs, n_pos,
+    unit), or None if there are no positives / candidates. The negative penalty (scoring.negative_penalty) is
+    applied after the variant's score: final = score - w * sd(score over the pool) * max_j(strength_j * excess_j).
+    With star_weight_sd the positives' bonus is multiplied by star_unit in the variant's space (unit)."""
     pos, owners, bonus = positives(con, cfg)
     if not len(pos):
         return {"rows": [], "n_pos": 0}
@@ -352,12 +373,16 @@ def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) ->
             if is_csls(variant):
                 where = {lab: j for j, lab in enumerate(space.ref_owner)}
                 self_idx = np.array([where.get(f"cand:{r[0]}", -1) for r in rows])
-        s, raw, idx = score_variant(variant, m, pos, bonus, space, self_idx)
+        cen = is_centred(variant)
+        sp_ = space or Space()
+        unit = star_unit(cfg, sp_.prep(m, cen), sp_.prep(pos, cen))
+        s, raw, idx = score_variant(variant, m, pos, bonus * unit, space, self_idx)
     else:
-        s, raw, idx = nearest_positive(m, pos, bonus)          # nearest row is still recorded for review
+        unit = star_unit(cfg, l2norm(m), l2norm(pos))
+        s, raw, idx = nearest_positive(m, pos, bonus * unit)   # nearest row is still recorded for review
         if variant == "topk_mean":
             starts = np.array([i for i in range(len(owners)) if i == 0 or owners[i] != owners[i - 1]])
-            s = topk_owner_mean(m, pos, bonus, starts, k)
+            s = topk_owner_mean(m, pos, bonus * unit, starts, k)
         else:                                                   # genre / genre_blend
             _, ls, lb = liked_styles(con, cfg)
             cst = get_styles(con, [r[1] for r in rows])
@@ -367,7 +392,8 @@ def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) ->
             cst_m = np.full((len(rows), 400), np.nan, np.float32)
             cst_m[has] = np.vstack([cst[r[1]] for r, h in zip(rows, has) if h])
             g = np.full(len(rows), np.nan, np.float32)
-            g[has] = style_topk(cst_m[has], ls, k, lb)
+            g_unit = float(np.std(style_topk(cst_m[has], ls, k))) if verdicts.stars_in_sd(cfg) else 1.0
+            g[has] = style_topk(cst_m[has], ls, k, lb * g_unit)
             if variant == "genre":
                 s = g
             else:
@@ -385,14 +411,17 @@ def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) ->
         scale = float(np.nanstd(s)) if np.isfinite(s).any() else 0.0
         pen, nidx = negative_penalty(E, [x["strength"] for x in negs], scale, npc["w"])
     return {"rows": rows, "score": s - pen, "base": s, "raw": raw, "idx": idx, "owners": owners, "penalty": pen,
-            "neg_idx": nidx, "negs": negs, "n_pos": len(pos)}
+            "neg_idx": nidx, "negs": negs, "n_pos": len(pos), "unit": unit}
 
 
-def score_candidates(con, cfg: dict, only_unscored: bool = False, variant: str | None = None) -> dict:
+def score_candidates(con, cfg: dict, only_unscored: bool = False, variant: str | None = None,
+                     result: dict | None = None) -> dict:
+    """Score the pool and store the scores. result: compute_scores' output for this variant, when the caller
+    already has it (the batch re-ranks from the same scores)."""
     variant = variant or active_variant(con, cfg)
     if only_unscored and db.kv_get(con, "scored_variant") != variant:
         only_unscored = False      # scores from another variant are not comparable: rescore everything
-    r = compute_scores(con, cfg, variant, only_unscored)
+    r = result if result is not None else compute_scores(con, cfg, variant, only_unscored)
     rows = r["rows"]
     if not rows:
         return {"scored": 0, "positives": r["n_pos"], "variant": variant}

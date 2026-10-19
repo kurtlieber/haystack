@@ -44,6 +44,9 @@ clear_recent = "remove"        # before a batch, tracks added less than a day ag
 [scoring]
 variant = "auto"               # or pin one: raw, topk_mean, centred, csls, csls_centred, genre, genre_blend
 
+[rerank]
+enabled = true                 # once 40 judged picks teach it more than similarity alone, it orders the batch
+
 [harvest]
 sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
            "deezer_artist_radio", "deezer_related", "listenbrainz_similar"]

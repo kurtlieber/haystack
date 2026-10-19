@@ -13,7 +13,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from . import db, library, vectors
+from . import db, library, rerank, vectors
 from .deezer import Deezer
 from .matching import Index, TrackRef, compare
 from .scoring import Pick, adapt_exploration, l2norm, select_batch
@@ -93,7 +93,9 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
                                 dry_run=dry_run)
     choice = _rechoose(con, cfg, write=not dry_run) if variant is None else None
     variant = variant or (choice or {}).get("used") or vectors.active_variant(con, cfg)
-    scored = vectors.score_candidates(con, cfg, variant=variant)
+    res = vectors.compute_scores(con, cfg, variant)
+    scored = vectors.score_candidates(con, cfg, variant=variant, result=res)
+    rr = _rerank(con, cfg, variant, res, write=not dry_run)
     dz = Deezer(cfg["harvest"]["deezer_min_interval"])
     tol = cfg["matching"]["duration_tolerance"]
 
@@ -110,7 +112,7 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
 
     explore = exploration_share(con, cfg)
     chosen = select_for_batch(con, cfg, rng, size=size, resolve=resolve, on_known=on_known,
-                              explore_fraction=explore["fraction"])
+                              explore_fraction=explore["fraction"], ranks=rr.get("ranks"))
     # final guard: Spotify's own saved-state check
     if chosen:
         saved = sp.library_contains([p.spotify_id for p in chosen])
@@ -120,11 +122,12 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
     out = {"scored": scored, "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
            "by_source": {}, "dry_run": dry_run, "embedding": prog,
            "variant": variant, "variant_choice": choice, "clear": cleared,
-           "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen)}
+           "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen),
+           "rerank": rerank.summary(rr)}
     for p in chosen:
         out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
     if dry_run or not chosen:
-        out["tracks"] = _describe(con, chosen)
+        out["tracks"] = _describe(con, chosen, top=rr.get("top"))
         return out
     sids = [p.spotify_id for p in chosen]
     snap = bot_add(con, sp, "discoveries", pl["discoveries"], sids)
@@ -137,8 +140,26 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
                     (p.cand_id, p.spotify_id, bid, p.source, p.score, int(p.exploration), ts, p.percentile))
         con.execute("UPDATE candidates SET state='offered' WHERE id=?", (p.cand_id,))
     out["batch_id"] = bid; out["snapshot_id"] = snap
-    out["tracks"] = _describe(con, chosen)
+    out["tracks"] = _describe(con, chosen, top=rr.get("top"))
     return out
+
+
+def _rerank(con, cfg: dict, variant: str, res: dict | None, write: bool) -> dict:
+    """The second stage (ADR 0011) over the freshly scored pool: token-free, and never blocks the batch (on an
+    error the batch goes by score alone). With write the fit is recorded and the pool's re-ranker columns set."""
+    try:
+        r = rerank.run(con, cfg, variant, res or {}, "batch")
+        if write:
+            rerank.record(con, r)
+            rerank.write_pool(con, r)
+        if r["used"]:
+            log.info("re-ranked the top of the pool: %s", r["reason"])
+        else:
+            log.info("stage 1 only: %s", r["reason"])
+        return r
+    except Exception as e:  # noqa: BLE001
+        log.exception("re-ranking failed; the batch goes by score alone")
+        return {"used": False, "reason": f"error: {e!r}"}
 
 
 def _rechoose(con, cfg: dict, write: bool) -> dict | None:
@@ -185,7 +206,7 @@ def spread(chosen: list[Pick]) -> dict:
 
 def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: int | None = None,
                      scores: dict | None = None, resolve=None, on_known=None,
-                     explore_fraction: float | None = None) -> list[Pick]:
+                     explore_fraction: float | None = None, ranks: dict | None = None) -> list[Pick]:
     """The batch's selection over the scored pool, shared by `batch` and `batch --plan`. It only reads; the live
     batch's side effects come in as callbacks.
     scores: {candidate id: (score, nearest owner)} in place of the stored scores (`--plan` scores in memory).
@@ -193,6 +214,7 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     Without resolve a candidate keeps its stored spotify_id, and None means not mapped yet.
     on_known(row): the candidate's track is already liked, offered or in the library, so it is skipped.
     explore_fraction: this batch's exploration share (exploration_share), default batch.exploration_fraction.
+    ranks: {candidate id: rank} from the re-ranker (rerank.run); the top picks follow it instead of the score.
     Each pick carries its top-1 style and its score's percentile in the scored pool; the batch is spread across
     styles and nearest positives (scoring.select_batch, ADR 0010)."""
     b = cfg["batch"]
@@ -234,7 +256,8 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     attempts = 0
     while len(chosen) < size and rows and attempts < size * b["map_attempts_factor"]:
         pool = [Pick(r["id"], r["artist_key"], r["score"], r["source"], nearest=r["nearest"],
-                     style=top_style.get(r["deezer_id"]), percentile=r["percentile"]) for r in rows.values()]
+                     style=top_style.get(r["deezer_id"]), percentile=r["percentile"],
+                     rank=(ranks or {}).get(r["id"])) for r in rows.values()]
         need = size - len(chosen)
         explore_have = sum(p.exploration for p in chosen)
         frac = max(0.0, (round(size * fraction) - explore_have) / need) if need else 0
@@ -260,40 +283,47 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
 
 
 def plan(con, cfg: dict, size: int | None = None, variant: str | None = None,
-         rng: random.Random | None = None, classes: list[str] | None = None) -> dict:
+         rng: random.Random | None = None, classes: list[str] | None = None, stage1: bool = False) -> dict:
     """`batch --plan`: the batch's scoring and selection with no Spotify calls and no writes. Like the batch it runs
     the weekly variant re-choice (in memory) unless a variant is given, and scores the pool in memory under the
     variant the batch would use; a pick with no stored Spotify id is marked unmapped (the live batch maps it first
-    and may drop it)."""
+    and may drop it). The re-ranker runs in memory too; stage1 leaves it out (to compare the two orders)."""
     choice = _rechoose(con, cfg, write=False) if variant is None else None
     variant = variant or (choice or {}).get("used") or vectors.active_variant(con, cfg)
     r = vectors.compute_scores(con, cfg, variant)
     scores = {}
     for (cid, _), sc, i in zip(r["rows"], r.get("score", ()), r.get("idx", ())):
         scores[cid] = (None if math.isnan(sc) else float(sc), r["owners"][int(i)])
+    rr = {"used": False, "reason": "--stage1"} if stage1 else _rerank(con, cfg, variant, r, write=False)
     done, msg, prog = embedding_progress(con, cfg)
     explore = exploration_share(con, cfg)
-    chosen = select_for_batch(con, cfg, rng, size=size, scores=scores, explore_fraction=explore["fraction"])
+    chosen = select_for_batch(con, cfg, rng, size=size, scores=scores, explore_fraction=explore["fraction"],
+                              ranks=rr.get("ranks"))
     out = {"plan": True, "variant": variant, "variant_choice": choice, "positives": r["n_pos"],
            "pool": sum(1 for s, _ in scores.values() if s is not None),
            "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
            "unmapped": sum(1 for p in chosen if not p.spotify_id), "by_source": {},
            "embedding": prog, "embedding_note": None if done else msg,
-           "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen)}
+           "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen),
+           "rerank": rerank.summary(rr)}
     for p in chosen:
         out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
-    out["tracks"] = _describe(con, chosen, classes)
+    out["tracks"] = _describe(con, chosen, classes, top=rr.get("top"))
     return out
 
 
-def _describe(con, chosen: list[Pick], classes: list[str] | None = None) -> list[dict]:
+def _describe(con, chosen: list[Pick], classes: list[str] | None = None, top: dict | None = None) -> list[dict]:
+    """top: the re-ranker's rows (rerank.run); a re-ranked top pick gets its chance, reasons and held-back."""
     from .review import nearest_label, style_names
     names = style_names(classes or [])
     out = []
     for p in chosen:
+        rr = None if p.exploration else (top or {}).get(p.cand_id)
         c = con.execute("SELECT artist, title FROM candidates WHERE id=?", (p.cand_id,)).fetchone()
         style = None if p.style is None else (names[p.style] if p.style < len(names) else f"style {p.style}")
         out.append(dict(artist=c["artist"], title=c["title"], source=p.source, score=round(p.score, 4),
                         exploration=p.exploration, spotify_id=p.spotify_id, nearest=p.nearest,
-                        sounds_like=nearest_label(con, p.nearest), style=style, percentile=p.percentile))
+                        sounds_like=nearest_label(con, p.nearest), style=style, percentile=p.percentile,
+                        confidence=rr["p"] if rr else None, reasons=rr["reasons"] if rr else [],
+                        held_back=rr["held_back"] if rr else []))
     return out

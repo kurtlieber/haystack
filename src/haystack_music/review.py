@@ -125,15 +125,21 @@ class Cards:
     def _why(self, offer) -> dict | None:
         if offer is None:
             return None
-        c = self.con.execute("SELECT nearest, raw_cos, source FROM candidates WHERE id=?", (offer["candidate_id"],)).fetchone()
+        c = self.con.execute("SELECT nearest, raw_cos, source, rerank_p, rerank_reason FROM candidates WHERE id=?",
+                             (offer["candidate_id"],)).fetchone()
         if c is None:
             return None
+        # the re-ranker's view (ADR 0011): only for a top pick it ordered; exploration picks go by similarity
+        ranked = c["rerank_p"] is not None and not offer["exploration"]
         return {"sounds_like": nearest_label(self.con, c["nearest"]),
                 "similarity": round(float(c["raw_cos"]), 2) if c["raw_cos"] is not None else None,
                 "source": c["source"], "source_label": SOURCE_LABELS.get(c["source"], c["source"]),
                 "exploration": bool(offer["exploration"]),
                 "band": {"kind": "explore" if offer["exploration"] else "top",
-                         "percentile": offer["score_percentile"]}}
+                         "percentile": offer["score_percentile"]},
+                "model": "rerank" if ranked else "similarity",
+                "confidence": round(float(c["rerank_p"]), 2) if ranked else None,
+                "reasons": json.loads(c["rerank_reason"] or "[]") if ranked else []}
 
     def _styles(self, vec) -> list:
         if vec is None or not self.names:

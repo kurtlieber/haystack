@@ -108,8 +108,10 @@ def test_state_has_both_queues_with_cards(world):
     assert first["album_type"] == "single" and first["duration_ms"] == 179000 and first["cover"] == "https://i/c.jpg"
     assert first["why"] == {"sounds_like": {"title": "Cradles", "artist": "Sub Urban"}, "similarity": 0.96,
                             "source": "deezer_artist_radio", "source_label": "Deezer artist radio", "exploration": True,
-                            "band": {"kind": "explore", "percentile": None}}      # offered before 0.2.0: no percentile
+                            "band": {"kind": "explore", "percentile": None},      # offered before 0.2.0: no percentile
+                            "model": "similarity", "confidence": None, "reasons": []}
     assert last["why"]["band"] == {"kind": "top", "percentile": None}
+    assert (last["why"]["model"], last["why"]["confidence"], last["why"]["reasons"]) == ("similarity", None, [])
     assert first["styles"][0] == ["Style7", 1.0] and len(first["styles"]) == 3
     assert first["readings"] == {"tempo": 102.0, "valence": 0.14} and first["measure"] == "ok"
     assert last["measure"] == "unknown"

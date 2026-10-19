@@ -27,7 +27,7 @@ clients have moved.
 `GET /v1/health` and `GET /v1/state` both carry a `server` object:
 
 ```json
-{"version": "0.2.0", "api": "1", "features": ["why.band"]}
+{"version": "0.3.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -39,6 +39,9 @@ clients have moved.
 Each feature is listed here with the fields it brings, and in "Changes" below:
 
 - `why.band`: a Discoveries offer's `why` carries `band` (Track card).
+- `rerank`: the top of each batch is ordered by a model trained on the listener's Verdicts (ADR 0011); a
+  Discoveries offer's `why` carries `model` and `confidence` (Track card).
+- `why.reasons`: a Discoveries offer's `why` carries `reasons` (Track card).
 
 ## Endpoints
 
@@ -62,7 +65,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
- "server": {"version": "0.2.0", "api": "1", "features": ["why.band"]}}
+ "server": {"version": "0.3.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):
@@ -89,8 +92,9 @@ Readings, and refreshes the playlists at most every 10 minutes.
  "year": 2018, "duration_ms": 179000, "cover": "https://…", "cover_small": "https://…",
  "verdict": {"kind": "rating", "stars": 4, "given_at": "…Z"},
  "why": {"sounds_like": {"title": "…", "artist": "…"}, "similarity": 0.96, "source": "deezer_artist_radio",
-         "source_label": "Deezer artist radio", "exploration": true,
-         "band": {"kind": "explore", "percentile": 58.2}},
+         "source_label": "Deezer artist radio", "exploration": false,
+         "band": {"kind": "top", "percentile": 98.4}, "model": "rerank", "confidence": 0.81,
+         "reasons": ["close to your 4-5★ tracks", "in styles you like"]},
  "styles": [["Dubstep", 0.25], ["Bassline", 0.11], ["Downtempo", 0.10]],
  "readings": {"tempo": 102.0, "valence": 0.14, "energy": 0.83, "danceability": 0.61, "acousticness": 0.02,
               "instrumentalness": 0.77, "loudness": -7.1},
@@ -106,6 +110,13 @@ Readings, and refreshes the playlists at most every 10 minutes.
   best-scored picks) or `explore` (a random pick from the middle of the ranking, the same as `exploration`), and
   `percentile` is the offer's score percentile, 0–100, in the pool its batch was picked from. `percentile` is
   `null` for offers made before haystack 0.2.0.
+- `why.model` (feature `rerank`): `rerank` when the re-ranker ordered this offer (a top pick in a batch where it
+  passed its check against similarity alone, ADR 0011), else `similarity`. `why.confidence`: the re-ranker's
+  chance, 0–1, that the listener keeps the track; `null` when `model` is `similarity` (always for an exploration
+  pick). A client may show it as a percentage.
+- `why.reasons` (feature `why.reasons`): up to two short phrases, strongest first, for what made the re-ranker
+  rate the offer up, such as `close to your 4-5★ tracks` or `brighter than you usually like`. Empty when `model`
+  is `similarity`. Phrases are display text and may change between releases; a client never parses them.
 - `styles`: the top three Discogs styles with their scores; empty when unmeasured.
 - `readings`: only the Traits that were measured; `null` when none. `tempo` is BPM, `loudness` integrated LUFS,
   the rest 0–1.
@@ -195,3 +206,5 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 
 - 2026-10-19, haystack 0.1.0: the `server` object on `GET /v1/health` and `GET /v1/state`; `features` is empty.
 - 2026-10-19, haystack 0.2.0, `why.band`: `band` (`kind`, `percentile`) in a track card's `why`.
+- 2026-10-19, haystack 0.3.0, `rerank`: `model` and `confidence` in a track card's `why`.
+- 2026-10-19, haystack 0.3.0, `why.reasons`: `reasons` in a track card's `why`.
