@@ -12,7 +12,8 @@ in Discoveries and it counts as a no. The next week's picks get better.
 
 haystack is a small server, with no screen of its own. It runs on an always-on machine (a home server, a NAS, a
 cheap VPS) and you set it up once in a single settings file, `config.toml`. Its companion app,
-[needle](#needle), is where you rate songs and play what haystack found.
+[needle](#needle), is where you rate songs and play what haystack found.  Haystack learns based on
+your Spotify likes alone.  Needle is when you want to get far more granular with your ratings.
 
 - [The easiest setup: ask your AI agent](#the-easiest-setup-ask-your-ai-agent)
 - [What you need](#what-you-need)
@@ -46,6 +47,9 @@ Prefer to do it yourself? Read on.
 - **A Spotify account** and a free Spotify developer app (step 2 below), so haystack can manage its playlists.
 - **Optionally, your own music folder** (`.m4a` files). With one, haystack learns your taste from far more songs
   than your Spotify likes. It only ever reads the folder. The first pass over a big library takes hours of CPU.
+
+  * Note: if you feed haystack your own music folder, it will assume you like *all* the songs in
+    that folder.  Feed accordingly.
 
 ## Install with Docker
 
