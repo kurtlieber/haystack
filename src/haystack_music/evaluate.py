@@ -247,9 +247,9 @@ def _judged_check(d, variants, mats, geo_extra, GL, GC, kt, npc: dict | None = N
         for geo, agg in ((("raw", "max"),) if v in ("raw", "genre_blend") else ((v, "max"),) if v in
                          ("centred", "csls", "csls_centred") else (("raw", "topk"),) if v == "topk_mean" else ()):
             SC, _, hc, _ = mats[geo]
-            P, R, cen = geo_extra[geo]
+            P, R, cen, b = geo_extra[geo]
             Jp = sp.prep(jv, cen)
-            SJ = _owner_max(Jp, P, d["bonus"], d["starts"])
+            SJ = _owner_max(Jp, P, b, d["starts"])
             hj = hubness(Jp, R, sp.k) if R is not None else np.zeros(len(J), np.float32)
             f = (lambda M: M.max(1)) if agg == "max" else (lambda M: topk_mean(M, kt))
             parts["emb"] = (f(SC[:, keepc]) - hc, f(SJ[:, keepc]) - hj)
@@ -375,7 +375,8 @@ def run(con, cfg: dict, data: dict | None = None, variants=VARIANTS) -> dict:
         P = sp.prep(d["pos"], cen)
         C = sp.prep(d["pool_m"][ckeep], cen)
         Q = sp.prep(d["q"], cen)
-        SC, SQ = _owner_max(C, P, d["bonus"], d["starts"]), _owner_max(Q, P, d["bonus"], d["starts"])
+        b = d["bonus"] * vectors.star_unit(cfg, C, P)      # star_weight_sd: in this geometry's pool-score sd
+        SC, SQ = _owner_max(C, P, b, d["starts"]), _owner_max(Q, P, b, d["starts"])
         R = None
         if is_csls(geo):
             R = sp.prep(sp.ref, cen)
@@ -383,7 +384,7 @@ def run(con, cfg: dict, data: dict | None = None, variants=VARIANTS) -> dict:
         else:
             hc, hq = np.zeros(nc, np.float32), np.zeros(nq, np.float32)
         mats[geo] = (SC, SQ, hc, hq)
-        geo_extra[geo] = (P, R, cen)
+        geo_extra[geo] = (P, R, cen, b)
     if use_genre:   # style positives = the liked preview queries' own style vectors, plus the other kept offers
         liked_pre = {d["queries"][i]["sid"] for i in prev_idx}
         gl_idx = prev_idx + [i for i in yes_idx if d["queries"][i]["sid"] not in liked_pre]

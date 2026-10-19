@@ -159,6 +159,15 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     auc_json TEXT,                       -- {variant: AUC or null}
     switched INTEGER
 );
+CREATE TABLE IF NOT EXISTS rerank_runs (
+    id INTEGER PRIMARY KEY, at TEXT,
+    trigger TEXT,                        -- batch | fit (haystack rerank fit)
+    variant TEXT,                        -- the stage-1 variant it re-ranks
+    n_labels INTEGER, n_pos INTEGER, n_neg INTEGER,
+    loo_auc_model REAL, loo_auc_stage1 REAL,
+    used INTEGER, reason TEXT,
+    model_json TEXT                      -- weights, scaler and feature names (ADR 0011)
+);
 """
 
 
@@ -210,6 +219,9 @@ def _migrate(con) -> None:
     _add_column(con, "candidates", "neg_penalty", "REAL")         # score drop from the negative penalty
     _add_column(con, "candidates", "nearest_negative", "TEXT")    # the rejected track that set it
     _add_column(con, "offers", "score_percentile", "REAL")         # the pick's percentile in its batch's pool
+    _add_column(con, "candidates", "rerank_score", "REAL")         # the re-ranker's blend, in z units (ADR 0011)
+    _add_column(con, "candidates", "rerank_p", "REAL")             # its chance the listener keeps it
+    _add_column(con, "candidates", "rerank_reason", "TEXT")        # JSON list of up to two phrases
     for col in ("album_type", "release_date", "image_url", "image_url_small"):   # needle's track cards
         _add_column(con, "spotify_tracks", col, "TEXT")
 

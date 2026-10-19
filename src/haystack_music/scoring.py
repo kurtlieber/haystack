@@ -201,6 +201,11 @@ class Pick:
     nearest: str | None = None      # owner label of the positive it scored closest to (candidates.nearest)
     style: int | None = None        # top-1 Discogs style index (None: no style vector)
     percentile: float | None = None # its score's percentile in the batch's scored pool (offers.score_percentile)
+    rank: float | None = None       # the re-ranker's order, in score units (ADR 0011); None: ordered by score
+
+
+def order_key(p: Pick) -> float:
+    return p.score if p.rank is None else p.rank
 
 
 def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
@@ -215,6 +220,8 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
       with vectors {candidate id: unit vector}; a candidate without one is never marked down. 0 = by score alone.
     max_style_share: at most this share of the batch's top (exploit) picks may share a top-1 style (Pick.style;
       None is unconstrained). max_per_nearest: at most this many picks may share a nearest positive (0 = no cap).
+    The exploration band is drawn by score; the top picks are taken by Pick.rank where the re-ranker set one
+    (ADR 0011), else by score.
     The caps give way when they would leave the batch short: the rest is filled without the style cap, then
     without either."""
     rng = rng or random.Random()
@@ -222,6 +229,7 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
     near: Counter = Counter()
     styles: Counter = Counter()
     ranked = sorted(pool, key=lambda p: p.score, reverse=True)
+    top = sorted(pool, key=order_key, reverse=True)
     n = len(ranked)
     n_explore = int(round(size * explore_fraction))
     n_exploit = len(taken) + size - sum(p.exploration for p in taken) - n_explore
@@ -264,13 +272,13 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
                 take(p, True)
     diverse = diversity > 0 and bool(vectors) and n > 0
     if diverse:
-        score = np.array([p.score for p in ranked], np.float64)
+        score = np.array([order_key(p) for p in top], np.float64)
         V = np.zeros((n, len(next(iter(vectors.values())))), np.float32)
-        for j, p in enumerate(ranked):
+        for j, p in enumerate(top):
             if p.cand_id in vectors:
                 V[j] = vectors[p.cand_id]
         sim = np.zeros(n, np.float32)
-        lam = diversity * float(score.std())
+        lam = diversity * float(np.std([p.score for p in ranked]))
         for p in (*taken, *chosen):
             if p.cand_id in vectors:
                 sim = np.maximum(sim, V @ vectors[p.cand_id])
@@ -278,7 +286,7 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
     def fill():
         nonlocal sim
         if not diverse:
-            for p in ranked:
+            for p in top:
                 if len(chosen) >= size:
                     break
                 if ok(p, False):
@@ -286,10 +294,10 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
             return
         while len(chosen) < size:
             for j in np.argsort(-(score - lam * sim), kind="stable"):
-                if ok(ranked[j], False):
-                    take(ranked[j], False)
-                    if ranked[j].cand_id in vectors:
-                        sim = np.maximum(sim, V @ vectors[ranked[j].cand_id])
+                if ok(top[j], False):
+                    take(top[j], False)
+                    if top[j].cand_id in vectors:
+                        sim = np.maximum(sim, V @ vectors[top[j].cand_id])
                     break
             else:
                 return
@@ -301,7 +309,7 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
     if len(chosen) < size and max_per_nearest:
         caps = 0
         fill()
-    chosen.sort(key=lambda p: (p.exploration, -p.score))
+    chosen.sort(key=lambda p: (p.exploration, -order_key(p)))
     return chosen
 
 

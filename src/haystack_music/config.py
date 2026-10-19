@@ -118,11 +118,15 @@ DEFAULTS: dict = {
         "bonus_like": 0.0,             # unused since verdicts: an Unrated like counts as 3 stars (ADR 0002)
         "bonus_discovery_like": 0.005,
         # Verdicts (ADR 0002): every Rating is a positive, weighted light (1 star) to heavy (5 stars), linear in
-        # stars with 3 stars = bonus_discovery_like (a liked discovery was the strongest positive before);
-        # an Unrated like counts as unrated_like_stars. Pass is a normal negative, Dislike the strongest, on the
-        # negative_penalty strength scale below.
+        # stars; an Unrated like counts as unrated_like_stars. Pass is a normal negative, Dislike the strongest,
+        # on the negative_penalty strength scale below.
+        # star_bonus: 5 fixed cosine offsets for 1..5 stars (3 stars = bonus_discovery_like). An empty list
+        # means star_weight_sd per star away from 3 (a penalty below 3) in units of the pool's score sd, the same
+        # lift for every listener whatever their pool's spread (ADR 0011); opt-in until the eval shows it is not
+        # worse.
         "verdicts": {
-            "star_bonus": [0.0, 0.0025, 0.005, 0.0075, 0.01],   # 1..5 stars
+            "star_bonus": [0.0, 0.0025, 0.005, 0.0075, 0.01],   # 1..5 stars; [] = star_weight_sd
+            "star_weight_sd": 0.25,
             "unrated_like_stars": 3,
             "pass_strength": 1.0,
             "dislike_strength": 2.0,
@@ -166,6 +170,20 @@ DEFAULTS: dict = {
         "preview_all_likes": True,     # sync also fetches Deezer previews for locally matched likes (eval queries)
         "min_queries": 20,             # preview-vector liked songs needed before the eval may choose a variant
         "min_style_coverage": 0.9,     # genre variants are evaluated only if this share of pool + queries has styles
+    },
+    # The second stage (ADR 0011): a logistic regression on the listener's judged offers re-orders the top pool_top
+    # candidates by stage-1 score, used only while its leave-one-out AUC beats stage 1's by min_gain.
+    "rerank": {
+        "enabled": True,
+        "pool_top": 400,
+        "min_labels": 40,              # judged candidates needed before the model may be used
+        "min_gain": 0.05,              # leave-one-out AUC over stage 1's, on the same labels
+        "l2": 1.0,                     # ridge penalty on the weighted mean log-loss (per unit of label weight)
+        "alpha": 0.7,                  # final order: alpha * z(logit p) + (1 - alpha) * z(stage-1 score)
+        "prior_stars": 3,              # stars of a positive with no Rating (a library file, an Unrated like)
+        "neighbours": 10,              # the star-aware neighbourhood: this many nearest positives
+        "min_labels_embed": 300,       # 32 principal components of the preview vector join the features
+        "pca_components": 32,
     },
     "matching": {"duration_tolerance": 3.0, "confident_dt": 2.0},
     "harvest": {

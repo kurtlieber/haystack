@@ -118,8 +118,8 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 
 @pytest.fixture
 def server(tmp_path):
-    """Two offers (one rated, one exploration with Readings), an Unrated like, a rated like with Readings (the
-    Baseline), a playlist holding both offers, and a Spotify write that failed."""
+    """Two offers (one rated and re-ranked, one exploration with Readings), an Unrated like, a rated like with
+    Readings (the Baseline), a playlist holding both offers, and a Spotify write that failed."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
@@ -138,6 +138,8 @@ def server(tmp_path):
         con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, exploration, score_percentile, added_at) "
                     "VALUES(?,?,1,?,?,'x')", (cid, sid(name), explore, 55.0 if explore else 98.5))
         vectors.put_deezer_vector(con, cid, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[cid * 3])
+    con.execute("UPDATE candidates SET rerank_p=0.81, rerank_reason=? WHERE id=2",   # a top pick the re-ranker ordered
+                (json.dumps(["close to your 4-5★ tracks"]),))
     traits.put(con, 1, ALL_TRAITS)
     for name in ("like1", "like2"):
         con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01')", (sid(name),))

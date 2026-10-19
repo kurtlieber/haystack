@@ -213,15 +213,31 @@ def import_doc(con, doc: dict, effects: str = "skipped") -> dict:
 
 # ---------------- weights (scoring.verdicts) ----------------
 
+def stars_in_sd(cfg: dict) -> bool:
+    """True when the star bonus is scoring.verdicts.star_weight_sd (pool-score sd per star, resolved at scoring
+    time), False when scoring.verdicts.star_bonus lists fixed offsets (ADR 0011)."""
+    return not cfg["scoring"]["verdicts"]["star_bonus"]
+
+
+def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False) -> int | None:
+    """A positive's stars (an Unrated like counts as `unrated_like_stars`), or None if it is not a positive."""
+    if v is None:
+        return cfg["scoring"]["verdicts"]["unrated_like_stars"] if liked else None
+    return v.stars if v.kind == "rating" else None
+
+
 def positive_bonus(cfg: dict, v: Verdict | None, liked: bool = False) -> float | None:
     """The additive bonus a track gets as a discovery positive, or None if it is not a positive.
-    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3)."""
+    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3). With star_bonus
+    (a list) it is that star count's fixed offset; with an empty list it is star_weight_sd per star away from 3,
+    in pool-score sd, which the scorer multiplies by the pool's spread."""
     w = cfg["scoring"]["verdicts"]
-    if v is None:
-        return float(w["star_bonus"][w["unrated_like_stars"] - 1]) if liked else None
-    if v.kind != "rating":
+    s = positive_stars(cfg, v, liked)
+    if s is None:
         return None
-    return float(w["star_bonus"][v.stars - 1])
+    if stars_in_sd(cfg):
+        return float(w["star_weight_sd"] * (s - 3))
+    return float(w["star_bonus"][s - 1])
 
 
 def negative_strength(cfg: dict, v: Verdict | None) -> float | None:

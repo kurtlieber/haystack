@@ -92,8 +92,17 @@ def test_a_migrated_clear_no_can_still_be_taken_back(tmp_path):
 
 # ---------------- weights ----------------
 
-def test_star_bonus_is_linear_and_three_stars_equal_a_discovery_like():
+def test_an_empty_star_bonus_is_linear_in_pool_sd_and_three_stars_are_neutral():
     cfg = _cfg()
+    cfg["scoring"]["verdicts"]["star_bonus"] = []
+    assert verdicts.stars_in_sd(cfg)
+    b = [verdicts.positive_bonus(cfg, Verdict("t", "rating", s, "")) for s in range(1, 6)]
+    assert b == pytest.approx([-0.5, -0.25, 0.0, 0.25, 0.5])
+
+
+def test_the_default_star_bonus_is_fixed_offsets_and_three_stars_equal_a_discovery_like():
+    cfg = _cfg()
+    assert not verdicts.stars_in_sd(cfg)
     b = [verdicts.positive_bonus(cfg, Verdict("t", "rating", s, "")) for s in range(1, 6)]
     assert b == pytest.approx([0.0, 0.0025, 0.005, 0.0075, 0.01])
     assert b[2] == cfg["scoring"]["bonus_discovery_like"]
@@ -102,6 +111,7 @@ def test_star_bonus_is_linear_and_three_stars_equal_a_discovery_like():
 def test_unrated_like_counts_as_three_stars_and_negatives_are_not_positives():
     cfg = _cfg()
     assert verdicts.positive_bonus(cfg, None, liked=True) == pytest.approx(0.005)
+    assert verdicts.positive_stars(cfg, None, liked=True) == 3
     assert verdicts.positive_bonus(cfg, None, liked=False) is None
     assert verdicts.positive_bonus(cfg, Verdict("t", "pass", None, ""), liked=True) is None
     assert verdicts.negative_strength(cfg, Verdict("t", "pass", None, "")) == 1.0

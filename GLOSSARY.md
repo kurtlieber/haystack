@@ -75,3 +75,9 @@ _Avoid_: recommendations
 **To Rip**:
 The private Spotify playlist of tracks the listener rated 3★ or more that aren't in their music library yet (`spotify.to_rip`, off by default).
 _Avoid_: wishlist, download list
+
+### Picking
+
+**Confidence**:
+The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). Only a top pick of a re-ranked batch has one; a client may show it as a percentage.
+_Avoid_: score (the similarity the picks start from), match, certainty
