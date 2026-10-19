@@ -1,0 +1,24 @@
+# haystack with Docker Compose. Setup: README.md, "Install" (or point your AI agent at AGENTS.md).
+#
+#   mkdir -p config data              # before the first start, so they belong to you, not root
+#   cp config.example.toml config/config.toml
+#   docker compose run --rm haystack models fetch
+#   docker compose up -d
+services:
+  haystack:
+    image: ghcr.io/kurtlieber/haystack:latest
+    hostname: haystack                # the name alerts give for the server
+    restart: unless-stopped
+    stop_grace_period: 30s            # a running job gets 20 s to stop
+    # The image runs as uid 1000. If your user has another id (`id -u`), set it here so the files in
+    # config/ and data/ stay yours:
+    # user: "1001:1001"
+    environment:
+      TZ: Etc/UTC                     # your time zone, e.g. Europe/Berlin: [schedule] times are local time
+    ports:
+      - "8517:8517"                   # needle's API (only needed if you use needle)
+    volumes:
+      - ./config:/config              # config.toml and secrets/
+      - ./data:/data                  # the database, embeddings, models and state
+      # Optional: your music folder, read-only. Then set library.root = "/music" in config.toml.
+      # - /path/to/your/music:/music:ro
