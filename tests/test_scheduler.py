@@ -80,13 +80,23 @@ def test_a_running_job_is_not_started_twice():
     assert [j for j, _ in ran] == ["sync"]
 
 
-def test_first_good_library_run_starts_the_first_batch(tmp_path, monkeypatch):
+def test_first_good_library_or_harvest_run_starts_the_first_batch(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     s, ran = _sched({})
     s.launch("library")
     _join(s); _join(s)
     assert [j for j, _ in ran] == ["library", "first_batch"]
     assert ran[1][1] == scheduler.FIRST_BATCH
+
+    s, ran = _sched({})
+    s.launch("harvest")
+    _join(s); _join(s)
+    assert [j for j, _ in ran] == ["harvest", "first_batch"]
+
+    s, ran = _sched({})
+    s.launch("sync")
+    _join(s)
+    assert [j for j, _ in ran] == ["sync"]
 
     (tmp_path / "first-batch.done").write_text("done\n")
     s, ran = _sched({})

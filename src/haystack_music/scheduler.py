@@ -8,9 +8,10 @@ not wait for it).
 
 A run missed while haystack was down is caught up on start, like the timers' Persistent=true. The last start of
 each job comes from the runs table, which the units fill too, so moving from the units to the container doesn't
-replay a batch. A job that has never run starts at once, except the batch, which waits for its time. The first
-batch follows the first good library run, as the units' OnSuccess= does. A failure (any exit but 3, needs auth)
-sends an alert."""
+replay a batch. A job that has never run starts at once, except the batch, which waits for its time. Until the
+first batch is done, it follows every good library or harvest run (the units: OnSuccess= of the library unit). The
+harvest fills the pool, so without a library a new install gets its first batch the same day; with one, the
+first batch skips until the library is embedded. A failure (any exit but 3, needs auth) sends an alert."""
 from __future__ import annotations
 
 import logging
@@ -160,7 +161,7 @@ class Scheduler:
         code = self.run(job, args)
         if self.stopping.is_set():
             return
-        if code == 0 and job == "library":
+        if code == 0 and job in ("library", "harvest"):
             from .firstbatch import DONE
             if not (config.STATE_DIR / DONE).exists():
                 self.launch("first_batch", FIRST_BATCH)
