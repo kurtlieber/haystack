@@ -1,6 +1,7 @@
 # Distribution: options for making this an OSS package
 
-Status: **option A in progress** (written 2026-10-15, updated 2026-10-17). Decided so far: two fresh repos, haystack
+Status: **option A in progress** (written 2026-10-15, updated 2026-10-19). Done: the container image on GHCR,
+`haystack serve` with its in-process scheduler, and the paste-back Spotify sign-in. Decided so far: two fresh repos, haystack
 (the server, AGPL-3.0) and needle (the desktop app, MIT); Deezer on by default with the README's Deezer notice.
 The rest is open; turn each decision into an ADR.
 
@@ -9,7 +10,7 @@ The rest is open; turn each decision into an ADR.
 | Area | Today | What someone else would need |
 |---|---|---|
 | Topology | one server; needle reaches its API on a private network (`api.allow_networks` plus the host firewall) with a token file | a server URL and a pairing step in needle |
-| Spotify auth | each user's own Spotify app; `haystack auth` listens on a loopback port of the server, reached from the desktop through an SSH tunnel | sign-in on the desktop (PKCE, below) |
+| Spotify auth | each user's own Spotify app; `haystack auth` prints the URL and takes the redirect address pasted back (or the loopback callback, through an SSH tunnel) | sign-in on the desktop (PKCE, below; on the README's roadmap) |
 | Secrets | done: 0600 files by default, 1Password `op` as the other backend (`secrets.py`) | the OS keyring, maybe |
 | Alerts | done: an optional generic webhook, off by default (`alert.py`) | ntfy or Apprise, maybe |
 | Taste source | done: the local library is optional (`library.root`, unset by default); without one, Liked Songs and Ratings. A Spotify ID in the `MusicBrainz Track Id` tag is used when present | |
