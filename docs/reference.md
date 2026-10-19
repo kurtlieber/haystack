@@ -36,6 +36,7 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), 1 req / 1.1 s cross-process throttle |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
+| `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring; the Baseline and usual range |
@@ -78,8 +79,9 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
   hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
   tracks count as "unplayed" (the conservative direction). Not a bug.
 * **Metric.** Like rate, overall and per source (`haystack sources`), and the fuller `haystack report`. A source
-  can't be retired before 30 offered tracks. No classifier and no skip inference in v1 (classifier after ~200
-  played discoveries; skips later from the Extended Streaming History export).
+  can't be retired before 30 offered tracks. No skip inference yet (skips later from the Extended Streaming
+  History export). The second stage (Re-ranking) learns from Verdicts and outcomes only, and switches itself on
+  once it has 40 labels and beats similarity alone.
 * **Spotify dev mode (2026).** No audio-features / recommendations / browse / artist top tracks / batch track
   fetch; search capped at 10. None of these are used.
 
@@ -98,11 +100,13 @@ haystack sync                        hourly job (needs auth)
 haystack batch [--size N] [--dry-run] [--force] [--variant V] [--no-penalty]
                                               [--clear-min-age-hours H] [--clear-recent keep|remove]
                                               weekly job (needs auth): clear Discoveries, then add a batch
-haystack batch --plan [--size N] [--variant V]   the would-be picks, scored in memory: no Spotify, no writes
+haystack batch --plan [--size N] [--variant V] [--stage1]
+                                              the would-be picks, scored in memory: no Spotify, no writes
 haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] [--clear-recent keep|remove]
                                               empty Discoveries and record nos (also run by batch)
 haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
                                               offline scoring-variant eval (no Spotify calls); --choose stores its pick
+haystack rerank fit|show [--limit N] fit the second stage on your Verdicts and record it / show the last fit
 haystack genres [--top 15]           genre makeup of the liked songs (400 Discogs styles)
 haystack harvest --broad [N] [--shard i/N] [--no-retry] [--styles N]   stratified broad harvest
 haystack feedback yes|no ARTIST TITLE [--strength mild|normal|strong] [--note T] [--to-rip]
@@ -230,8 +234,58 @@ auc_tie = 0.02
 switch_margin = 0.03
 ```
 
+**Re-ranking** (`[rerank]`, ADR 0011). The score above is stage 1. Once you have judged enough offers, a second
+stage orders the top `rerank.pool_top` (400) of the pool by stage-1 score: a logistic regression trained on your
+Verdicts gives each of them a *confidence*, its chance that you keep the track, and they are ordered by
+`alpha * z(logit) + (1 - alpha) * z(stage-1 score)` (`rerank.alpha`, 0.7), put back in stage-1 score units. The
+rest of the pool keeps its stage-1 order below them, and exploration picks are still drawn by stage-1 score.
+
+- **Labels**: one per track with a candidate row and a preview vector that was offered, or that carries a Verdict
+  given outside the Unrated likes queue (those are all liked songs, so they say nothing about yes against no).
+  The current Verdict decides: a Rating of 3★ or more is a yes, weighted 1.0, 1.25 or 1.5 for 3, 4 or 5★; a
+  Rating of 1-2★ is a no of weight 0.75 (to stage 1 it is still a positive: you like the track a little, but it
+  is not for the batch); a Pass is a no of 1.0 and a Dislike of 1.5. With no Verdict an offer you liked is a yes,
+  and one that expired after a play or was removed by hand a no, both 1.0; `unplayed` is not a label.
+- **Features**, computed the same way for a pool candidate and a labelled track (which is left out of its own
+  positives and negatives): the stage-1 score; the nearest and top-k similarity and the genre top-k with no star
+  bonus; hubness; the negative penalty and the largest excess over a turned-down track; the stars of the nearest
+  positive, the similarity-weighted mean stars of the `rerank.neighbours` (10) nearest, the share of them at
+  4-5★ and the share that are library files (a positive with no Rating counts as `rerank.prior_stars`, 3); per
+  Trait, how far the track lies outside your usual range, in widths of the range; the source and whether it is a
+  chart; whether the artist is among your positives or has a Dislike. From `rerank.min_labels_embed` (300)
+  labels, 32 principal components of the preview vector join them. Each is standardised over the pool.
+- **Fit**: L2-regularised logistic regression by Newton steps (numpy only), refitted at every batch in
+  milliseconds. `rerank.l2` (1.0) is the penalty on the weighted mean log-loss, per unit of label weight.
+- **Gate**: the model is used only with at least `rerank.min_labels` (40) labels and when its leave-one-out AUC
+  (each label scored by a model fitted on all the others) beats stage 1's AUC on the same labels by
+  `rerank.min_gain` (0.05). Otherwise the batch goes by stage 1 and the log says why. The check runs again at
+  every batch, so the second stage switches itself on as labels grow. An error in it never stops a batch.
+- **Reasons**: each re-ranked candidate keeps up to two phrases for the features that pushed its chance up the
+  most (`close to your 4-5★ tracks`, `brighter than you usually like`) and up to two for what held it back. A
+  feature counts when it moves the logit by at least 0.1, and is quoted only when its weight agrees with the
+  feature's own direction over the labels and with the direction it should have (being close to your 4-5★
+  tracks is never a reason to hold a track back); such a weight still orders the batch. A Trait is quoted only
+  when the track lies outside your usual range on the side the phrase names, or as `<trait> in your usual range`.
+
+Each fit is a row in `rerank_runs`, and the last model is kept in the `kv` table (`rerank_model`). When the model
+is used, a batch writes the chance and reasons of the pool's top 400 to `candidates` (`rerank_p`,
+`rerank_reason`), and the batch summary carries `rerank` (used, why, the labels, both AUCs). The API returns them
+in a Discoveries card's `why` (features `rerank` and `why.reasons`). `haystack rerank fit` fits and records
+without touching the pool; `rerank show` prints the last fit, its largest weights and the recent fits; `batch
+--plan --stage1` shows what stage 1 alone would pick.
+
+```toml
+[rerank]
+enabled = true         # false: every batch by stage 1 alone, as before 0.3.0
+pool_top = 400
+min_labels = 40
+min_gain = 0.05
+alpha = 0.7
+```
+
 **Picking the batch** (ADR 0010). About `batch.exploration_fraction` of the picks are exploration picks, taken at
-random from the `batch.explore_band` (the 40th to 75th score percentile of the pool); the rest are the top picks.
+random from the `batch.explore_band` (the 40th to 75th score percentile of the pool); the rest are the top picks,
+by score or, once the re-ranker is used, in its order (in score units, so the diversity below works the same).
 A batch has at most `batch.max_per_artist` songs per artist, and three rules spread the top picks:
 
 - **Diversity** (`batch.diversity`, 0.5): after each pick, the rest are re-ranked by
@@ -286,7 +340,9 @@ differ from a real batch's only where a lookup would have failed or found a know
 pick already saved in Liked Songs (a real batch then drops it). Both paths share one selection function
 (`batch.select_for_batch`), so with the same scores and seed they pick the same candidates. With
 `scoring.variant = auto` it first re-checks the variant as a batch does and shows the outcome (`variant_choice`),
-recording nothing. It ignores the embedding guard and says so when the library is not fully embedded.
+recording nothing. It ignores the embedding guard and says so when the library is not fully embedded. When the
+re-ranker is used, each top pick also shows its chance, up to two reasons and what held it back; `--stage1` leaves
+the second stage out, to compare the two orders.
 
 **Report.** `haystack report` is token-free and opens the database read-only. Offers: offered, decided (an outcome
 is set), judged (decided, minus tracks that went unplayed and have no Verdict), kept (the current Verdict keeps the
@@ -329,11 +385,15 @@ liked or unplayed takes that Pass back. A track you already gave a verdict (need
 no Pass, because its heart may simply not be written yet. Tracks with no candidate row are still removed; they
 are counted as `unlinked` and get no verdict.
 
-**Verdict weights** (`[scoring.verdicts]`, ADR 0002): every Rating is a positive whose bonus grows with its
-stars, `star_bonus = [0.0, 0.0025, 0.005, 0.0075, 0.01]` for 1-5 stars (3 stars = `bonus_discovery_like`); an
-Unrated like counts as `unrated_like_stars = 3`. A Pass is a negative of `pass_strength = 1.0` (the old
-"normal" no), a Dislike `dislike_strength = 2.0` (the old "strong"), on the negative-penalty scale. Every variant
-adds the bonus before taking the nearest / top-k.
+**Verdict weights** (`[scoring.verdicts]`, ADR 0002, ADR 0011): every Rating is a positive whose bonus grows
+with its stars. By default the bonus is one of five fixed cosine offsets, `star_bonus = [0.0, 0.0025, 0.005,
+0.0075, 0.01]` for 1-5 stars (3 stars = `bonus_discovery_like`). `star_bonus = []` switches to
+`star_weight_sd = 0.25` per star above 3 (a penalty per star below), in units of the sd of the pool's
+nearest-positive similarity in the variant's space, measured at scoring time, so a 5★ track is worth the same
+lift in every pool whatever its spread. That form is opt-in until `haystack eval` shows it is not worse (ADR
+0011). An Unrated like counts as `unrated_like_stars = 3`; a library file nobody liked or rated gets 0. A Pass
+is a negative of `pass_strength = 1.0` (the old "normal" no), a Dislike `dislike_strength = 2.0` (the old
+"strong"), on the negative-penalty scale. Every variant adds the bonus before taking the nearest / top-k.
 
 ## Running it
 

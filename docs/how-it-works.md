@@ -56,6 +56,14 @@ synth-pop. (There are a few ways to measure "close". haystack tests them on the 
 keeps the one that best puts the ones you kept above the ones you turned down, and checks again every week; until
 you have turned down enough, it tests them on your own likes.)
 
+Once you have rated enough, haystack also learns which of the close matches you actually like. Sounding close
+isn't the whole story: you may keep the brighter songs among them and pass on the ones from the charts. When you
+have judged about 40 of its picks, haystack trains a small model on your verdicts and lets it reorder its 400
+closest matches, but only when the model would have predicted your past verdicts better than closeness alone;
+otherwise it goes by closeness and checks again next week. Each song the model moved comes with its chance that
+you keep it and a reason or two, such as "close to your 4-5★ tracks", which needle shows on the track. To the
+model, 1 or 2 stars means "not for the batch": you like the song a little, but the batch is for the ones you keep.
+
 Then it fills the batch (15 songs, unless you changed `batch.size`):
 
 - **Most picks are the closest matches.**
