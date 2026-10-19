@@ -22,11 +22,27 @@ Everything is under `/v1`. New fields and new endpoints are additive: a client i
 Removing or changing the meaning of a field is a breaking change and goes to `/v2`, served alongside `/v1` until
 clients have moved.
 
+## Server and features
+
+`GET /v1/health` and `GET /v1/state` both carry a `server` object:
+
+```json
+{"version": "0.1.0", "api": "1", "features": []}
+```
+
+- `version`: the haystack release. Shown to people; a client never branches on it.
+- `api`: the API version, the same as `/v1` (and as health's older `version` field).
+- `features`: the names of optional additions this server has. A client shows a new element only when its
+  feature's name is listed, and treats every field a feature adds as optional. A server without a `server`
+  object predates features: a client behaves as it did before any of them.
+
+No features are defined yet. Each one is added here with the fields it brings, and in "Changes" below.
+
 ## Endpoints
 
 | Method | Path | Result |
 |---|---|---|
-| GET | `/v1/health` | `{"ok": true, "version": "1", "time": "…Z"}` |
+| GET | `/v1/health` | `{"ok": true, "version": "1", "time": "…Z", "server": <server>}` |
 | GET | `/v1/state` | the snapshot a Review needs, in one call |
 | POST | `/v1/verdicts` | records Verdicts; idempotent by id |
 | POST | `/v1/plays` | records plays; idempotent by track and start time |
@@ -43,7 +59,8 @@ clients have moved.
    "discoveries": {"total": 25, "done": 3, "next_batch_at": "…Z", "items": [<track card>, …]},
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
- "spotify": {"pending_writes": 0, "error": null}}
+ "spotify": {"pending_writes": 0, "error": null},
+ "server": {"version": "0.1.0", "api": "1", "features": []}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):
@@ -58,6 +75,7 @@ clients have moved.
   count progress for any pick offline.
 - **`spotify`**: how many tracks still have Spotify writes waiting, and the latest error, if any. Writes are made
   in the background after a Verdict is accepted, so a Spotify problem shows up here, not as a failed request.
+- **`server`**: as in `GET /v1/health` (Server and features).
 
 Reading the snapshot also starts measuring, in the background, the next 20 tracks of each queue that have no
 Readings, and refreshes the playlists at most every 10 minutes.
@@ -162,3 +180,10 @@ Playlist summary:
 - `id`, `title` and `artists` are required. `album_type` is `album`, `single` or `compilation`; `release_date` is
   `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; covers are https URLs.
 - `404` for a playlist not in the listener's library. Playlists themselves are never written to Spotify.
+
+## Changes
+
+One line per addition to `/v1`: the date, the haystack release that has it, and its feature name, if any.
+`tests/fixtures/v1-contract.json` lists every documented key and type; a change may add to it, never remove.
+
+- 2026-10-19, haystack 0.1.0: the `server` object on `GET /v1/health` and `GET /v1/state`; `features` is empty.

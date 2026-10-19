@@ -172,6 +172,18 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     return con
 
 
+def connect_readonly(path: Path | None = None) -> sqlite3.Connection:
+    """A connection that cannot write (no schema, no migrations), for `report` and `batch --plan`.
+    FileNotFoundError when there is no database yet."""
+    path = Path(path or config.DB_PATH).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"no database at {path} yet (run a harvest first)")
+    con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=120, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA busy_timeout=120000")
+    return con
+
+
 def _add_column(con, table: str, col: str, decl: str) -> None:
     if col in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
         return

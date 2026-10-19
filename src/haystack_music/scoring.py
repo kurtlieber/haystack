@@ -6,7 +6,7 @@ match contribute their Deezer-preview vector."""
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -195,6 +195,7 @@ class Pick:
     source: str
     exploration: bool = False
     spotify_id: str | None = None
+    nearest: str | None = None      # owner label of the positive it scored closest to (candidates.nearest)
 
 
 def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
@@ -213,7 +214,7 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
         return p.cand_id not in chosen_ids and counts.get(p.artist_key, 0) < max_per_artist
 
     def take(p, explore):
-        chosen.append(Pick(p.cand_id, p.artist_key, p.score, p.source, explore))
+        chosen.append(replace(p, exploration=explore))
         chosen_ids.add(p.cand_id)
         counts[p.artist_key] = counts.get(p.artist_key, 0) + 1
 
