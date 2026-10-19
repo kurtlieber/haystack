@@ -221,6 +221,21 @@ def _batch_plan(cfg, a) -> int:
     return 0
 
 
+def cmd_report(cfg, a) -> int:
+    from . import report
+    con = _readonly_db()
+    if con is None:
+        return 1
+    try:
+        from . import embed
+        classes = embed.style_classes()
+    except Exception:  # noqa: BLE001 - no model metadata yet: styles print by number
+        classes = []
+    r = report.build(con, cfg, status.read(), classes, tracks=a.tracks)
+    print(json.dumps(r, indent=1, default=str) if a.json else report.text(r), end="\n" if a.json else "")
+    return 0
+
+
 def cmd_clear(cfg, a) -> int:
     from .clear import clear_discoveries
 
@@ -689,6 +704,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", nargs="?", default="list", choices=["list", "accept", "reject"])
     s.add_argument("ids", nargs="*")
     s.set_defaults(fn=cmd_review)
+
+    s = sub.add_parser("report", help="how discovery is doing: like rates, verdicts, pool, last eval "
+                                      "(read-only, token-free; counts only unless --tracks)")
+    s.add_argument("--tracks", action="store_true", help="also list the top of the pool by name")
+    s.add_argument("--json", action="store_true", help="print the report as JSON")
+    s.set_defaults(fn=cmd_report)
 
     s = sub.add_parser("sources", help="like rate per source; retirement check")
     s.add_argument("action", nargs="?", default="list", choices=["list", "retire"])

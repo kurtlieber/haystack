@@ -78,7 +78,9 @@ You don't have to do anything special. haystack watches what happens to each dis
 Songs added less than a day before a new batch get a pass, so a late Sunday batch doesn't count against you.
 
 haystack also keeps score of where its good finds come from. `haystack sources` shows the like rate of each
-source, so you can turn off the ones that don't work for you.
+source, so you can turn off the ones that don't work for you. `haystack report` gives the bigger picture: how
+many offers you kept, week by week, how you've rated things, and what the next batch is drawing on. It shows
+numbers only, never song names, so it's safe to share when asking for help.
 
 ## The seven Traits
 

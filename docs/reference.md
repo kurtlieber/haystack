@@ -77,9 +77,9 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 * **Unheard by design.** `recently-played` only returns the last 50 plays. The server is always on and syncs
   hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
   tracks count as "unplayed" (the conservative direction). Not a bug.
-* **Metric.** Like rate, overall and per source (`haystack sources`). A source can't be retired before
-  30 offered tracks. No classifier and no skip inference in v1 (classifier after ~200 played discoveries; skips
-  later from the Extended Streaming History export).
+* **Metric.** Like rate, overall and per source (`haystack sources`), and the fuller `haystack report`. A source
+  can't be retired before 30 offered tracks. No classifier and no skip inference in v1 (classifier after ~200
+  played discoveries; skips later from the Extended Streaming History export).
 * **Spotify dev mode (2026).** No audio-features / recommendations / browse / artist top tracks / batch track
   fetch; search capped at 10. None of these are used.
 
@@ -113,6 +113,7 @@ haystack sanity-check [-n 10 -k 10]  write sanity-check.md in the state dir
 haystack status                      status.json + live counts
 haystack review [list|accept ID..|reject ID..]   uncertain liked-song -> library matches
 haystack sources [list|retire NAME]  like rate per source
+haystack report [--tracks] [--json]  like rates, Verdict counts, the pool's make-up, latest eval (read-only)
 haystack check-secrets [--write]     which secrets are set (lengths only); --write: the token record is writable
 haystack secret set NAME             store a secret, from a hidden prompt or stdin
 haystack token new [--force]|show    needle's API token: make one / print it for a client
@@ -206,6 +207,17 @@ differ from a real batch's only where a lookup would have failed or found a know
 pick already saved in Liked Songs (a real batch then drops it). Both paths share one selection function
 (`batch.select_for_batch`), so with the same scores and seed they pick the same candidates. It ignores the
 embedding guard and says so when the library is not fully embedded.
+
+**Report.** `haystack report` is token-free and opens the database read-only. Offers: offered, decided (an outcome
+is set), judged (decided, minus tracks that went unplayed and have no Verdict), kept (the current Verdict keeps the
+heart, or the offer was liked and has no Verdict), with kept/decided, kept/judged and liked/decided (the
+`haystack sources` rate), overall, exploit vs exploration, per batch and per source. Then the current Verdicts by
+kind and stars and how many Liked Songs are rated; the pool (size, embedded, scored, active and scored variant); of
+the top 100 by stored score, how many have a library window as their nearest positive and how many a preview (by owner
+kind: like, discovery, manual, rated); the top 30's score range, distinct nearest positives and top-1 Discogs
+style; and the latest eval's per-variant table from `status.json`, with judged tracks counted, never named. It
+prints counts and shares only, so it can be pasted into an issue; `--tracks` adds the top 30 by name and `--json`
+prints everything as JSON.
 
 **Clear Discoveries** (`batch.clear_min_age_hours`, `batch.clear_recent`, `batch.clear_no_penalty`), run at the
 start of every batch that actually proceeds, and on its own via `clear-discoveries`. Liked Songs are checked
