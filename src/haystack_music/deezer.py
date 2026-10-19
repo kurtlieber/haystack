@@ -92,6 +92,17 @@ class Deezer:
     def artist_top(self, artist_id: int, limit: int = 3) -> list[dict]:
         return self._data(f"artist/{int(artist_id)}/top", {"limit": limit})
 
+    def search_playlist(self, q: str, limit: int = 6) -> list[dict]:
+        return self._data("search/playlist", {"q": q, "limit": limit})
+
+    def playlist(self, playlist_id: int) -> dict | None:
+        """A playlist with its fans and its tracks (the first page, in playlist order)."""
+        try:
+            j = self.api(f"playlist/{int(playlist_id)}")
+        except DeezerError:                   # a playlist made private since the search
+            return None
+        return j if isinstance(j, dict) and j.get("id") else None
+
     def preview_bytes(self, url: str) -> bytes:
         """Fetch a 30 s preview into memory (never to disk)."""
         self.t.wait(); self.requests += 1

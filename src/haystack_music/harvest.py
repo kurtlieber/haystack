@@ -1,6 +1,7 @@
 """Candidate harvesting (token-free): Deezer (charts, editorial charts, new releases, artist radio, related
-artists) and ListenBrainz similar-recordings. Sources only REACH candidates; they never contribute to the score.
-Every candidate records its source(s). Already-in-library, already-liked and already-known/offered are excluded."""
+artists, playlists named after the listener's styles) and ListenBrainz similar-recordings. Sources only REACH
+candidates; they never contribute to the score. Every candidate records its source(s), and the seed it was found
+from (ADR 0013). Already-in-library, already-liked and already-known/offered are excluded."""
 from __future__ import annotations
 
 import json
@@ -8,9 +9,10 @@ import logging
 import math
 import random
 import sqlite3
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
-from . import db, library, traits, vectors
+from . import db, library, sources as source_stats, traits, vectors
 from . import embed
 from .deezer import Deezer, DeezerError
 from .listenbrainz import ListenBrainz
@@ -18,6 +20,148 @@ from .matching import Index, TrackRef, compare
 from .textnorm import key, song_key, split_title
 
 log = logging.getLogger("haystack_music.harvest")
+
+SEED_POLICIES = ("verdicts", "recent")
+SEED_BUCKETS = ("top", "mid", "library")
+SEED_WEEK_DAYS = 7          # an artist is seeded at most once a week per source while others are left
+SEED_KEEP_DAYS = 90         # harvest_seeds rows older than this are dropped
+SEEDED_SOURCES = ("deezer_artist_radio", "deezer_related", "listenbrainz_similar")
+PLAYLISTS_CONSIDERED = 6    # deezer_style_search: search results read for their fan count (one request each)
+PLAYLIST_TRACKS = 25        # deezer_style_search: new tracks taken from one playlist at most
+
+
+@dataclass(frozen=True)
+class Seed:
+    """A track a source starts from. origin: rating | discovery | like | library | broad; None under seed_policy
+    "recent", whose seeds are not tagged."""
+    artist: str
+    title: str = ""
+    stars: int | None = None
+    origin: str | None = None
+    bucket: int = 0
+
+    @property
+    def tag(self) -> str | None:
+        """What candidate_sources.detail records as seed=<tag>: the seed's stars, else its origin."""
+        if self.origin is None:
+            return None
+        return str(self.stars) if self.stars else self.origin
+
+
+def with_seed(detail: str, seed: Seed) -> str:
+    return f"{detail} seed={seed.tag}" if seed.tag else detail
+
+
+def _since(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def seed_buckets(con, cfg: dict, rng: random.Random) -> dict[str, list[Seed]]:
+    """The seeds of seed_policy "verdicts" (ADR 0013), each bucket shuffled:
+    top: tracks Rated 4-5 stars and discoveries kept, in the last harvest.seed_recent_days; 5 stars first, then 4,
+      then kept discoveries without a Rating,
+    mid: the other liked songs (Rated 3 stars or more, or Unrated),
+    library: the library's files."""
+    from . import verdicts
+    cur = verdicts.current(con)
+    since = _since(cfg["harvest"]["seed_recent_days"])
+    names = {}
+    for sid, name, arts in con.execute("SELECT spotify_id, name, artists_json FROM spotify_tracks"):
+        arts = json.loads(arts or "[]")
+        if arts and name:
+            names[sid] = (arts[0], name)
+    top: dict[str, Seed] = {}
+    for sid, v in cur.items():
+        if v.kind == "rating" and (v.stars or 0) >= 4 and (v.given_at or "")[:10] >= since[:10] and sid in names:
+            top[sid] = Seed(*names[sid], stars=v.stars, origin="rating", bucket=0)
+    for sid, artist, title, outcome in con.execute(
+            """SELECT o.spotify_id, c.artist, c.title, o.outcome FROM offers o JOIN candidates c ON c.id=o.candidate_id
+               WHERE o.outcome IN ('liked', 'rated') AND COALESCE(o.removed_at, o.added_at) >= ?""", (since,)):
+        v = cur.get(sid)
+        if sid not in top and artist and title and (v.keeps_heart if v else outcome == "liked"):
+            top[sid] = Seed(artist, title, stars=v.stars if v and v.kind == "rating" else None, origin="discovery",
+                            bucket=0)
+    mid = []
+    for (sid,) in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL ORDER BY spotify_id"):
+        v = cur.get(sid)
+        if sid not in top and sid in names and (v is None or v.keeps_heart):
+            mid.append(Seed(*names[sid], stars=v.stars if v else None, origin="like", bucket=1))
+    lib = []
+    for arts, artist_raw, title in con.execute(
+            "SELECT artists_json, artist_raw, title_raw FROM local_tracks WHERE present=1 ORDER BY id"):
+        arts = json.loads(arts or "[]")
+        a = arts[0] if arts else (artist_raw or "")
+        if a and title:
+            lib.append(Seed(a, title, origin="library", bucket=2))
+    out = {"top": sorted(top.values(), key=lambda x: (x.artist, x.title)), "mid": mid, "library": lib}
+    for v in out.values():
+        rng.shuffle(v)
+    out["top"].sort(key=lambda x: -(x.stars or 3.5))      # stable: random within each tier
+    return out
+
+
+def pick_seeds(buckets: dict[str, list[Seed]], n: int, quotas: dict, exclude: set[str] = frozenset()) -> list[Seed]:
+    """Up to n seeds with distinct artists, best bucket first. Each bucket fills its quota (a share of n; what it
+    can't fill passes to the next bucket), then the rest comes from the buckets in order. Artists in exclude
+    (seeded for this source in the last week) are skipped while there are others."""
+    out: list[tuple[int, int, Seed]] = []
+    seen: set[str] = set()
+
+    def take(b: int, k: int, skip) -> int:
+        got = 0
+        for pos, sd in enumerate(buckets.get(SEED_BUCKETS[b], [])):
+            if got >= k or len(out) >= n:
+                break
+            a = key(sd.artist)
+            if a and a not in seen and a not in skip:
+                seen.add(a); out.append((b, pos, sd)); got += 1
+        return got
+
+    carry = 0
+    for b, name in enumerate(SEED_BUCKETS):
+        carry += round(n * quotas.get(name, 0))
+        carry -= take(b, carry, exclude)
+    for skip in (exclude, ()):
+        for b in range(len(SEED_BUCKETS)):
+            take(b, n - len(out), skip)
+    return [sd for _, _, sd in sorted(out, key=lambda x: (x[0], x[1]))]
+
+
+def broad_liked_seeds(con, cfg: dict, rng: random.Random) -> list[Seed]:
+    """`harvest --broad`'s ListenBrainz seeds: every liked song, shuffled. Under seed_policy "verdicts" the liked
+    songs Passed or Disliked since are left out and the rest go by their stars (Unrated as 3), each tagged."""
+    from . import verdicts
+    tagged = cfg["harvest"].get("seed_policy", "verdicts") == "verdicts"
+    cur = verdicts.current(con) if tagged else {}
+    out = []
+    for sid, arts, name in con.execute("""SELECT s.spotify_id, s.artists_json, s.name FROM likes l
+                                          JOIN spotify_tracks s ON s.spotify_id=l.spotify_id
+                                          WHERE l.removed_at IS NULL ORDER BY l.spotify_id"""):
+        arts = json.loads(arts or "[]")
+        v = cur.get(sid)
+        if arts and name and (v is None or v.keeps_heart):
+            out.append(Seed(arts[0], name, stars=v.stars if v else None, origin="like" if tagged else None))
+    rng.shuffle(out)
+    if tagged:
+        out.sort(key=lambda x: -(x.stars or 3))          # stable: random within each tier
+    return out
+
+
+def top_style_names(con, cfg: dict, n: int) -> list[str]:
+    """The n Discogs styles with the most activation over the liked songs (evaluate.liked_genres), by their own
+    name ("Jazz / Bebop" -> "Bebop")."""
+    from .evaluate import liked_genres
+    try:
+        top = liked_genres(con, cfg, top=n).get("top_styles_mean_activation", [])
+    except (OSError, ValueError, KeyError) as e:         # style vectors stored, but no style model here
+        log.warning("deezer_style_search: no style names (%s)", e)
+        return []
+    out: list[str] = []
+    for full, _ in top:
+        name = full.split(" / ")[-1]
+        if name not in out:
+            out.append(name)
+    return out[:n]
 
 
 def _liked_refs(con) -> list[TrackRef]:
@@ -96,9 +240,15 @@ class Harvester:
         self.known_song = {r[0]: r[1] for r in con.execute("SELECT song_key, id FROM candidates")}
         self.tol = cfg["matching"]["duration_tolerance"]
         self.stats: dict[str, dict] = {}
+        self.policy = h.get("seed_policy", "verdicts")
+        if self.policy not in SEED_POLICIES:
+            raise ValueError(f"harvest.seed_policy {self.policy!r} is not one of {', '.join(SEED_POLICIES)}")
+        self._buckets: dict[str, list[Seed]] | None = None
 
-    # ---- seeds (positives: liked songs first, then the library) ----
-    def seed_tracks(self, n: int) -> list[tuple[str, str]]:
+    # ---- seeds: by Verdicts (ADR 0013), or recent likes first, then the library ----
+    def seed_tracks(self, n: int, source: str | None = None) -> list[Seed]:
+        if self.policy == "verdicts":
+            return self._verdict_seeds(n, source)
         liked = self.con.execute("""SELECT s.artists_json, s.name FROM likes l JOIN spotify_tracks s
                                     ON s.spotify_id=l.spotify_id WHERE l.removed_at IS NULL
                                     ORDER BY l.added_at DESC LIMIT 200""").fetchall()
@@ -109,18 +259,34 @@ class Harvester:
         n_like = min(len(liked), int(round(n * 0.7))) if liked else 0
         out = self.rng.sample(liked, n_like) if n_like else []
         out += self.rng.sample(lib, min(len(lib), n - len(out)))
-        return out
+        return [Seed(a, t) for a, t in out]
 
-    def seed_artists(self, n: int) -> list[str]:
+    def seed_artists(self, n: int, source: str | None = None) -> list[Seed]:
         if self.seeds is not None:
-            return [x["artist"] for x in self.seeds]
+            return [Seed(x["artist"], x["title"], origin="broad") for x in self.seeds]
+        if self.policy == "verdicts":
+            return self._verdict_seeds(n, source)
         seen, out = set(), []
-        for a, _ in self.seed_tracks(n * 3):
-            if key(a) not in seen:
-                seen.add(key(a)); out.append(a)
+        for sd in self.seed_tracks(n * 3):
+            if key(sd.artist) not in seen:
+                seen.add(key(sd.artist)); out.append(sd)
             if len(out) >= n:
                 break
         return out
+
+    def _verdict_seeds(self, n: int, source: str | None) -> list[Seed]:
+        if self._buckets is None:
+            self._buckets = seed_buckets(self.con, self.cfg, self.rng)
+        return pick_seeds(self._buckets, n, self.cfg["harvest"]["seed_quotas"], self.recently_seeded(source))
+
+    def recently_seeded(self, source: str | None) -> set[str]:
+        """Artist keys this source was seeded from in the last week."""
+        return {r[0] for r in self.con.execute("SELECT artist_key FROM harvest_seeds WHERE source=? AND at>=?",
+                                               (source, _since(SEED_WEEK_DAYS)))}
+
+    def seeded(self, source: str, sd: Seed) -> None:
+        self.con.execute("INSERT INTO harvest_seeds(at, source, artist_key, stars, origin) VALUES(?,?,?,?,?)",
+                         (db.now(), source, key(sd.artist), sd.stars, sd.origin))
 
     def deezer_artist_id(self, name: str) -> int | None:
         k = key(name)
@@ -245,48 +411,80 @@ class Harvester:
             self._feed("deezer_new_releases", f"editorial/{eid}/album/{a['id']}", tracks[:1], cap, 1)
 
     def deezer_artist_radio(self, cap):
+        src = "deezer_artist_radio"
         n = len(self.seeds) if self.seeds is not None else self.cfg["harvest"]["seed_artists"]
         per = max(2, cap // max(1, n)) if self.seeds is None else self.cfg["harvest"]["broad_radio_per_seed"]
-        for a in self.seed_artists(n):
-            if self._st("deezer_artist_radio")["new"] >= cap:
+        for sd in self.seed_artists(n, src):
+            if self._st(src)["new"] >= cap:
                 break
-            aid = self.deezer_artist_id(a)
+            aid = self.deezer_artist_id(sd.artist)
+            self.seeded(src, sd)
             if aid:
                 radio = [t for t in self.dz.artist_radio(aid, 25) if (t.get("artist") or {}).get("id") != aid]
-                self._feed("deezer_artist_radio", f"artist/{aid}/radio ({a})", radio, cap, per)
+                self._feed(src, with_seed(f"artist/{aid}/radio ({sd.artist})", sd), radio, cap, per)
 
     def deezer_related(self, cap):
+        src = "deezer_related"
         n = len(self.seeds) if self.seeds is not None else self.cfg["harvest"]["seed_artists"]
         per = max(2, cap // max(1, n)) if self.seeds is None else self.cfg["harvest"]["broad_related_per_seed"]
-        for a in self.seed_artists(n):
-            if self._st("deezer_related")["new"] >= cap:
+        for sd in self.seed_artists(n, src):
+            if self._st(src)["new"] >= cap:
                 break
-            aid = self.deezer_artist_id(a)
+            aid = self.deezer_artist_id(sd.artist)
+            self.seeded(src, sd)
             if not aid:
                 continue
             got = 0
             rel = self.dz.artist_related(aid, 10)
             self.rng.shuffle(rel)
             for ra in rel[:4]:
-                if got >= per or self._st("deezer_related")["new"] >= cap:
+                if got >= per or self._st(src)["new"] >= cap:
                     break
-                got += self._feed("deezer_related", f"artist/{aid}/related -> {ra.get('name')}",
+                got += self._feed(src, with_seed(f"artist/{aid}/related -> {ra.get('name')}", sd),
                                   self.dz.artist_top(ra["id"], 2), cap, 1)
 
-    def listenbrainz_similar(self, cap):
-        seeds = self.liked_seeds if self.liked_seeds is not None else self.seed_tracks(self.cfg["harvest"]["seed_recordings"])
-        per = max(2, cap // max(1, len(seeds))) if self.liked_seeds is None else self.cfg["harvest"]["broad_lb_per_seed"]
-        for a, t in seeds:
-            if self._st("listenbrainz_similar")["new"] >= cap:
+    def deezer_style_search(self, cap):
+        """Deezer playlists named after the listener's top styles (ADR 0013): for each of the
+        harvest.style_search_styles styles, the harvest.style_search_playlists playlists with the most fans among
+        the first search results, up to PLAYLIST_TRACKS new tracks each, at most cap / styles per style."""
+        src = "deezer_style_search"
+        h = self.cfg["harvest"]
+        names = top_style_names(self.con, self.cfg, h["style_search_styles"])
+        if not names:
+            log.info("%s: no styles to search (no liked song has a style vector yet)", src)
+            return
+        per_style = max(1, cap // len(names))
+        for name in names:
+            if self._st(src)["new"] >= cap:
                 break
-            mbid, sims = self.lb.similar_for(a, t)
+            found = [p for p in self.dz.search_playlist(name, PLAYLISTS_CONSIDERED) if p.get("id")]
+            lists = [p for p in (self.dz.playlist(x["id"]) for x in found) if p]
+            lists.sort(key=lambda p: -(p.get("fans") or 0))
+            got = 0
+            for p in lists[:h["style_search_playlists"]]:
+                if got >= per_style or self._st(src)["new"] >= cap:
+                    break
+                tracks = (p.get("tracks") or {}).get("data") or []
+                got += self._feed(src, f"style/{name}/playlist/{p['id']}", tracks, cap,
+                                  min(PLAYLIST_TRACKS, per_style - got))
+
+    def listenbrainz_similar(self, cap):
+        src = "listenbrainz_similar"
+        seeds = self.liked_seeds if self.liked_seeds is not None else \
+            self.seed_tracks(self.cfg["harvest"]["seed_recordings"], src)
+        per = max(2, cap // max(1, len(seeds))) if self.liked_seeds is None else self.cfg["harvest"]["broad_lb_per_seed"]
+        for sd in seeds:
+            if self._st(src)["new"] >= cap:
+                break
+            mbid, sims = self.lb.similar_for(sd.artist, sd.title)
+            self.seeded(src, sd)
             got = 0
             for s in sorted(sims, key=lambda x: -x.get("score", 0))[:per * 3]:
-                if got >= per or self._st("listenbrainz_similar")["new"] >= cap:
+                if got >= per or self._st(src)["new"] >= cap:
                     break
                 dz = self._deezer_lookup(s.get("artist_credit_name", ""), s.get("recording_name", ""))
                 if dz:
-                    got += self.offer("listenbrainz_similar", f"similar-to {mbid} ({a} - {t})", dz,
+                    got += self.offer(src, with_seed(f"similar-to {mbid} ({sd.artist} - {sd.title})", sd), dz,
                                       mbid=s.get("recording_mbid"))
 
     def _deezer_lookup(self, artist: str, title: str) -> dict | None:
@@ -356,22 +554,35 @@ class Harvester:
         retried = self.retry_errors() if retry else {"skipped": True}
         styles = self.backfill_styles(h["style_backfill_per_run"]) if retry else {"skipped": True}
         readings = self._readings_backfill(h.get("traits_backfill_per_run", 150)) if retry else {"skipped": True}
-        cap = cap or h["max_new_per_source"]
         sources = [s for s in (sources or h["sources"]) if s not in h.get("retired_sources", [])]
+        caps = self.caps(sources, cap)
+        self.con.execute("DELETE FROM harvest_seeds WHERE at < ?", (_since(SEED_KEEP_DAYS),))
         for s in sources:
             fn = getattr(self, s, None)
-            if fn is None:
+            if fn is None or s.startswith("_"):
                 log.warning("unknown source %s", s); continue
             self._st(s)
             try:
-                fn(cap)
+                fn(caps[s]["cap"])
             except (DeezerError, Exception) as e:  # noqa: BLE001 - one bad source must not stop the others
                 self._st(s)["errors"] += 1
                 log.exception("source %s failed: %r", s, e)
             log.info("source %s: %s", s, self.stats[s])
-        return {"per_source": self.stats, "retry_previous_errors": retried, "style_backfill": styles,
+        return {"per_source": self.stats, "caps": caps, "retry_previous_errors": retried, "style_backfill": styles,
                 "readings_backfill": readings, "deezer_requests": self.dz.requests,
                 "listenbrainz_requests": self.lb.requests}
+
+    def caps(self, sources: list[str], cap: int | None = None) -> dict[str, dict]:
+        """This run's cap per source: `--limit-per-source` as given; otherwise each source's own, scaled by its kept
+        rate (ADR 0013), except that in broad mode the seeded sources get harvest.broad_max_new_per_source (their
+        per-seed limits do the limiting)."""
+        if cap:
+            return {s: {"cap": cap, "why": "--limit-per-source"} for s in sources}
+        out = source_stats.caps(self.cfg, sources, source_stats.rates(self.con))
+        if self.seeds is not None or self.liked_seeds is not None:
+            for s in set(out) & set(SEEDED_SOURCES):
+                out[s] = {"cap": self.cfg["harvest"]["broad_max_new_per_source"], "why": "broad"}
+        return out
 
     def _readings_backfill(self, limit: int) -> dict:
         """Readings for stored previews (Discoveries and liked songs first); skipped while the models are missing."""

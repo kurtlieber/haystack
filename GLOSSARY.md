@@ -78,6 +78,14 @@ _Avoid_: wishlist, download list
 
 ### Picking
 
+**Seed**:
+A track a harvest source starts from to find candidates: a song the listener rated 4★ or 5★ or a discovery they kept lately, another liked song, or a file in their music library.
+_Avoid_: positive (the songs a candidate is scored against), source (where a candidate came from)
+
+**Kept rate**:
+The share of decided Discoveries picks the listener kept (a Rating of 3★ or more, or liked with no Rating), by source or by seed. A source's harvest cap follows it.
+_Avoid_: like rate (liked over decided, without the Ratings), hit rate
+
 **Confidence**:
 The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). Only a top pick of a re-ranked batch has one; a client may show it as a percentage.
 _Avoid_: score (the similarity the picks start from), match, certainty

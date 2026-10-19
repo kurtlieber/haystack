@@ -253,6 +253,8 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     known |= {r[0] for r in con.execute("SELECT spotify_id FROM local_tracks WHERE present=1 AND spotify_id IS NOT NULL")}
     active_artists = {r[0] for r in con.execute(
         "SELECT c.artist_key FROM offers o JOIN candidates c ON c.id=o.candidate_id WHERE o.removed_at IS NULL")}
+    chart = frozenset(cfg["harvest"]["chart_sources"])
+    max_chart = int(cfg["harvest"]["chart_max_share"] * size + 1e-9)    # chart picks per batch (ADR 0013)
     chosen: list[Pick] = []
     attempts = 0
     while len(chosen) < size and rows and attempts < size * b["map_attempts_factor"]:
@@ -264,7 +266,8 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
         frac = max(0.0, (round(size * fraction) - explore_have) / need) if need else 0
         picks = select_batch(pool, need, frac, tuple(b["explore_band"]), b["max_per_artist"], active_artists, rng,
                              taken=chosen, vectors=unit, diversity=b["diversity"],
-                             max_style_share=b["max_style_share"], max_per_nearest=b["max_per_nearest"])
+                             max_style_share=b["max_style_share"], max_per_nearest=b["max_per_nearest"],
+                             chart_sources=chart, max_chart=max_chart)
         if not picks:
             break
         for p in picks:

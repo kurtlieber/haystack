@@ -212,7 +212,8 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
                  band: tuple[float, float] = (0.4, 0.75), max_per_artist: int = 1,
                  exclude_artists: set[str] | None = None, rng: random.Random | None = None, *,
                  taken: list[Pick] = (), vectors: dict[int, np.ndarray] | None = None, diversity: float = 0.0,
-                 max_style_share: float = 1.0, max_per_nearest: int = 0) -> list[Pick]:
+                 max_style_share: float = 1.0, max_per_nearest: int = 0,
+                 chart_sources: frozenset[str] = frozenset(), max_chart: int | None = None) -> list[Pick]:
     """Top-scored picks plus ~explore_fraction mid-similarity picks, at most max_per_artist per artist (ADR 0010).
     taken: picks already in this batch (an earlier round); they count toward every cap and the diversity.
     diversity: after each pick the remaining top picks are re-ranked by
@@ -220,14 +221,16 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
       with vectors {candidate id: unit vector}; a candidate without one is never marked down. 0 = by score alone.
     max_style_share: at most this share of the batch's top (exploit) picks may share a top-1 style (Pick.style;
       None is unconstrained). max_per_nearest: at most this many picks may share a nearest positive (0 = no cap).
+    max_chart: at most this many picks (taken included) from chart_sources (ADR 0013); None = no cap.
     The exploration band is drawn by score; the top picks are taken by Pick.rank where the re-ranker set one
     (ADR 0011), else by score.
     The caps give way when they would leave the batch short: the rest is filled without the style cap, then
-    without either."""
+    without either. The artist and chart caps never give way."""
     rng = rng or random.Random()
     counts: dict[str, int] = {a: max_per_artist for a in (exclude_artists or ())}
     near: Counter = Counter()
     styles: Counter = Counter()
+    charts = [0]
     ranked = sorted(pool, key=lambda p: p.score, reverse=True)
     top = sorted(pool, key=order_key, reverse=True)
     n = len(ranked)
@@ -241,6 +244,8 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
     def ok(p, explore):
         if p.cand_id in chosen_ids or counts.get(p.artist_key, 0) >= max_per_artist:
             return False
+        if max_chart is not None and p.source in chart_sources and charts[0] >= max_chart:
+            return False
         if caps and max_per_nearest and p.nearest is not None and near[p.nearest] >= max_per_nearest:
             return False
         return caps < 2 or explore or style_cap is None or p.style is None or styles[p.style] < style_cap
@@ -251,6 +256,8 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
             near[p.nearest] += 1
         if not p.exploration and p.style is not None:
             styles[p.style] += 1
+        if p.source in chart_sources:
+            charts[0] += 1
 
     def take(p, explore):
         q = replace(p, exploration=explore)

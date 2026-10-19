@@ -6,7 +6,8 @@ into an issue without showing anyone's taste. The offer columns:
 - judged: decided, leaving out tracks that went unplayed and have no verdict (no signal either way).
 - kept: the track's current verdict is a Rating of 3 stars or more, or it has no verdict and the offer closed as
   liked.
-- liked/decided: the `haystack sources` like rate (outcome liked, over decided)."""
+- liked/decided: outcome liked, over decided (the like rate in status.json). `haystack sources` shows
+  kept/decided, the rate adaptive caps use (sources.py)."""
 from __future__ import annotations
 
 from collections import Counter
@@ -28,11 +29,12 @@ def _rate(n: int, d: int) -> float | None:
 def offer_rows(con) -> list[dict]:
     cur = verdicts.current(con)
     rows = []
-    for r in con.execute("""SELECT o.spotify_id, o.source, o.exploration, o.outcome, o.batch_id, b.created_at
-                            FROM offers o LEFT JOIN batches b ON b.id = o.batch_id ORDER BY o.id"""):
+    for r in con.execute("""SELECT o.spotify_id, o.candidate_id, o.source, o.exploration, o.outcome, o.batch_id,
+                            b.created_at FROM offers o LEFT JOIN batches b ON b.id = o.batch_id ORDER BY o.id"""):
         v = cur.get(r["spotify_id"])
         decided = r["outcome"] is not None
-        rows.append({"source": r["source"] or "unknown", "exploration": bool(r["exploration"]),
+        rows.append({"source": r["source"] or "unknown", "candidate": r["candidate_id"],
+                     "exploration": bool(r["exploration"]),
                      "batch": r["batch_id"], "batch_at": r["created_at"], "decided": decided,
                      "judged": decided and (r["outcome"] != "unplayed" or v is not None),
                      "kept": decided and (v.keeps_heart if v else r["outcome"] == "liked"),
@@ -181,7 +183,7 @@ def text(r: dict) -> str:
     out += ["Offers",
             "  kept = current verdict a Rating of 3 stars or more, or liked with no verdict",
             "  judged = decided, leaving out unplayed tracks with no verdict",
-            "  liked/dec = the `haystack sources` like rate",
+            "  liked/dec = closed as liked, over decided (the like rate in status.json)",
             f"  {'':30} {'offered':>7} {'decided':>7} {'judged':>6} {'kept':>5} {'kept/dec':>9} {'kept/jdg':>9} "
             f"{'liked/dec':>9}",
             _row("all", o["all"]), _row("exploit", o["exploit"]), _row("exploration", o["exploration"])]
