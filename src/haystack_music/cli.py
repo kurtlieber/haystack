@@ -175,8 +175,18 @@ def _print_clear(c: dict) -> None:
           f"min_age_hours {c.get('min_age_hours')} recent {c.get('recent')} no_penalty {bool(c.get('no_penalty'))}")
 
 
+def _readonly_db():
+    try:
+        return db.connect_readonly()
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return None
+
+
 def cmd_batch(cfg, a) -> int:
     from . import batch
+    if a.plan:
+        return _batch_plan(cfg, a)
     def run(con):
         out = batch.run(con, cfg, size=a.size, dry_run=a.dry_run, force=a.force, variant=a.variant,
                         clear_min_age_hours=a.clear_min_age_hours, clear_recent=a.clear_recent,
@@ -190,6 +200,25 @@ def cmd_batch(cfg, a) -> int:
                       f"{t['artist']} - {t['title']}")
         return out
     return job("batch", run, needs_spotify=True)
+
+
+def _batch_plan(cfg, a) -> int:
+    """batch --plan: no Spotify session, no writes, no runs row (a read-only database connection)."""
+    from . import batch
+    con = _readonly_db()
+    if con is None:
+        return 1
+    out = batch.plan(con, cfg, size=a.size, variant=a.variant)
+    if out["embedding_note"]:
+        print(f"note: {out['embedding_note']} (the weekly batch skips unless --force)")
+    print(f"plan: variant {out['variant']}, {out['positives']} positive rows, {out['pool']} scored in the pool; "
+          f"{out['picked']} picks, {out['exploration']} exploration, {out['unmapped']} unmapped")
+    for t in out["tracks"]:
+        sl = t["sounds_like"]
+        near = f"{sl['artist']} - {sl['title']}" if sl else (t["nearest"] or "-")
+        print(f"  {t['score']:.4f}  {'explore' if t['exploration'] else 'top    '}  {t['source']:22} "
+              f"{t['artist']} - {t['title']}{'' if t['spotify_id'] else '  [unmapped]'}  (nearest: {near})")
+    return 0
 
 
 def cmd_clear(cfg, a) -> int:
@@ -576,7 +605,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("batch", help="weekly: clear Discoveries, then add a batch (needs auth)")
     s.add_argument("--size", type=int)
-    s.add_argument("--dry-run", action="store_true", help="no Spotify writes; prints the clear plan and the would-be picks")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_true", help="no Spotify writes; prints the clear plan and the would-be picks")
+    g.add_argument("--plan", action="store_true",
+                   help="no Spotify calls and no writes (token-free): score in memory and print the would-be picks "
+                        "with their nearest positive; picks not mapped to Spotify yet are marked unmapped")
     s.add_argument("--force", action="store_true", help="run even if the library embedding is incomplete")
     s.add_argument("--variant", choices=["raw", "topk_mean", "centred", "csls", "csls_centred", "genre", "genre_blend"],
                    help="scoring variant for this run (default: configured / last chosen)")

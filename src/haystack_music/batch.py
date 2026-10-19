@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import random
+from dataclasses import replace
 
 from . import db, library, vectors
 from .deezer import Deezer
@@ -87,43 +89,21 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
                                 dry_run=dry_run)
     variant = variant or vectors.active_variant(con, cfg)
     scored = vectors.score_candidates(con, cfg, variant=variant)
-    retired = set(cfg["harvest"].get("retired_sources", []))
-    rows = {r["id"]: r for r in con.execute(
-        "SELECT * FROM candidates WHERE state='pool' AND vector_status='ok' AND score IS NOT NULL "
-        "AND COALESCE(spotify_status,'') != 'not_found'")}
-    rows = {k: v for k, v in rows.items() if v["source"] not in retired}
-    liked_ids = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
-    offered_ids = {r[0] for r in con.execute("SELECT spotify_id FROM offers")}
-    lib_ids = {r[0] for r in con.execute("SELECT spotify_id FROM local_tracks WHERE present=1 AND spotify_id IS NOT NULL")}
-    active_artists = {r[0] for r in con.execute(
-        "SELECT c.artist_key FROM offers o JOIN candidates c ON c.id=o.candidate_id WHERE o.removed_at IS NULL")}
     dz = Deezer(cfg["harvest"]["deezer_min_interval"])
     tol = cfg["matching"]["duration_tolerance"]
-    chosen: list[Pick] = []
-    attempts = 0
-    rng = rng or random.Random()
-    while len(chosen) < size and rows and attempts < size * b["map_attempts_factor"]:
-        pool = [Pick(r["id"], r["artist_key"], r["score"], r["source"]) for r in rows.values()]
-        need = size - len(chosen)
-        explore_have = sum(p.exploration for p in chosen)
-        frac = max(0.0, (round(size * b["exploration_fraction"]) - explore_have) / need) if need else 0
-        picks = select_batch(pool, need, frac, tuple(b["explore_band"]), b["max_per_artist"],
-                             active_artists | {p.artist_key for p in chosen}, rng)
-        if not picks:
-            break
-        for p in picks:
-            attempts += 1
-            c = rows.pop(p.cand_id)
-            sid = c["spotify_id"] or map_to_spotify(con, sp, dz, c, tol)
-            if not sid:
-                con.execute("UPDATE candidates SET spotify_status='not_found' WHERE id=?", (c["id"],)); continue
-            con.execute("UPDATE candidates SET spotify_id=?, spotify_status='ok' WHERE id=?", (sid, c["id"]))
-            if sid in liked_ids or sid in offered_ids or sid in lib_ids:
-                con.execute("UPDATE candidates SET state='excluded', exclude_reason='known on spotify' WHERE id=?", (c["id"],))
-                continue
-            chosen.append(Pick(p.cand_id, p.artist_key, p.score, p.source, p.exploration, sid))
-            if len(chosen) >= size:
-                break
+
+    def resolve(c):
+        sid = c["spotify_id"] or map_to_spotify(con, sp, dz, c, tol)
+        if not sid:
+            con.execute("UPDATE candidates SET spotify_status='not_found' WHERE id=?", (c["id"],))
+            return None
+        con.execute("UPDATE candidates SET spotify_id=?, spotify_status='ok' WHERE id=?", (sid, c["id"]))
+        return sid
+
+    def on_known(c):
+        con.execute("UPDATE candidates SET state='excluded', exclude_reason='known on spotify' WHERE id=?", (c["id"],))
+
+    chosen = select_for_batch(con, cfg, rng, size=size, resolve=resolve, on_known=on_known)
     # final guard: Spotify's own saved-state check
     if chosen:
         saved = sp.library_contains([p.spotify_id for p in chosen])
@@ -152,10 +132,92 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
     return out
 
 
+def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: int | None = None,
+                     scores: dict | None = None, resolve=None, on_known=None) -> list[Pick]:
+    """The batch's selection over the scored pool, shared by `batch` and `batch --plan`. It only reads; the live
+    batch's side effects come in as callbacks.
+    scores: {candidate id: (score, nearest owner)} in place of the stored scores (`--plan` scores in memory).
+    resolve(row) -> Spotify id, or None to drop the candidate (the live batch maps it and records the result).
+    Without resolve a candidate keeps its stored spotify_id, and None means not mapped yet.
+    on_known(row): the candidate's track is already liked, offered or in the library, so it is skipped."""
+    b = cfg["batch"]
+    size = size or b["size"]
+    rng = rng or random.Random()
+    retired = set(cfg["harvest"].get("retired_sources", []))
+    rows = {}
+    for r in con.execute("SELECT * FROM candidates WHERE state='pool' AND vector_status='ok' "
+                         "AND COALESCE(spotify_status,'') != 'not_found'"):
+        r = dict(r)
+        if r["source"] in retired:
+            continue
+        if scores is not None:
+            if r["id"] not in scores:
+                continue
+            r["score"], r["nearest"] = scores[r["id"]]
+        if r["score"] is None or math.isnan(r["score"]):
+            continue
+        rows[r["id"]] = r
+    known = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
+    known |= {r[0] for r in con.execute("SELECT spotify_id FROM offers")}
+    known |= {r[0] for r in con.execute("SELECT spotify_id FROM local_tracks WHERE present=1 AND spotify_id IS NOT NULL")}
+    active_artists = {r[0] for r in con.execute(
+        "SELECT c.artist_key FROM offers o JOIN candidates c ON c.id=o.candidate_id WHERE o.removed_at IS NULL")}
+    chosen: list[Pick] = []
+    attempts = 0
+    while len(chosen) < size and rows and attempts < size * b["map_attempts_factor"]:
+        pool = [Pick(r["id"], r["artist_key"], r["score"], r["source"], nearest=r["nearest"]) for r in rows.values()]
+        need = size - len(chosen)
+        explore_have = sum(p.exploration for p in chosen)
+        frac = max(0.0, (round(size * b["exploration_fraction"]) - explore_have) / need) if need else 0
+        picks = select_batch(pool, need, frac, tuple(b["explore_band"]), b["max_per_artist"],
+                             active_artists | {p.artist_key for p in chosen}, rng)
+        if not picks:
+            break
+        for p in picks:
+            attempts += 1
+            c = rows.pop(p.cand_id)
+            sid = resolve(c) if resolve else c["spotify_id"]
+            if resolve and not sid:
+                continue
+            if sid and sid in known:
+                if on_known:
+                    on_known(c)
+                continue
+            chosen.append(replace(p, spotify_id=sid))
+            if len(chosen) >= size:
+                break
+    return chosen
+
+
+def plan(con, cfg: dict, size: int | None = None, variant: str | None = None,
+         rng: random.Random | None = None) -> dict:
+    """`batch --plan`: the batch's scoring and selection with no Spotify calls and no writes. The pool is scored in
+    memory under the active variant; a pick with no stored Spotify id is marked unmapped (the live batch maps it
+    first and may drop it)."""
+    variant = variant or vectors.active_variant(con, cfg)
+    r = vectors.compute_scores(con, cfg, variant)
+    scores = {}
+    for (cid, _), sc, i in zip(r["rows"], r.get("score", ()), r.get("idx", ())):
+        scores[cid] = (None if math.isnan(sc) else float(sc), r["owners"][int(i)])
+    done, msg, prog = embedding_progress(con, cfg)
+    chosen = select_for_batch(con, cfg, rng, size=size, scores=scores)
+    out = {"plan": True, "variant": variant, "positives": r["n_pos"],
+           "pool": sum(1 for s, _ in scores.values() if s is not None),
+           "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
+           "unmapped": sum(1 for p in chosen if not p.spotify_id), "by_source": {},
+           "embedding": prog, "embedding_note": None if done else msg}
+    for p in chosen:
+        out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
+    out["tracks"] = _describe(con, chosen)
+    return out
+
+
 def _describe(con, chosen: list[Pick]) -> list[dict]:
+    from .review import nearest_label
     out = []
     for p in chosen:
         c = con.execute("SELECT artist, title FROM candidates WHERE id=?", (p.cand_id,)).fetchone()
         out.append(dict(artist=c["artist"], title=c["title"], source=p.source, score=round(p.score, 4),
-                        exploration=p.exploration, spotify_id=p.spotify_id))
+                        exploration=p.exploration, spotify_id=p.spotify_id, nearest=p.nearest,
+                        sounds_like=nearest_label(con, p.nearest)))
     return out
