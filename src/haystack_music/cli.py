@@ -110,6 +110,12 @@ def cmd_library(cfg, a) -> int:
         out = {"scan": library.scan(con, cfg)}
         log.info("scan: %s", out["scan"])
         out["embed"] = library.embed_pending(con, cfg, workers=a.workers, limit=a.limit)
+        try:
+            from . import align
+            out["align"] = align.refit(con, cfg)
+        except Exception as e:  # noqa: BLE001
+            log.exception("preview alignment refit failed; the stored map stays")
+            out["align"] = {"error": repr(e)}
         if _have_auth(cfg):
             from .spotify import Spotify
             from .sync import torip_check
@@ -276,6 +282,47 @@ def cmd_rerank(cfg, a) -> int:
         print(_rerank_line(r))
         return rerank.summary(r)
     return job("rerank", run)
+
+
+def cmd_align(cfg, a) -> int:
+    from . import align
+    if a.action == "show":
+        con = _readonly_db()
+        if con is None:
+            return 1
+        try:
+            s = align.show(con, cfg)
+        except sqlite3.OperationalError:          # a database from before the library tables
+            print("no library yet: no pairs and no alignment")
+            return 0
+        m = s["map"]
+        print(f"scoring.align = {s['mode']}; {s['pairs_now']} pairs now; "
+              + ("the map is used" if s["used"] else "scoring uses the preview vectors as they are"))
+        if m is None:
+            print("no map (the library job fits one once there are enough pairs, or `haystack align fit`)")
+            return 0
+        print(_align_line(m))
+        if s["gate"]:
+            print(f"last eval: {s['gate']['why']} ({s['gate']['at']})")
+        for t in s["tried"][:a.limit] if a.limit else s["tried"]:
+            lam = "-" if t["lam"] is None else t["lam"]
+            print(f"  {t['target']:4}  {t['method']:10}  lambda {lam!s:6}  top1 {t['top1']:.3f}  "
+                  f"top{align.TOP} {t[f'top{align.TOP}']:.3f}")
+        return 0
+
+    def run(con):
+        r = align.fit(con, cfg)
+        print(r["reason"])
+        return r
+    return job("align", run)
+
+
+def _align_line(m: dict) -> str:
+    lam = "" if m["method"] != "ridge" else (" (mean shift)" if m["lam"] is None else f" lambda {m['lam']}")
+    u, cv = m["unaligned"], m["cv"]
+    return (f"{m['method']}{lam}, target the {m['target']} window, {m['n_pairs']} pairs, {m['version']}: "
+            f"self-retrieval top 1 {u['top1']:.3f} -> {cv['top1']:.3f}, top 10 {u['top10']:.3f} -> {cv['top10']:.3f} "
+            f"(cross-validated){'' if m['improved'] else '; not used: no better than unaligned'}")
 
 
 def _rerank_line(r: dict) -> str:
@@ -764,6 +811,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["fit", "show"])
     s.add_argument("--limit", type=int, default=10, help="show: how many weights and past fits")
     s.set_defaults(fn=cmd_rerank)
+
+    s = sub.add_parser("align", help="the preview alignment (ADR 0012): fit the map from preview vectors to the "
+                                     "library's space on the liked songs that have both, or show it")
+    s.add_argument("action", choices=["fit", "show"])
+    s.add_argument("--limit", type=int, default=0, help="show: how many of the tried fits (default all)")
+    s.set_defaults(fn=cmd_align)
 
     s = sub.add_parser("first-batch", help="one-time first real batch + taste sanity check (library OnSuccess hook)")
     _add_clear_args(s)

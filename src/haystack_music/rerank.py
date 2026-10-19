@@ -142,7 +142,7 @@ def _prepare(con, cfg: dict, variant: str, res: dict, labs: list[dict]) -> dict 
                              f"({','.join('?' * len(ch))})", ch):
             meta[r[0]] = dict(r)
     dids = [meta[i]["deezer_id"] for i in ids]
-    vec = vectors.get_deezer_vectors(con, dids)
+    vec = vectors.preview_vectors(con, cfg, dids)
     st = vectors.get_styles(con, dids)
     keep = [j for j, d in enumerate(dids) if d in vec]
     n_pool = sum(1 for j in keep if j < len(pool_ids))
@@ -215,7 +215,7 @@ def _prepare(con, cfg: dict, variant: str, res: dict, labs: list[dict]) -> dict 
             a = _artist(r[0], r[1]) if r else None
         neg_artist.append(a)
     lib = vectors._library_windows(con)
-    pids, pm, _ = vectors.pool_vectors(con)
+    pids, pm, _ = vectors.pool_vectors(con, cfg=cfg)
     space = vectors.build_space(cfg, lib, (pids, pm))
     ref_at = {lab: j for j, lab in enumerate(space.ref_owner or [])}
     return dict(con=con, variant=variant, cfg=cfg, n_pool=n_pool, ids=ids, labs=labs, meta=meta, X=X, S=S, dids=dids,

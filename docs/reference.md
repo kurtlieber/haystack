@@ -36,6 +36,7 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), 1 req / 1.1 s cross-process throttle |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
+| `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
 | `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
@@ -53,7 +54,9 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
   their embedding); mtime is never used. A 22-char **Spotify track ID** in the `MusicBrainz Track Id` tag (some
   rippers write it there) is the primary mapping key, then the ISRC, then a fuzzy match.
 * **Embeddings.** The primary vector is the 512-d track-similarity head; per-window 1280-d means are kept too
-  (float16, same forward pass). A match is scored by the best window.
+  (float16, same forward pass). A match is scored by the best window. A Deezer preview and your own file of the
+  same song land a little apart, so with a library every preview vector is first mapped into the library's space
+  (see **Preview alignment**).
 * **Deezer previews** (see the README's Deezer notice): at most 1 request per 1.1 s across all
   processes; preview audio is held only in memory and piped into ffmpeg, never written to disk (not even a temp
   file); only vectors are kept, locally.
@@ -93,7 +96,8 @@ leading `haystack` while the server is stopped).
 ```
 haystack serve [--no-api]            needle's API plus the scheduled jobs ([schedule]); the container runs this
 haystack auth [--timeout 900]        Spotify sign-in: open the printed URL anywhere, paste back the address
-haystack library scan|embed|update   index / embed / both + To Rip check  [--workers N --limit N]
+haystack library scan|embed|update   index / embed / both + preview alignment refit + To Rip check
+                                              [--workers N --limit N]
 haystack harvest [--sources a,b] [--limit-per-source N]
 haystack score                       re-score the candidate pool
 haystack sync                        hourly job (needs auth)
@@ -107,6 +111,7 @@ haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] 
 haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
                                               offline scoring-variant eval (no Spotify calls); --choose stores its pick
 haystack rerank fit|show [--limit N] fit the second stage on your Verdicts and record it / show the last fit
+haystack align fit|show [--limit N]  fit the preview alignment and store it / show it, its fits and the eval's verdict
 haystack genres [--top 15]           genre makeup of the liked songs (400 Discogs styles)
 haystack harvest --broad [N] [--shard i/N] [--no-retry] [--styles N]   stratified broad harvest
 haystack feedback yes|no ARTIST TITLE [--strength mild|normal|strong] [--note T] [--to-rip]
@@ -232,6 +237,37 @@ objective = "auc"      # or "mean_pct"
 min_verdicts = 15      # kept and turned-down offers each, before the AUC is used
 auc_tie = 0.02
 switch_margin = 0.03
+```
+
+**Preview alignment** (`scoring.align`, ADR 0012). Candidates are Deezer previews, but with a library most of your
+positives are your own files' windows, and the two land a little apart in the embedding space: a preview is often
+nearer the other previews (liked songs without a file, liked discoveries, Rated tracks) than the file of the same
+song. The **pairs** are the liked songs that have both a preview vector and a matched local file. A linear map is
+fitted on them from the preview to the file, `x -> (x - mp) @ M + mt` on L2-normalised vectors: `M` is a ridge fit
+shrunk toward no change (`lambda` from infinity, a pure mean shift, down to 1) or an orthogonal Procrustes rotation,
+and the target is the file's best-matching window or the mean of its windows. They are chosen by 5-fold
+cross-validation on **self-retrieval**: is a held-out pair's own file the nearest (top 1), or among the 10 nearest,
+of the library's files and the other liked songs' previews (mapped by the same fold's map)? The best top 10 wins,
+then the best top 1; ties go to the simpler fit. The map is stored in `embeddings/preview_align.npz` (kv
+`preview_align_version`) and applied to every preview vector before scoring: candidates, positives, negatives, the
+eval's queries and the re-ranker's features. The genre variants' style vectors are left alone, and so are the
+batch's spread rule and the sanity check, which compare previews with previews.
+
+`auto` (default) uses the map when it was fitted on at least `scoring.align_min_pairs` (100) pairs, its
+cross-validated self-retrieval beat the unaligned vectors, and the latest eval did not find it worse. With a map,
+the eval runs twice, aligned and unaligned. The variant is chosen on the aligned run; if, for the variant used, the
+aligned objective (AUC, or the mean percentile on the fallback) is lower by more than its tie, or recall@15 by more
+than one held-out song per seed, the alignment is turned off until the next eval (kv `preview_align_gate`) and the
+choice is made again on the unaligned run. A pinned variant still gets this check at each batch. The eval's
+markdown and `status.json` (`scoring_eval.align`, `scoring_eval.domain`) show both runs side by side, the pairs,
+self-retrieval with and without the map, and the share of the pool's top 100 whose nearest positive is a preview.
+`library update` (daily) refits when there is no map yet or the pair count moved by more than 10 %; too few pairs
+remove the map. `off` never maps. Without a library there are no pairs and no map, and scoring is as before 0.3.1.
+
+```toml
+[scoring]
+align = "auto"         # or "off"
+align_min_pairs = 100
 ```
 
 **Re-ranking** (`[rerank]`, ADR 0011). The score above is stage 1. Once you have judged enough offers, a second

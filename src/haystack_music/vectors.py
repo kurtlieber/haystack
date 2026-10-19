@@ -8,7 +8,7 @@ import warnings
 
 import numpy as np
 
-from . import config, db, embed, verdicts
+from . import align, config, db, embed, verdicts
 from .scoring import (VARIANTS, Space, is_centred, is_csls, l2norm, nearest_positive, negative_excess,
                       negative_penalty, score_variant, style_topk, topk_owner_mean, zblend)
 
@@ -51,6 +51,17 @@ def get_deezer_vectors(con, ids) -> dict[int, np.ndarray]:
         for r in con.execute(q, chunk):
             out[r[0]] = np.frombuffer(r[1], dtype=np.float32)
     return out
+
+
+def preview_vectors(con, cfg: dict, ids) -> dict[int, np.ndarray]:
+    """get_deezer_vectors, mapped to the library's space while the preview alignment is in use (ADR 0012). Every
+    preview vector that is compared with the positives comes through here: candidates, positives and negatives."""
+    vec = get_deezer_vectors(con, ids)
+    a = align.active(con, cfg) if vec else None
+    if a is None:
+        return vec
+    keys = list(vec)
+    return dict(zip(keys, a(np.vstack([vec[k] for k in keys]))))
 
 
 def _library_windows(con) -> tuple[list[int], list[np.ndarray]]:
@@ -163,7 +174,7 @@ def positives_with_stars(con, cfg: dict):
     # liked tracks represented by preview vectors
     rows = con.execute("""SELECT m.spotify_id, m.deezer_id FROM liked_map m JOIN likes l ON l.spotify_id=m.spotify_id
                           WHERE l.removed_at IS NULL AND m.use_local=0 AND m.vector_status='ok'""").fetchall()
-    vec = get_deezer_vectors(con, [r[1] for r in rows])
+    vec = preview_vectors(con, cfg, [r[1] for r in rows])
     for sid, did in rows:
         if did in vec and sid not in covered and not rejected(sid):
             mats.append(vec[did][None, :]); owners.append(f"like:{sid}"); bonus.append(bonus_of(sid, True))
@@ -171,7 +182,7 @@ def positives_with_stars(con, cfg: dict):
     # liked discoveries: the candidate's own preview vector
     rows = con.execute("""SELECT o.spotify_id, c.deezer_id FROM offers o JOIN candidates c ON c.id=o.candidate_id
                           WHERE o.outcome='liked'""").fetchall()
-    vec = get_deezer_vectors(con, [r[1] for r in rows])
+    vec = preview_vectors(con, cfg, [r[1] for r in rows])
     for sid, did in rows:
         if did in vec and sid not in covered and not rejected(sid):
             mats.append(vec[did][None, :]); owners.append(f"discovery:{sid}"); bonus.append(bonus_of(sid, True))
@@ -179,7 +190,7 @@ def positives_with_stars(con, cfg: dict):
     # every other Rated track: its preview vector
     rated = [sid for sid, v in cur.items() if v.kind == "rating" and sid not in covered]
     tv = track_vectors(con, rated)
-    vec = get_deezer_vectors(con, [x["deezer_id"] for x in tv.values()])
+    vec = preview_vectors(con, cfg, [x["deezer_id"] for x in tv.values()])
     for sid in rated:
         t = tv.get(sid)
         if t and t["deezer_id"] in vec:
@@ -192,12 +203,14 @@ def positives_with_stars(con, cfg: dict):
             np.asarray(stars, np.float32))
 
 
-def pool_vectors(con, states=("pool",)) -> tuple[list[int], np.ndarray, list]:
-    """-> (candidate ids, preview matrix, candidate rows) for embedded candidates in `states`."""
+def pool_vectors(con, states=("pool",), cfg: dict | None = None) -> tuple[list[int], np.ndarray, list]:
+    """-> (candidate ids, preview matrix, candidate rows) for embedded candidates in `states`; with cfg, aligned
+    as for scoring (preview_vectors)."""
     q = (f"SELECT * FROM candidates WHERE vector_status='ok' AND state IN ({','.join('?' * len(states))}) "
          "ORDER BY id")
     rows = con.execute(q, list(states)).fetchall()
-    vec = get_deezer_vectors(con, [r["deezer_id"] for r in rows])
+    dids = [r["deezer_id"] for r in rows]
+    vec = get_deezer_vectors(con, dids) if cfg is None else preview_vectors(con, cfg, dids)
     rows = [r for r in rows if r["deezer_id"] in vec]
     m = np.vstack([vec[r["deezer_id"]] for r in rows]).astype(np.float32) if rows else np.zeros((0, 512), np.float32)
     return [r["id"] for r in rows], m, rows
@@ -291,7 +304,7 @@ def negatives(con, cfg: dict) -> list[dict]:
         w = npc["weight_expired"] if r[0] == "negative" else npc["weight_removed"]
         add(r[1], r[1], r[2], f"{r[3]} - {r[4]}", w, "expired_played" if r[0] == "negative" else "removed")
     out = list(by.values())
-    vec = get_deezer_vectors(con, [x["deezer_id"] for x in out])
+    vec = preview_vectors(con, cfg, [x["deezer_id"] for x in out])
     st = get_styles(con, [x["deezer_id"] for x in out])
     res = []
     for x in out:
@@ -357,7 +370,7 @@ def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) ->
     if only_unscored:
         q += " AND c.score IS NULL"
     rows = con.execute(q).fetchall()
-    vec = get_deezer_vectors(con, [r[1] for r in rows])
+    vec = preview_vectors(con, cfg, [r[1] for r in rows])
     rows = [r for r in rows if r[1] in vec]
     if not rows:
         return {"rows": [], "n_pos": len(pos)}
@@ -368,7 +381,7 @@ def compute_scores(con, cfg: dict, variant: str, only_unscored: bool = False) ->
     if variant in ("raw", "centred", "csls", "csls_centred"):
         self_idx = None
         if variant != "raw":
-            pool_ids, pool_m, _ = pool_vectors(con)
+            pool_ids, pool_m, _ = pool_vectors(con, cfg=cfg)
             space = build_space(cfg, _library_windows(con), (pool_ids, pool_m))
             if is_csls(variant):
                 where = {lab: j for j, lab in enumerate(space.ref_owner)}

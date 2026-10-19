@@ -43,6 +43,7 @@ clear_recent = "remove"        # before a batch, tracks added less than a day ag
 
 [scoring]
 variant = "auto"               # or pin one: raw, topk_mean, centred, csls, csls_centred, genre, genre_blend
+align = "auto"                 # map previews into your library's space once 100 liked songs are in both; or "off"
 
 [rerank]
 enabled = true                 # once 40 judged picks teach it more than similarity alone, it orders the batch
