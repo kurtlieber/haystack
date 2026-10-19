@@ -10,6 +10,9 @@ playlist in your Spotify account.
 You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Let one sit
 in Discoveries and it counts as a no. The next week's picks get better.
 
+For a detailed explanation of how haystack works, and what the seven Traits needle shows (tempo, valence,
+energy and the rest) mean, see [How haystack works](docs/how-it-works.md).
+
 haystack is a small server, with no screen of its own. It runs on an always-on machine (a home server, a NAS, a
 cheap VPS) and you set it up once in a single settings file, `config.toml`. Its companion app,
 [needle](#needle), is where you rate songs and play what haystack found.  haystack learns based on

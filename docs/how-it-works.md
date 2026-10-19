@@ -1,0 +1,181 @@
+# How haystack works
+
+This page explains, without the jargon, how haystack decides what to put in your Discoveries playlist, and what
+the seven numbers needle shows for every song mean. You don't need to know anything about audio to follow it.
+(The technical version, with the maths, is in [reference.md](reference.md).)
+
+## The short version
+
+1. haystack **listens** to the songs you love and turns each one into a "sound fingerprint".
+2. Every day it collects **candidates**, songs you probably haven't heard, and fingerprints a 30-second clip
+   of each.
+3. Once a week it picks the candidates whose fingerprints are **closest to your songs**, and puts them in
+   Discoveries.
+4. You listen. What you like, and what you don't, **teaches it** for next week.
+
+There's no genre list, no "people who liked X also liked Y", and no popularity ranking: just how the songs
+sound.
+
+## 1. Listening to the songs you love
+
+haystack starts from the songs it knows you like:
+
+- your Spotify **Liked Songs**,
+- songs you **rate** in needle (a 5-star song counts for more than a 2-star one),
+- and, if you set one up, every song in **your own music folder**.
+
+For each song, an AI model listens to it and produces a long list of numbers that sums up how it sounds:
+its instruments, its rhythm, its production, its mood, the "feel" that makes two songs sound alike even when
+they're in different genres. That list is the song's **fingerprint**. Songs that sound alike have fingerprints
+that are close together.
+
+The model was trained on a huge catalogue of records labelled with their styles, so it's learned to hear the
+difference between, say, shoegaze and dream pop, or deep house and tech house. It doesn't know any titles or
+artists. It only hears sound.
+
+For your own files, haystack listens to nine 30-second slices spread across the song, so a song with a quiet
+intro and a loud chorus gets credit for both.
+
+## 2. Finding candidates
+
+Every day haystack collects new songs to consider from:
+
+- **Deezer**: charts, editorial picks and new releases, plus "artist radio" and related artists starting from
+  artists you like.
+- **ListenBrainz**: an open music database that knows which recordings people tend to listen to together.
+
+These sources only *suggest*. They never decide whether a song is good for you. Each candidate gets
+fingerprinted from its 30-second preview, exactly like your own songs.
+
+## 3. Picking the week's songs
+
+For every candidate, haystack finds the songs of yours it sounds **most** like, and how close they are. That's
+the candidate's score. A song doesn't have to sound like your taste "on average": being close to a few of the
+songs you love is enough. That's how a mostly-jazz listener with a soft spot for 80s synth-pop still gets
+synth-pop. (There are a few ways to measure "close"; on its first batch haystack tests them on your own likes and
+keeps the one that predicts them best.)
+
+Then it fills the batch (15 songs, unless you changed `batch.size`):
+
+- **Most picks are the closest matches.**
+- **About one in five is a deliberate stretch**: a song that's a decent match but not a top one. Without
+  these, haystack would only ever find more of exactly what you already have.
+- **One song per artist**, so one band can't take over the week.
+- **Songs that sound like ones you turned down rank lower.** A Pass or a Dislike in needle, or a discovery you
+  heard and didn't like, pushes down candidates that sound very like it.
+
+## 4. Learning from you
+
+You don't have to do anything special. haystack watches what happens to each discovery:
+
+| You... | haystack hears |
+|---|---|
+| Like it in Spotify (the heart) | **Yes.** It becomes one of "your songs" and shapes future picks. |
+| Rate it in needle | **Yes, this much** (1 to 5 stars), or **no** (Pass), or **really no** (Dislike). |
+| Leave it in Discoveries until the next batch | **No**, played or not: the playlist is meant to be heard. |
+| Remove it from Discoveries yourself | **No.** |
+
+Songs added less than a day before a new batch get a pass, so a late Sunday batch doesn't count against you.
+
+haystack also keeps score of where its good finds come from. `haystack sources` shows the like rate of each
+source, so you can turn off the ones that don't work for you.
+
+## The seven Traits
+
+needle shows seven numbers for every song, called **Traits**. Tempo is the big BPM number at the top of the song
+card. The other six (valence, energy, danceability, acousticness, instrumentalness and loudness) are the scales
+below it. If you remember Spotify's old "audio features", they're the same
+idea. Spotify no longer offers those to apps like this, so haystack measures its own from the song's 30-second
+preview.
+
+Two things to know first:
+
+- **Traits describe a song; they don't pick it.** Discoveries are chosen by the fingerprint above, which captures
+  far more than seven numbers can. The Traits are there so you can see, at a glance, *how* a song differs from
+  what you usually like.
+- **They're estimates.** An AI model makes an educated guess from a 30-second clip. A song that changes a lot
+  after its first minute may not match its numbers. Songs with no Deezer preview have no Traits.
+
+needle compares each song with your **Baseline** (the typical value across the songs you like, weighted by your
+ratings) and your **usual range** (the middle half of your songs). When a song falls outside your usual range,
+needle says so in a short sentence, such as "Slower, darker and more instrumental than you usually like."
+
+### Tempo
+
+**How fast the beat is**, in beats per minute (BPM): the speed you'd tap your foot or nod your head to. It's the
+large number on needle's song card, with your own typical tempo ("Yours: …") under it.
+
+- 60 to 80: slow ballads, a lot of ambient and soul.
+- 85 to 100: most hip-hop, a relaxed groove.
+- 120 to 130: house and most dance pop.
+- 160 to 180: drum & bass, a lot of punk.
+
+Fast music isn't always *energetic* (see Energy), and slow music isn't always sad. Tempo is just the speed of
+the pulse. Measuring it is tricky because a beat can be counted at half or double speed; haystack counts the way
+people do, so drum & bass reads 170, not 85.
+
+### Valence
+
+**How happy or sad a song sounds**, from 0 (sad, dark, tense) to 1 (happy, bright, cheerful). needle calls a song
+below your range "darker" and one above it "happier".
+
+Valence is about the *sound*, not the lyrics: major keys, bright chords and bouncy rhythms read high, minor keys
+and brooding textures read low. A breakup song with a sunny, upbeat arrangement can score high. A gentle song in a
+minor key scores low even if its words are hopeful.
+
+### Energy
+
+**How intense a song feels**, from 0 (calm, soft, still) to 1 (intense, driving, loud and busy). needle says
+"calmer" or "more intense".
+
+Think of how a song makes your body feel: a solo piano piece sits near 0, a metal track or a festival anthem near
+1. Energy and valence together place a song's mood: high energy plus high valence is euphoric, high energy plus low
+valence is angry or tense, low energy plus high valence is content, and low energy plus low valence is melancholy.
+
+### Danceability
+
+**How easy a song is to dance to**, from 0 (loose) to 1 (danceable). needle says "looser" or "more danceable".
+
+It mostly hears how steady and strong the beat is, and how regular the rhythm. Disco, house and funk score high.
+Free jazz, rubato piano and songs that keep changing tempo score low. It's not a judgement of quality, and a
+song can be very energetic without being danceable (a lot of punk), or danceable without being energetic (a slow
+groove).
+
+### Acousticness
+
+**Acoustic or electronic**, from 0 (electronic: synths, drum machines, heavy production) to 1 (acoustic:
+guitars, piano, strings, voices, played by people in a room). needle says "more electronic" or "more acoustic".
+
+It's the model's confidence that the song is acoustic, not a measure of *how much* of it is. An unplugged folk
+song is near 1, a techno track near 0, and a rock band with lots of distortion and effects is somewhere in the
+middle.
+
+### Instrumentalness
+
+**Vocal or instrumental**, from 0 (someone is singing or rapping) to 1 (no vocals). needle says "more vocal" or
+"more instrumental".
+
+Like acousticness, it's how sure the model is that there's no voice, not the share of the song without one.
+"Ooh"s and "aah"s often count as instrumental. A spoken word sample in an electronic track may or may not.
+
+### Loudness
+
+**How loud the recording itself is**, in LUFS, the unit streaming services use to measure loudness. The scale
+runs below zero: closer to 0 is louder.
+
+- Around -6 to -9: most modern pop, rock and EDM, mastered to sound as loud as possible.
+- Around -10 to -14: a lot of indie, older records, and anything mastered with more room to breathe.
+- -15 and below: classical, jazz and quiet acoustic music.
+
+This is about how the record was made, not your volume knob. Streaming services even out the playback volume,
+but a loud master still tends to sound denser and more compressed, and a quiet one more open and dynamic. needle
+says "quieter" or "louder".
+
+## What haystack doesn't do
+
+- **It doesn't use Spotify's audio**, or Spotify's recommendations. Only your own files and the Deezer previews are
+  analysed, on your own machine.
+- **It doesn't look at popularity.** An obscure B-side and a chart hit get the same chance if they sound right.
+- **It doesn't read lyrics or genre tags** to choose. The fingerprint is all sound.
+- **It doesn't share your taste with anyone.** Your ratings and fingerprints stay in haystack's database on your
+  server.
