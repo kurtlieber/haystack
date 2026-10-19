@@ -52,8 +52,9 @@ fingerprinted from its 30-second preview, exactly like your own songs.
 For every candidate, haystack finds the songs of yours it sounds **most** like, and how close they are. That's
 the candidate's score. A song doesn't have to sound like your taste "on average": being close to a few of the
 songs you love is enough. That's how a mostly-jazz listener with a soft spot for 80s synth-pop still gets
-synth-pop. (There are a few ways to measure "close"; on its first batch haystack tests them on your own likes and
-keeps the one that predicts them best.)
+synth-pop. (There are a few ways to measure "close". haystack tests them on the songs it already offered you,
+keeps the one that best puts the ones you kept above the ones you turned down, and checks again every week; until
+you have turned down enough, it tests them on your own likes.)
 
 Then it fills the batch (15 songs, unless you changed `batch.size`):
 
