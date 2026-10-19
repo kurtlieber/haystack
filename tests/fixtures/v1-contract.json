@@ -27,7 +27,8 @@
   "readings": ["null", {"$map": "number"}], "measure": "string"
  },
  "why": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
-         "similarity": ["number", "null"], "source": "string", "source_label": "string", "exploration": "boolean"},
+         "similarity": ["number", "null"], "source": "string", "source_label": "string", "exploration": "boolean",
+         "band": {"kind": "string", "percentile": ["number", "null"]}},
  "verdict": {"kind": "string", "stars": ["integer", "null"], "given_at": "string"},
  "playlist_summary": {"id": "string", "name": "string", "cover": ["string", "null"], "mine": "boolean",
                       "owner": ["string", "null"], "total": ["integer", "null"], "snapshot_id": ["string", "null"],

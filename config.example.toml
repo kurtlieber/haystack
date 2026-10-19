@@ -37,6 +37,7 @@ to_rip_name = "To Rip"
 [batch]
 size = 15                      # songs per weekly batch
 max_per_artist = 1
+diversity = 0.5                # how much a batch spreads across your styles; 0: the closest matches only
 expiry_days = 14               # an unliked discovery leaves Discoveries after this many days
 clear_recent = "remove"        # before a batch, tracks added less than a day ago: "remove" (no penalty) or "keep"
 

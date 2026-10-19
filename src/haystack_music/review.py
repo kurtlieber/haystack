@@ -131,7 +131,9 @@ class Cards:
         return {"sounds_like": nearest_label(self.con, c["nearest"]),
                 "similarity": round(float(c["raw_cos"]), 2) if c["raw_cos"] is not None else None,
                 "source": c["source"], "source_label": SOURCE_LABELS.get(c["source"], c["source"]),
-                "exploration": bool(offer["exploration"])}
+                "exploration": bool(offer["exploration"]),
+                "band": {"kind": "explore" if offer["exploration"] else "top",
+                         "percentile": offer["score_percentile"]}}
 
     def _styles(self, vec) -> list:
         if vec is None or not self.names:

@@ -191,6 +191,7 @@ The ones people change most:
 | `library.workers`, `library.threads_per_worker` | `6`, `3` | How much CPU the first pass over your music folder gets. On a small VPS, try `1` and `2`. |
 | `batch.expiry_days` | `14` | A discovery you don't like leaves Discoveries after this many days. |
 | `batch.max_per_artist` | `1` | Songs per artist in one batch. |
+| `batch.diversity` | `0.5` | How much a batch spreads across the styles you like. `0` takes the closest matches only. |
 | `spotify.discoveries_name` | `"Discoveries"` | The playlist's name. |
 | `spotify.to_rip` | `false` | Also keep a **To Rip** playlist of songs you rate 3 stars or more that aren't in your music folder, to buy later. |
 | `harvest.listenbrainz_contact` | `""` | Your email or website. ListenBrainz asks API users for one. |

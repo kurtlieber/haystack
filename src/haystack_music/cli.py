@@ -217,18 +217,32 @@ def _batch_plan(cfg, a) -> int:
     con = _readonly_db()
     if con is None:
         return 1
-    out = batch.plan(con, cfg, size=a.size, variant=a.variant)
+    out = batch.plan(con, cfg, size=a.size, variant=a.variant, classes=_style_classes())
     if out["embedding_note"]:
         print(f"note: {out['embedding_note']} (the weekly batch skips unless --force)")
     print(f"plan: variant {out['variant']}{_choice_note(out['variant_choice'])}")
     print(f"plan: {out['positives']} positive rows, {out['pool']} scored in the pool; "
           f"{out['picked']} picks, {out['exploration']} exploration, {out['unmapped']} unmapped")
+    print(f"plan: exploration share {out['exploration_fraction_used']:.2f} ({out['exploration_share']['why']})")
+    s = out["spread"]
+    print(f"plan: at most {s['max_same_style']} of {s['top_picks']} top picks share a style, "
+          f"at most {s['max_same_nearest']} picks share a nearest liked song")
     for t in out["tracks"]:
         sl = t["sounds_like"]
         near = f"{sl['artist']} - {sl['title']}" if sl else (t["nearest"] or "-")
-        print(f"  {t['score']:.4f}  {'explore' if t['exploration'] else 'top    '}  {t['source']:22} "
-              f"{t['artist']} - {t['title']}{'' if t['spotify_id'] else '  [unmapped]'}  (nearest: {near})")
+        pct = "" if t["percentile"] is None else f"p{t['percentile']:.1f}  "
+        print(f"  {t['score']:.4f}  {pct}{'explore' if t['exploration'] else 'top    '}  {t['source']:22} "
+              f"{t['artist']} - {t['title']}{'' if t['spotify_id'] else '  [unmapped]'}  "
+              f"(style: {t['style'] or '-'}; nearest: {near})")
     return 0
+
+
+def _style_classes() -> list[str]:
+    try:
+        from . import embed
+        return embed.style_classes()
+    except Exception:  # noqa: BLE001 - no model metadata yet: styles print by number
+        return []
 
 
 def cmd_report(cfg, a) -> int:
@@ -236,12 +250,7 @@ def cmd_report(cfg, a) -> int:
     con = _readonly_db()
     if con is None:
         return 1
-    try:
-        from . import embed
-        classes = embed.style_classes()
-    except Exception:  # noqa: BLE001 - no model metadata yet: styles print by number
-        classes = []
-    r = report.build(con, cfg, status.read(), classes, tracks=a.tracks)
+    r = report.build(con, cfg, status.read(), _style_classes(), tracks=a.tracks)
     print(json.dumps(r, indent=1, default=str) if a.json else report.text(r), end="\n" if a.json else "")
     return 0
 

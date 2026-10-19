@@ -148,7 +148,9 @@ def test_cli_plan_is_token_free(tmp_path, monkeypatch, capsys):
     a = p.parse_args(["batch", "--plan", "--size", "5"])
     assert cli.cmd_batch(cfg, a) == 0
     out = capsys.readouterr().out
-    assert "plan: variant raw" in out and "5 picks" in out and "(nearest: Liked Artist" in out
+    assert "plan: variant raw" in out and "5 picks" in out and "; nearest: Liked Artist" in out
+    assert "plan: exploration share 0.20 (prior: needs 8 judged offers of each kind)" in out
+    assert "top picks share a style" in out
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "missing.db")
     assert cli.cmd_batch(cfg, a) == 1
     assert not (tmp_path / "missing.db").exists()
@@ -166,3 +168,61 @@ def test_cmd_batch_without_plan_still_runs_the_job(monkeypatch):
     a = SimpleNamespace(plan=False, size=None, dry_run=True, force=False, variant=None, clear_min_age_hours=None,
                         clear_recent=None, no_penalty=None)
     assert cli.cmd_batch({}, a) == 0 and seen == [("batch", True)]
+
+
+def test_live_batch_stores_each_picks_score_percentile(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(batch, "ensure_playlists", lambda *a, **k: {"discoveries": "pl"})
+    monkeypatch.setattr(batch, "clear_discoveries", lambda *a, **k: {})
+    monkeypatch.setattr(batch, "Deezer", lambda *a, **k: None)
+    monkeypatch.setattr(batch, "map_to_spotify", lambda con, sp, dz, c, tol: sid(f"m{c['id']}"))
+    monkeypatch.setattr(batch, "bot_add", lambda *a, **k: "snap")
+    sp = SimpleNamespace(library_contains=lambda ids: {})
+    out = batch.run(con, cfg, sp=sp, force=True, rng=random.Random(5))
+    assert out["picked"] == 15 and out["exploration_fraction_used"] == 0.2
+    assert out["exploration_share"]["why"].startswith("prior")                  # no judged offers yet
+    rows = con.execute("SELECT exploration, score_percentile FROM offers").fetchall()
+    assert len(rows) == 15 and all(0 <= r["score_percentile"] < 100 for r in rows)
+    top = [r["score_percentile"] for r in rows if not r["exploration"]]
+    explore = [r["score_percentile"] for r in rows if r["exploration"]]
+    assert max(top) > 95 and all(40 <= p <= 75 for p in explore)               # explore_band: 40-75 %
+
+
+def _offers(con, batch_id, explore, kept, judged):
+    """`judged` closed offers of one kind in one batch, `kept` of them liked; the rest Disliked."""
+    for i in range(judged):
+        cid = con.execute("SELECT COALESCE(MAX(candidate_id), 1000) + 1 FROM offers").fetchone()[0]
+        con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, exploration, added_at, removed_at, "
+                    "played, outcome) VALUES(?,?,?,?,'x','y',1,?)",
+                    (cid, sid(f"o{cid}"), batch_id, int(explore), "liked" if i < kept else "negative"))
+
+
+def test_exploration_share_follows_the_recent_outcomes(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    assert batch.exploration_share(con, cfg)["fraction"] == 0.2
+    _offers(con, 1, True, 0, 10)                       # an old batch where exploration did badly...
+    _offers(con, 1, False, 10, 10)
+    for b in range(2, 4):                              # ...then two where it did well
+        _offers(con, b, True, 3, 5)
+        _offers(con, b, False, 1, 10)
+    cfg["batch"]["explore_window_batches"] = 2
+    s = batch.exploration_share(con, cfg)
+    assert (s["explore_judged"], s["exploit_judged"], s["batches"]) == (10, 20, 2)
+    assert s["fraction"] == 0.4                        # 0.2 + 0.5 * (0.6 - 0.1) = 0.45, clipped
+    cfg["batch"]["explore_window_batches"] = 8
+    assert batch.exploration_share(con, cfg)["fraction"] == round(0.2 + 0.5 * (6 / 20 - 12 / 30), 3)
+    cfg["batch"]["explore_window_batches"] = 0
+    assert batch.exploration_share(con, cfg) == {"prior": 0.2, "fraction": 0.2, "why": "prior: adaptation off"}
+
+
+def test_plan_reports_the_spread_and_each_picks_band(tmp_path, monkeypatch):
+    con, cfg, path = _world(tmp_path, monkeypatch)
+    out = batch.plan(con, cfg, rng=random.Random(1), classes=[f"Parent---S{i}" for i in range(400)])
+    s = out["spread"]
+    assert s["top_picks"] == 12 and s["max_same_style"] <= 4                  # 40 % of 12, rounded down
+    assert out["exploration_fraction_used"] == 0.2 and out["exploration_share"]["prior"] == 0.2
+    for t in out["tracks"]:
+        assert t["style"].startswith("S") and 0 <= t["percentile"] < 100
+    cfg["batch"].update(diversity=0.0, max_style_share=1.0, max_per_nearest=0)
+    plain = batch.plan(con, cfg, rng=random.Random(1))
+    assert all(t["style"].startswith("style ") for t in plain["tracks"])      # no class names: by number

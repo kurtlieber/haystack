@@ -25,7 +25,7 @@ def _rate(n: int, d: int) -> float | None:
     return round(n / d, 3) if d else None
 
 
-def _offer_rows(con) -> list[dict]:
+def offer_rows(con) -> list[dict]:
     cur = verdicts.current(con)
     rows = []
     for r in con.execute("""SELECT o.spotify_id, o.source, o.exploration, o.outcome, o.batch_id, b.created_at
@@ -50,7 +50,7 @@ def _summary(rows: list[dict]) -> dict:
 
 
 def offers(con) -> dict:
-    rows = _offer_rows(con)
+    rows = offer_rows(con)
     out = {"all": _summary(rows),
            "exploit": _summary([r for r in rows if not r["exploration"]]),
            "exploration": _summary([r for r in rows if r["exploration"]]),

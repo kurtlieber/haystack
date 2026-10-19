@@ -6,6 +6,7 @@ match contribute their Deezer-preview vector."""
 from __future__ import annotations
 
 import random
+from collections import Counter
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -198,28 +199,59 @@ class Pick:
     exploration: bool = False
     spotify_id: str | None = None
     nearest: str | None = None      # owner label of the positive it scored closest to (candidates.nearest)
+    style: int | None = None        # top-1 Discogs style index (None: no style vector)
+    percentile: float | None = None # its score's percentile in the batch's scored pool (offers.score_percentile)
 
 
 def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
                  band: tuple[float, float] = (0.4, 0.75), max_per_artist: int = 1,
-                 exclude_artists: set[str] | None = None, rng: random.Random | None = None) -> list[Pick]:
-    """Top-scored picks plus ~explore_fraction mid-similarity picks, at most max_per_artist per artist."""
+                 exclude_artists: set[str] | None = None, rng: random.Random | None = None, *,
+                 taken: list[Pick] = (), vectors: dict[int, np.ndarray] | None = None, diversity: float = 0.0,
+                 max_style_share: float = 1.0, max_per_nearest: int = 0) -> list[Pick]:
+    """Top-scored picks plus ~explore_fraction mid-similarity picks, at most max_per_artist per artist (ADR 0010).
+    taken: picks already in this batch (an earlier round); they count toward every cap and the diversity.
+    diversity: after each pick the remaining top picks are re-ranked by
+      score - diversity * sd(pool score) * max(0, max cosine to the picks so far),
+      with vectors {candidate id: unit vector}; a candidate without one is never marked down. 0 = by score alone.
+    max_style_share: at most this share of the batch's top (exploit) picks may share a top-1 style (Pick.style;
+      None is unconstrained). max_per_nearest: at most this many picks may share a nearest positive (0 = no cap).
+    The caps give way when they would leave the batch short: the rest is filled without the style cap, then
+    without either."""
     rng = rng or random.Random()
     counts: dict[str, int] = {a: max_per_artist for a in (exclude_artists or ())}
+    near: Counter = Counter()
+    styles: Counter = Counter()
     ranked = sorted(pool, key=lambda p: p.score, reverse=True)
     n = len(ranked)
     n_explore = int(round(size * explore_fraction))
+    n_exploit = len(taken) + size - sum(p.exploration for p in taken) - n_explore
+    style_cap = max(1, int(max_style_share * n_exploit + 1e-9)) if max_style_share < 1 else None
     chosen: list[Pick] = []
     chosen_ids: set[int] = set()
+    caps = 2   # 2: both caps, 1: the nearest cap only, 0: none
 
-    def ok(p):
-        return p.cand_id not in chosen_ids and counts.get(p.artist_key, 0) < max_per_artist
+    def ok(p, explore):
+        if p.cand_id in chosen_ids or counts.get(p.artist_key, 0) >= max_per_artist:
+            return False
+        if caps and max_per_nearest and p.nearest is not None and near[p.nearest] >= max_per_nearest:
+            return False
+        return caps < 2 or explore or style_cap is None or p.style is None or styles[p.style] < style_cap
+
+    def count(p):
+        counts[p.artist_key] = counts.get(p.artist_key, 0) + 1
+        if p.nearest is not None:
+            near[p.nearest] += 1
+        if not p.exploration and p.style is not None:
+            styles[p.style] += 1
 
     def take(p, explore):
-        chosen.append(replace(p, exploration=explore))
+        q = replace(p, exploration=explore)
+        chosen.append(q)
         chosen_ids.add(p.cand_id)
-        counts[p.artist_key] = counts.get(p.artist_key, 0) + 1
+        count(q)
 
+    for p in taken:
+        count(p)
     # exploration first so the exploit pass cannot starve the band of artists
     if n_explore and n:
         lo, hi = int(n * (1 - band[1])), int(n * (1 - band[0]))   # ranks of the percentile band
@@ -228,15 +260,65 @@ def select_batch(pool: list[Pick], size: int, explore_fraction: float = 0.2,
         for p in mid:
             if len([c for c in chosen if c.exploration]) >= n_explore:
                 break
-            if ok(p):
+            if ok(p, True):
                 take(p, True)
-    for p in ranked:
-        if len(chosen) >= size:
-            break
-        if ok(p):
-            take(p, False)
+    diverse = diversity > 0 and bool(vectors) and n > 0
+    if diverse:
+        score = np.array([p.score for p in ranked], np.float64)
+        V = np.zeros((n, len(next(iter(vectors.values())))), np.float32)
+        for j, p in enumerate(ranked):
+            if p.cand_id in vectors:
+                V[j] = vectors[p.cand_id]
+        sim = np.zeros(n, np.float32)
+        lam = diversity * float(score.std())
+        for p in (*taken, *chosen):
+            if p.cand_id in vectors:
+                sim = np.maximum(sim, V @ vectors[p.cand_id])
+
+    def fill():
+        nonlocal sim
+        if not diverse:
+            for p in ranked:
+                if len(chosen) >= size:
+                    break
+                if ok(p, False):
+                    take(p, False)
+            return
+        while len(chosen) < size:
+            for j in np.argsort(-(score - lam * sim), kind="stable"):
+                if ok(ranked[j], False):
+                    take(ranked[j], False)
+                    if ranked[j].cand_id in vectors:
+                        sim = np.maximum(sim, V @ vectors[ranked[j].cand_id])
+                    break
+            else:
+                return
+
+    fill()
+    if len(chosen) < size and style_cap is not None:
+        caps = 1
+        fill()
+    if len(chosen) < size and max_per_nearest:
+        caps = 0
+        fill()
     chosen.sort(key=lambda p: (p.exploration, -p.score))
     return chosen
+
+
+def adapt_exploration(prior: float, explore: tuple[int, int], exploit: tuple[int, int], min_judged: int = 8,
+                      bounds: tuple[float, float] = (0.1, 0.4), gain: float = 0.5) -> dict:
+    """This batch's exploration share (ADR 0010). explore / exploit: (kept, judged) offers of each kind over the
+    recent batches. With at least min_judged on both sides: clip(prior + gain * (rate_explore - rate_exploit),
+    *bounds); otherwise the prior."""
+    (ke, ne), (kx, nx) = explore, exploit
+    rate_e = ke / ne if ne else None
+    rate_x = kx / nx if nx else None
+    out = {"prior": prior, "explore_rate": None if rate_e is None else round(rate_e, 3), "explore_judged": ne,
+           "exploit_rate": None if rate_x is None else round(rate_x, 3), "exploit_judged": nx}
+    if ne < min_judged or nx < min_judged:
+        return out | {"fraction": prior, "why": f"prior: needs {min_judged} judged offers of each kind"}
+    f = min(max(prior + gain * (rate_e - rate_x), bounds[0]), bounds[1])
+    return out | {"fraction": round(f, 3), "why": "moved by the recent kept rates"}
 
 
 def like_rates(offers: list[dict]) -> dict:

@@ -135,8 +135,8 @@ def server(tmp_path):
                     "nearest, raw_cos) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (cid, cid, f"Artist {cid}", f"Track {cid}", "deezer_artist_radio", "offered", "ok", sid(name),
                      "local:5", 0.91))
-        con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, exploration, added_at) VALUES(?,?,1,?,'x')",
-                    (cid, sid(name), explore))
+        con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, exploration, score_percentile, added_at) "
+                    "VALUES(?,?,1,?,?,'x')", (cid, sid(name), explore, 55.0 if explore else 98.5))
         vectors.put_deezer_vector(con, cid, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[cid * 3])
     traits.put(con, 1, ALL_TRAITS)
     for name in ("like1", "like2"):

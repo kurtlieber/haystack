@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS offers (
     id INTEGER PRIMARY KEY,
     candidate_id INTEGER NOT NULL, spotify_id TEXT NOT NULL, batch_id INTEGER,
     source TEXT, score REAL, exploration INTEGER NOT NULL DEFAULT 0,
+    score_percentile REAL,               -- the pick's score percentile in its batch's scored pool (0.2.0+)
     added_at TEXT NOT NULL, removed_at TEXT,
     played INTEGER NOT NULL DEFAULT 0, first_played_at TEXT,
     outcome TEXT                         -- NULL (active) | liked | negative | unplayed | manual_removed
@@ -208,6 +209,7 @@ def _migrate(con) -> None:
     _add_column(con, "deezer_vectors", "style400", "BLOB")       # genre_discogs400 activations, f16
     _add_column(con, "candidates", "neg_penalty", "REAL")         # score drop from the negative penalty
     _add_column(con, "candidates", "nearest_negative", "TEXT")    # the rejected track that set it
+    _add_column(con, "offers", "score_percentile", "REAL")         # the pick's percentile in its batch's pool
     for col in ("album_type", "release_date", "image_url", "image_url_small"):   # needle's track cards
         _add_column(con, "spotify_tracks", col, "TEXT")
 

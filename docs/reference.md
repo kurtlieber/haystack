@@ -35,7 +35,7 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), 1 req / 1.1 s cross-process throttle |
-| `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration), like rates |
+| `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring; the Baseline and usual range |
@@ -230,6 +230,47 @@ auc_tie = 0.02
 switch_margin = 0.03
 ```
 
+**Picking the batch** (ADR 0010). About `batch.exploration_fraction` of the picks are exploration picks, taken at
+random from the `batch.explore_band` (the 40th to 75th score percentile of the pool); the rest are the top picks.
+A batch has at most `batch.max_per_artist` songs per artist, and three rules spread the top picks:
+
+- **Diversity** (`batch.diversity`, 0.5): after each pick, the rest are re-ranked by
+  `score - diversity * sd(pool score) * max(0, max cosine to the picks so far)`. The cosine is between preview
+  vectors centred on the pool (the pool's mean subtracted, then re-normalised): raw preview cosines are all close
+  to 1, so only centred ones tell which songs are alike. A candidate unlike every pick, or with no vector, is not
+  marked down. 0 picks by score alone.
+- **Style cap** (`batch.max_style_share`, 0.4): at most that share of the top picks (rounded down, at least 1) may
+  share a top-1 Discogs style. Exploration picks and candidates with no style vector don't count.
+- **Nearest cap** (`batch.max_per_nearest`, 2): at most that many picks, exploration picks included, may share a
+  nearest positive (`candidates.nearest`), so one liked song can't fill the batch with its neighbours. 0: no cap.
+
+The caps give way when the pool can't fill the batch with them: the rest is filled without the style cap, then
+without either. A pick that fails the Spotify lookup is replaced in a later round, and the picks already made
+count toward the caps and the diversity.
+
+**Exploration share.** `batch.exploration_fraction` (0.2) is the prior. Each batch takes the judged offers of the
+last `batch.explore_window_batches` (8) batches (decided, minus tracks that went unplayed and have no Verdict, as
+`haystack report` counts them) and the share of each kind that was kept. When both kinds have at least
+`batch.explore_min_judged` (8), the batch's share is `prior + 0.5 * (exploration kept rate - top kept rate)`,
+clipped to `batch.exploration_bounds` ([0.1, 0.4]); otherwise the prior. A window or prior of 0 turns this off.
+The batch summary carries `exploration_fraction_used`, `exploration_share` (both rates and counts, and why) and
+`spread` (the most top picks sharing a style, and the most picks sharing a nearest positive). Each offer stores
+its score percentile in the pool its batch was picked from (`offers.score_percentile`), which the API returns in
+a card's `why.band`.
+
+```toml
+[batch]
+diversity = 0.5                  # 0: by score alone
+max_style_share = 0.4            # 1: no style cap
+max_per_nearest = 2              # 0: no cap
+explore_window_batches = 8       # 0: always batch.exploration_fraction
+explore_min_judged = 8
+exploration_bounds = [0.1, 0.4]
+```
+
+With `diversity = 0`, `max_style_share = 1`, `max_per_nearest = 0` and `explore_window_batches = 0` a batch is
+picked exactly as before 0.2.0.
+
 **Embedding guard.** A real batch skips (exit 0, `status.json` job message `skipped: library embedding
 incomplete: ...`) until at least `batch.min_embedded_fraction` (default 0.98) of library files are embedded or
 have given up; positives would be thin otherwise. A skipped batch does not clear Discoveries. `--dry-run` still
@@ -239,8 +280,8 @@ overrides the guard.
 
 **Planning a batch.** `batch --plan` runs the batch's scoring and selection with no Spotify session and a read-only
 database: scores are computed in memory (the stored scores are left alone), and no run is recorded. It prints each
-would-be pick with its score, whether it is an exploration pick, its source, the positive it scored closest to and
-the variant. A candidate with no Spotify id yet is marked `unmapped` instead of being looked up, so the picks can
+would-be pick with its score and score percentile, whether it is an exploration pick, its source, its top-1
+style, the positive it scored closest to and the variant, with the batch's exploration share and spread. A candidate with no Spotify id yet is marked `unmapped` instead of being looked up, so the picks can
 differ from a real batch's only where a lookup would have failed or found a known track, or where Spotify reports a
 pick already saved in Liked Songs (a real batch then drops it). Both paths share one selection function
 (`batch.select_for_batch`), so with the same scores and seed they pick the same candidates. With
