@@ -42,8 +42,11 @@ Ask these together, with the defaults filled in, so they can just say "defaults 
 
 1. **Folder for haystack.** Default `~/haystack`.
 2. **Time zone.** Default: the machine's (`timedatectl show -p Timezone --value`, or `cat /etc/timezone`).
-3. **Music folder?** A folder of `.m4a` files on this machine, or none. If it's a network share, it must be
-   mounted before haystack starts.
+3. **Music folder?** A folder of `.m4a` files on this machine, or none. Tell them haystack treats every song in
+   it as one they like, so it should hold music they love. Other formats are skipped: check what's there with
+   `find <folder> -type f -iname '*.m4a' | wc -l`, and say so if it holds mostly MP3 or FLAC. If it's a network
+   share, it must be mounted before haystack starts. The README's
+   [Your music folder](README.md#your-music-folder-optional) section has the details.
 4. **How many songs per batch, and when?** Default 15 songs, Mondays at 08:00.
 5. **To Rip playlist?** A second playlist of songs they rate 3 stars or more that aren't in their music folder.
    Default off.

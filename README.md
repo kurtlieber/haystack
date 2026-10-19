@@ -18,6 +18,7 @@ your Spotify likes alone.  needle is when you want to get far more granular with
 - [The easiest setup: ask your AI agent](#the-easiest-setup-ask-your-ai-agent)
 - [What you need](#what-you-need)
 - [Install with Docker](#install-with-docker)
+- [Your music folder (optional)](#your-music-folder-optional)
 - [Settings: config.toml](#settings-configtoml)
 - [Day to day](#day-to-day)
 - [needle](#needle)
@@ -46,10 +47,7 @@ Prefer to do it yourself? Read on.
   only shows haystack your last 50 plays, so it checks every hour.
 - **A Spotify account** and a free Spotify developer app (step 2 below), so haystack can manage its playlists.
 - **Optionally, your own music folder** (`.m4a` files). With one, haystack learns your taste from far more songs
-  than your Spotify likes. It only ever reads the folder. The first pass over a big library takes hours of CPU.
-
-  * Note: if you feed haystack your own music folder, it will assume you like *all* the songs in
-    that folder.  Feed accordingly.
+  than your Spotify likes. See [Your music folder](#your-music-folder-optional).
 
 ## Install with Docker
 
@@ -61,9 +59,9 @@ curl -fsSLO https://raw.githubusercontent.com/kurtlieber/haystack/main/compose.y
 curl -fsSL https://raw.githubusercontent.com/kurtlieber/haystack/main/config.example.toml -o config/config.toml
 ```
 
-Open `compose.yaml` and set `TZ` to your time zone (for example `America/New_York`). If you have a music folder,
-uncomment its line there and set `library.root = "/music"` in `config/config.toml`. If `id -u` doesn't print
-`1000`, uncomment `user:` and put your ids there, so the files haystack writes stay yours.
+Open `compose.yaml` and set `TZ` to your time zone (for example `America/New_York`). If `id -u` doesn't print
+`1000`, uncomment `user:` and put your ids there, so the files haystack writes stay yours. If you have a music
+folder, set it up now too: see [Your music folder](#your-music-folder-optional).
 
 **2. Create a Spotify app.** On the [Spotify developer dashboard](https://developer.spotify.com/dashboard), choose
 **Create app**:
@@ -114,6 +112,66 @@ haystack starts collecting candidates right away. Your first Discoveries batch c
 is done; with a music folder, it waits until the folder has been processed. After that, a new batch comes every
 Monday at 08:00, or whenever you set it to.
 
+## Your music folder (optional)
+
+Out of the box, haystack learns your taste from your Spotify Liked Songs and your ratings. If you keep your own
+music files, it can learn from those too, which gives it far more to go on.
+
+**haystack assumes you like every song in the folder.** Point it at music you love, not at everything you own.
+
+**What it reads.** `.m4a` files (AAC or Apple Lossless), in the folder and all its subfolders. Other formats,
+such as MP3 and FLAC, are skipped for now. It only ever reads: it never changes, tags, moves or deletes a file.
+Moving or renaming files later is fine; haystack recognises them by their audio.
+
+**With Docker**, two changes:
+
+1. In `compose.yaml`, uncomment the music line under `volumes:` and put your folder's path on the left. Leave
+   `/music:ro` on the right (`ro` makes it read-only):
+
+   ```yaml
+       volumes:
+         - ./config:/config
+         - ./data:/data
+         - /srv/music:/music:ro        # your music folder : where haystack sees it
+   ```
+
+2. In `config/config.toml`, tell haystack where it sees the folder:
+
+   ```toml
+   [library]
+   root = "/music"
+   ```
+
+Then run `docker compose up -d` (not `restart`: a changed `compose.yaml` needs `up`). The container runs as uid
+1000 (or your `user:`), so that user needs read access to the folder.
+
+**Without Docker**, set `root` to the folder's real path, such as `root = "/srv/music"`.
+
+**The first pass takes a while.** haystack listens to every file once, in nine 30-second slices, and that's
+hours of CPU for a big library. Later passes (daily at 03:15) only look at new and changed files. While it runs:
+
+- `docker compose exec haystack haystack status` shows progress under `library`: `files`, `embedded`,
+  `pending`, and an `eta_minutes` estimate.
+- Discoveries waits until the folder is (almost) fully processed, so your first batch comes after this pass.
+- On a small machine, lower the CPU it takes, then `docker compose restart`:
+
+  ```toml
+  [library]
+  workers = 1              # files processed at once (default 6)
+  threads_per_worker = 2   # threads each (default 3)
+  ```
+
+If you add the folder after haystack's first start, run `docker compose exec haystack haystack library update`
+to start the first pass now rather than at 03:15.
+
+**A disk or network share** must be mounted before haystack starts. If the folder goes missing, or turns up
+empty after haystack has seen songs in it, the library job fails (and alerts, if alerts are on) rather than
+forgetting your songs.
+
+**Matching to Spotify.** For To Rip and for knowing which liked songs you already own, haystack matches files to
+Spotify by ISRC, then by artist, title and length. A Spotify track ID in a file's `MusicBrainz Track Id` tag (some
+rippers put it there) wins over both.
+
 ## Settings: config.toml
 
 Everything haystack does is set in `config/config.toml`. The file you downloaded lists the common settings with
@@ -126,8 +184,8 @@ The ones people change most:
 |---|---|---|
 | `batch.size` | `15` | How many new songs each batch brings. |
 | `schedule.batch` | `"Mon 08:00"` | When a new batch arrives. `"Fri 18:00"`, `"Mon,Thu 08:00"` or `"daily 07:00"` work too, in your `TZ`. |
-| `library.root` | `""` (none) | Your music folder. In Docker this is `"/music"`, mounted in `compose.yaml`. |
-| `library.workers`, `library.threads_per_worker` | `6`, `3` | How much CPU the first pass over your library gets. On a small VPS, try `1` and `2`. |
+| `library.root` | `""` (none) | Your music folder: `"/music"` in Docker. See [Your music folder](#your-music-folder-optional). |
+| `library.workers`, `library.threads_per_worker` | `6`, `3` | How much CPU the first pass over your music folder gets. On a small VPS, try `1` and `2`. |
 | `batch.expiry_days` | `14` | A discovery you don't like leaves Discoveries after this many days. |
 | `batch.max_per_artist` | `1` | Songs per artist in one batch. |
 | `spotify.discoveries_name` | `"Discoveries"` | The playlist's name. |

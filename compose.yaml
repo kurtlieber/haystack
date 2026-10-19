@@ -20,5 +20,6 @@ services:
     volumes:
       - ./config:/config              # config.toml and secrets/
       - ./data:/data                  # the database, embeddings, models and state
-      # Optional: your music folder, read-only. Then set library.root = "/music" in config.toml.
+      # Optional: your music folder (.m4a files), read-only. Then set library.root = "/music" in config.toml.
+      # README.md, "Your music folder", has the details.
       # - /path/to/your/music:/music:ro
