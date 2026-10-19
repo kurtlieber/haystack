@@ -3,7 +3,10 @@
 Defaults live here; ~/.config/haystack/config.toml (optional) overrides any key, e.g.
 
     [batch]
-    size = 20
+    size = 25          # songs per weekly batch (default 15)
+
+HAYSTACK_DATA, HAYSTACK_STATE, HAYSTACK_CONFIG_DIR and HAYSTACK_CONFIG move the directories and the file (the
+container sets them).
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ def _xdg(var: str, default: str) -> Path:
 
 DATA_DIR = Path(os.environ.get("HAYSTACK_DATA") or _xdg("XDG_DATA_HOME", ".local/share") / "haystack")
 STATE_DIR = Path(os.environ.get("HAYSTACK_STATE") or _xdg("XDG_STATE_HOME", ".local/state") / "haystack")
-CONFIG_DIR = _xdg("XDG_CONFIG_HOME", ".config") / "haystack"
+CONFIG_DIR = Path(os.environ.get("HAYSTACK_CONFIG_DIR") or _xdg("XDG_CONFIG_HOME", ".config") / "haystack")
 CONFIG_FILE = Path(os.environ.get("HAYSTACK_CONFIG") or CONFIG_DIR / "config.toml")
 DB_PATH = DATA_DIR / "discovery.db"
 EMB_DIR = DATA_DIR / "embeddings"
@@ -80,7 +83,7 @@ DEFAULTS: dict = {
         "liked_preview_vectors_per_run": 60,
     },
     "batch": {
-        "size": 15,
+        "size": 15,                    # songs per weekly batch (`haystack batch --size N` for one run)
         "exploration_fraction": 0.2,
         "explore_band": [0.40, 0.75],  # score-percentile band the exploration picks come from
         "max_per_artist": 1,
@@ -179,6 +182,15 @@ DEFAULTS: dict = {
         # are on (a VPN's too, e.g. Tailscale's 100.64.0.0/10) and have the host firewall say the same.
         "allow_networks": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"],
         "spotify_writes": True,        # dev only: false = record verdicts but never touch Spotify
+    },
+    # When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",
+    # "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off" (scheduler.py). The systemd units
+    # ignore this: their timers hold the times.
+    "schedule": {
+        "sync": "hourly",
+        "library": "daily 03:15",
+        "harvest": "daily 05:00",
+        "batch": "Mon 08:00",
     },
     # Webhook alerts (alert.py): a JSON POST to the alert-webhook-url secret, with the alert-webhook-key secret
     # (if set) as the bearer token, when a job fails or the Spotify login needs renewing.

@@ -86,3 +86,14 @@ def test_once_a_day(tmp_path, monkeypatch):
     assert alert.once_a_day(con, "k", "2026-10-11")
     assert not alert.once_a_day(con, "k", "2026-10-11")
     assert alert.once_a_day(con, "k", "2026-10-12")
+
+
+def test_job_failure_names_the_log(monkeypatch):
+    monkeypatch.delenv("HAYSTACK_ALERT_DRY_RUN", raising=False)
+    seen = {}
+    def post(url, json, headers, timeout):
+        seen.update(json); return Resp(200)
+    assert alert.job_failure(ON, "harvest", "harvest", 1, "see the log of `haystack serve`",
+                             store=FakeStore(), post=post)
+    assert seen["job"] == "haystack-harvest" and "see the log of `haystack serve`" in seen["message"]
+    assert alert.job_failure(ON, "sync", "sync", 3, "x", store=FakeStore(), post=post) is False

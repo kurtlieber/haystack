@@ -72,12 +72,17 @@ def unit_exit_code(unit: str) -> str:
         return ""
 
 
-def unit_failure(cfg: dict, unit: str, exit_code: str | None = None, **kw) -> bool:
-    """OnFailure= hook. Exit 3 (needs auth) is skipped: the daily auth alert covers it, not every hourly sync."""
-    code = exit_code if exit_code is not None else unit_exit_code(unit)
-    if str(code) == str(EXIT_NEEDS_AUTH):
-        log.info("%s exited %s (needs auth): covered by the daily auth alert", unit, code)
+def job_failure(cfg: dict, job: str, name: str, exit_code, where: str, **kw) -> bool:
+    """A failed job, from a unit's OnFailure= hook or `haystack serve`. Exit 3 (needs auth) is skipped: the daily
+    auth alert covers it, not every hourly sync."""
+    if str(exit_code) == str(EXIT_NEEDS_AUTH):
+        log.info("%s exited %s (needs auth): covered by the daily auth alert", name, exit_code)
         return False
     host = socket.gethostname().split(".")[0]
-    return send(cfg, unit.removesuffix(".service"),
-                f"{unit} failed on {host} (exit {code or '?'}); see journalctl --user -u {unit}", "fail", code, **kw)
+    return send(cfg, job, f"{name} failed on {host} (exit {exit_code or '?'}); {where}", "fail", exit_code, **kw)
+
+
+def unit_failure(cfg: dict, unit: str, exit_code: str | None = None, **kw) -> bool:
+    """OnFailure= hook."""
+    code = exit_code if exit_code is not None else unit_exit_code(unit)
+    return job_failure(cfg, unit.removesuffix(".service"), unit, code, f"see journalctl --user -u {unit}", **kw)
