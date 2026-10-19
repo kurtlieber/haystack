@@ -1,8 +1,9 @@
 # haystack reference
 
 The technical side of haystack: how it works, every command, the scoring details, the two ways to run it,
-secrets, sign-in and alerts. To install and configure it, start with the [README](../README.md). needle's API is
-in [api.md](api.md); the decisions behind the design are in [adr/](adr/).
+secrets, sign-in and alerts. To install and configure it, start with the [README](../README.md). For the same
+ideas without the jargon, see [How haystack works](how-it-works.md). needle's API is in [api.md](api.md); the
+decisions behind the design are in [adr/](adr/).
 
 ## Where things live
 
