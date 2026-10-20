@@ -265,6 +265,22 @@ def _prompt_safe(name: str) -> str:
     return " ".join(name.replace("(", " ").replace(")", " ").replace(":", " ").split())
 
 
+def deezer_lookup(dz: Deezer, artist: str, title: str, tol: float) -> dict | None:
+    """A song named elsewhere, on Deezer by search: the best of the first ten results whose artist and title both
+    match at 0.8 or better, else None (also `haystack llm suggest --dry-run`, ADR 0019)."""
+    if not artist or not title:
+        return None
+    base, _ = split_title(title)
+    q = TrackRef(None, artist, title, None)
+    best = None
+    for c in dz.search(f"{artist} {base}", 10):
+        m = compare(q, TrackRef(None, (c.get("artist") or {}).get("name", ""), c.get("title", ""), c.get("duration")),
+                    tol)
+        if m and m.title_sim >= 0.8 and m.artist_sim >= 0.8 and (best is None or m.title_sim + m.artist_sim > best[0]):
+            best = (m.title_sim + m.artist_sim, c)
+    return best[1] if best else None
+
+
 class Harvester:
     def __init__(self, con, cfg: dict, rng: random.Random | None = None, seeds: list[dict] | None = None,
                  liked_seeds: list[tuple[str, str]] | None = None):
@@ -726,17 +742,7 @@ class Harvester:
         return self._deezer_lookup(artist, title)
 
     def _deezer_lookup(self, artist: str, title: str) -> dict | None:
-        if not artist or not title:
-            return None
-        base, _ = split_title(title)
-        q = TrackRef(None, artist, title, None)
-        best = None
-        for c in self.dz.search(f"{artist} {base}", 10):
-            m = compare(q, TrackRef(None, (c.get("artist") or {}).get("name", ""), c.get("title", ""), c.get("duration")),
-                        self.tol)
-            if m and m.title_sim >= 0.8 and m.artist_sim >= 0.8 and (best is None or m.title_sim + m.artist_sim > best[0]):
-                best = (m.title_sim + m.artist_sim, c)
-        return best[1] if best else None
+        return deezer_lookup(self.dz, artist, title, self.tol)
 
     def retry_errors(self, limit: int = 100) -> dict:
         """Re-embed pool candidates whose preview failed or was interrupted earlier (fresh URL from /track/{id})."""

@@ -1,5 +1,6 @@
 """Secrets: the Spotify app's client id and secret, the Spotify refresh token, needle's API token, the alert
-webhook, and the keys of the optional sources (Last.fm's API key, the ListenBrainz user token).
+webhook, the keys of the optional sources (Last.fm's API key, the ListenBrainz user token) and the optional
+language model's API key (llm-api-key, ADR 0019).
 
 Two backends, `[secrets] backend`:
   files      (the default) one 0600 file per secret in `[secrets] dir` (0700), named as in NAMES. The refresh
@@ -23,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 NAMES = ("spotify-client-id", "spotify-client-secret", "api-token", "alert-webhook-url", "alert-webhook-key",
-         "lastfm-api-key", "listenbrainz-token")
+         "lastfm-api-key", "listenbrainz-token", "llm-api-key")
 TOKEN_FILE = "spotify-token.json"
 REFRESH = "refresh token"
 META = ("issued at", "rotated at", "scopes", "last write check")
@@ -188,7 +189,8 @@ class OnePasswordStore(Store):
                 "alert-webhook-url": (o["alert_item"], o["alert_url_field"]),
                 "alert-webhook-key": (o["alert_item"], o["alert_key_field"]),
                 "lastfm-api-key": (o["lastfm_item"], o["lastfm_field"]),
-                "listenbrainz-token": (o["listenbrainz_item"], o["listenbrainz_field"])}[name]
+                "listenbrainz-token": (o["listenbrainz_item"], o["listenbrainz_field"]),
+                "llm-api-key": (o["llm_item"], o["llm_field"])}[name]
 
     def get(self, name: str) -> str | None:
         item, field = self._ref(name)

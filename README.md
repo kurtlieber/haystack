@@ -238,6 +238,63 @@ preview_fallback = "itunes"
 Sent to Apple: the artist and title of each candidate that has no Deezer preview, at most one request every 3
 seconds.
 
+## Optional: a language model
+
+A language model, the kind of AI behind chat assistants, can't hear a song, but it has read a great deal about
+artists, labels and scenes. haystack can ask one about your songs, but for now only to measure whether that would
+help you: nothing the model says changes your batches yet. It stays off until you turn it on.
+
+`haystack llm judge` asks the model about every song you've already judged, 40 to a request: how likely you are
+to keep each one, and why. Your verdicts stay on your server. haystack compares the answers with them and prints
+how well the model told your yes from your no on its own, how much its answers add to haystack's own re-ranker,
+and what the run cost. `haystack llm judge --dry-run` prints the first request and sends nothing, even while the
+model is off. `haystack llm suggest --dry-run` asks the model for 100 songs you'd probably like and looks each one
+up on Deezer, to count how many are real. It offers none of them.
+
+Sent to the model's provider with each request:
+
+- each song's artist, title, album, year, record label, top three styles, and which source found it;
+- a profile of your taste: the artists you rate and like most, with how many of their songs and their mean
+  stars; the artists of songs you turned down; your top styles; and the usual range of each Trait in your liked
+  songs. The profile sent with a request leaves out that request's songs.
+
+Never sent: audio, your verdicts, Spotify or Deezer ids, anything that identifies your accounts, or your other
+keys.
+
+**With Anthropic's Claude.** Install Anthropic's library with `pip install "haystack-music[llm]"` (the Docker
+image doesn't include it yet), store an API key from Anthropic, and turn the model on:
+
+```sh
+haystack secret set llm-api-key
+```
+
+```toml
+[llm]
+enabled = true
+```
+
+The default model is Claude Opus 5.5, at $4 per million tokens in and $20 per million out (Anthropic's prices on
+2026-10-20). A request for 40 songs is about 3,000 tokens in, and its reply, the model's thinking included, is
+capped at 16,000 tokens out, so 40 songs cost at most about $0.33. Each run prints its tokens and cost. For
+another model, set `model`, and its prices in `price_in_per_mtok` and `price_out_per_mtok`.
+
+**With a model on your own computer.** Any server with an OpenAI-style `/chat/completions` that can answer in a
+JSON schema works, such as Ollama, llama.cpp's server or vLLM. Nothing leaves your network, and no extra library
+is needed:
+
+```toml
+[llm]
+enabled = true
+provider = "openai_compatible"
+base_url = "http://127.0.0.1:11434/v1"    # Ollama on this machine; in Docker, the host's address
+model = "the-model-name"
+price_in_per_mtok = 0
+price_out_per_mtok = 0
+```
+
+If the server asks for a key, store it as `llm-api-key`. In Docker, put `docker compose exec haystack` in front of
+the commands.
+
 ## Settings: config.toml
 
 Everything haystack does is set in `config/config.toml`. The file you downloaded lists the common settings with
@@ -264,6 +321,7 @@ The ones people change most:
 | `harvest.retired_sources` | `[]` | Candidate sources to stop using. `haystack sources` shows how well each one does for you, and by the seed it started from. |
 | `harvest.seed_policy` | `"verdicts"` | Where the harvest starts looking: your 4-5 star Ratings and kept discoveries first, then your liked songs, then your music folder. `"recent"` starts from your most recent liked songs. |
 | `api.allow_networks` | private ranges | Which networks may reach needle's API. Narrow it to your home network and VPN. In Docker, keep `172.16.0.0/12` if needle runs on the same machine. |
+| `llm.enabled` | `false` | Let `haystack llm` ask a language model about your songs. See [Optional: a language model](#optional-a-language-model). |
 | `alert.enabled` | `false` | Send a webhook when a job fails or the Spotify sign-in is running out. Set the `alert-webhook-url` secret first. |
 | `alert.outbox` | `""` | Instead of the webhook, write each alert as a JSON file to this folder, for another program to send on. No secret needed. See [Alerts](docs/reference.md#alerts). |
 

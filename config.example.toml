@@ -27,6 +27,7 @@ op_binary = "op"
 # alert_item = "haystack-alert-webhook"                # fields "url", "key"
 # lastfm_item = "haystack-lastfm"                      # field "credential": the Last.fm API key
 # listenbrainz_item = "haystack-listenbrainz"          # field "credential": your ListenBrainz user token
+# llm_item = "haystack-llm"                            # field "credential": the language model's API key
 
 [spotify]
 # Add this exact URI to your Spotify app's Redirect URIs. Spotify accepts only 127.0.0.1 for loopback.
@@ -102,3 +103,16 @@ allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 enabled = false
 # Or write each alert as a JSON file to a folder that another program sends on (no secret needed):
 # outbox = "~/.local/state/backup-alert/outbox"
+
+[llm]
+# An optional language model (ADR 0019), off until you turn it on. For now only `haystack llm judge` and
+# `haystack llm suggest --dry-run` use it, by hand. What each request sends: README, "Optional: a language model".
+enabled = false
+provider = "anthropic"            # needs pip install "haystack-music[llm]" and the llm-api-key secret
+model = "claude-opus-5-5"
+# provider = "openai_compatible"  # any server with an OpenAI-style /chat/completions: Ollama, llama.cpp, vLLM
+# base_url = "http://127.0.0.1:11434/v1"
+# model = "the-model-name"
+min_profile_tracks = 30           # liked and rated songs needed before a profile is worth sending
+price_in_per_mtok = 4.0           # your model's price in US dollars per million tokens, for the cost line
+price_out_per_mtok = 20.0         # (0 and 0 for a local model)

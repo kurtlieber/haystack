@@ -454,6 +454,91 @@ def cmd_calibrate(cfg, a) -> int:
     return job("calibrate", run, needs_spotify=True)
 
 
+def cmd_llm(cfg, a) -> int:
+    """The optional language model's phase-1 measurements (ADR 0019), by hand and read-only: judge (its chance for
+    every labelled track, blind, against the verdicts) and suggest --dry-run (n songs looked up on Deezer). With
+    --dry-run, judge prints the first request and sends nothing. Nothing is sent while llm.enabled is false."""
+    from . import llm
+    if a.debug:
+        logging.getLogger("haystack_music.llm").setLevel(logging.DEBUG)
+    if a.action == "suggest" and not a.dry_run:
+        print("llm suggest: only --dry-run for now (ADR 0019: a seeds job comes after the measurements)",
+              file=sys.stderr)
+        return 2
+    sending = not (a.action == "judge" and a.dry_run)
+    if sending and not cfg["llm"]["enabled"]:
+        print("llm: llm.enabled is false, so nothing is sent (README, \"Optional: a language model\"); "
+              "`haystack llm judge --dry-run` shows what would be", file=sys.stderr)
+        return 2
+    con = _readonly_db()
+    if con is None:
+        return 1
+    try:
+        provider = llm.make_provider(cfg) if sending else None
+        if a.action == "judge":
+            r = llm.judge(con, cfg, provider, classes=_style_classes(), dry_run=a.dry_run)
+        else:
+            from .deezer import Deezer
+            r = llm.suggest_dry_run(con, cfg, provider, Deezer(cfg["harvest"]["deezer_min_interval"]), a.n,
+                                    classes=_style_classes())
+    except llm.LLMError as e:
+        print(f"llm: {e}", file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps(r, indent=1, default=str))
+    elif a.action == "judge":
+        _print_judge(r, a)
+    else:
+        _print_suggest(r, a)
+    return 0 if r["reason"] is None or a.dry_run else 1
+
+
+def _print_judge(r: dict, a) -> None:
+    head = (f"llm judge: {r['n_labels']} labels ({r['n_pos']} yes, {r['n_neg']} no) and {r['n_soft']} soft, "
+            f"{r['batches']} requests")
+    if a.dry_run:
+        if r["first_request"] is not None:
+            print(f"--- system ---\n{r['system']}\n--- request 1 of {r['batches']} ---\n{r['first_request']}\n---")
+        print(f"{head}; {r['reason']}")
+        return
+    print(f"{head} to {r['provider']} {r['model']}" + (f": {r['reason']}" if r["reason"] else ""))
+    if r["reason"]:
+        return
+    print(f"llm judge: {r['n_missing']} tracks without an answer ({r['refused']} requests refused or cut off)")
+    print(f"llm judge: the chance alone, AUC {r['chance_auc']} over the labels it answered for")
+    lo = r["loo"] or {}
+    if lo.get("reason"):
+        print(f"llm judge: re-ranker: {lo['reason']}")
+    else:
+        gain = "-" if lo["gain"] is None else f"{lo['gain']:+.4f}"
+        print(f"llm judge: re-ranker leave-one-out AUC {lo['without']} without the chance, {lo['with']} with it "
+              f"({gain}), stage 1 {lo['stage1']}, over {lo['n']} labels ({lo['n_pos']} yes, "
+              f"{lo['n_neg']} no; {lo['dropped']} without an answer left out)")
+    m = r["meets"]
+    print(f"llm judge: {r['tokens_in']} tokens in, {r['tokens_out']} out: about ${r['cost_usd']:.2f}")
+    print(f"llm judge: decision rule (AUC >= {m['auc_bar']} or +{m['gain_bar']}): "
+          + ("met, a rerank job is worth building" if m["rerank_job"] else "not met"))
+    if a.tracks:
+        for t in sorted(r["tracks"], key=lambda t: -(t["chance"] if t["chance"] is not None else -1)):
+            ch = "  -  " if t["chance"] is None else f"{t['chance']:.2f}"
+            print(f"  {ch}  {t['kind']:14} {t['sid']}  {t['reason'] or ''}")
+
+
+def _print_suggest(r: dict, a) -> None:
+    print(f"llm suggest: asked {r['provider']} {r['model']} for {r['n']}: {r['returned']} returned"
+          + (f" ({r['reason']})" if r["reason"] else ""))
+    if r["returned"]:
+        print(f"llm suggest: {r['resolved']} on Deezer ({r['resolve_rate']:.0%}), {r['with_preview']} with a preview, "
+              f"{r['known']} already known, {r['new']} new with a preview; "
+              + ("more than 60 % resolve: a seeds job is worth building" if r["meets"] else "60 % or fewer resolve"))
+    print(f"llm suggest: {r['tokens_in']} tokens in, {r['tokens_out']} out: about ${r['cost_usd']:.2f}")
+    if a.tracks:
+        for s in r["suggestions"]:
+            mark = "known" if s["known"] else ("new" if s["deezer"] and s["preview"] else
+                                               ("no preview" if s["deezer"] else "not on Deezer"))
+            print(f"  {mark:13} {s['artist']} - {s['title']}  ({s['why']})")
+
+
 def cmd_feedback(cfg, a) -> int:
     """Old yes/no command, kept as an alias of `verdict` on candidates."""
     from . import feedback, verdicts
@@ -928,6 +1013,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--n", type=int, help="plan: this many picks (default what the queue takes now, else a week's)")
     s.add_argument("--tracks", action="store_true", help="plan: show artist and title")
     s.set_defaults(fn=cmd_calibrate)
+
+    s = sub.add_parser("llm", help="the optional language model (ADR 0019, off until llm.enabled): judge (its "
+                                   "chance for every labelled track, blind, against your verdicts; --dry-run prints "
+                                   "the first request and sends nothing) or suggest --dry-run (songs it names, looked "
+                                   "up on Deezer). Read-only")
+    s.add_argument("action", choices=["judge", "suggest"])
+    s.add_argument("--dry-run", action="store_true", help="judge: send nothing; suggest: offer nothing (required)")
+    s.add_argument("--n", type=int, default=100, help="suggest: how many songs to ask for")
+    s.add_argument("--json", action="store_true", help="the whole result as JSON (track ids included; it stays here)")
+    s.add_argument("--tracks", action="store_true", help="each track's chance and reason, or each suggestion")
+    s.add_argument("--debug", action="store_true", help="log every request and answer")
+    s.set_defaults(fn=cmd_llm)
 
     s = sub.add_parser("align", help="the preview alignment (ADR 0012): fit the map from preview vectors to the "
                                      "library's space on the liked songs that have both, or show it")

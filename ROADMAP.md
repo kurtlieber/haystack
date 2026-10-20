@@ -18,7 +18,7 @@ giving haystack better things to learn from.
 
 ## Now: helping haystack learn faster
 
-haystack 0.5.0 brings this. The Calibrate list shows in needle from needle 0.6.0, the next needle release.
+haystack 0.5.0 and needle 0.6.0 bring this.
 
 **A Calibrate list in needle.** Next to Discoveries and Rate your likes, needle gets a third list: the songs
 haystack can't make its mind up about. Some are close calls near the top of its ranking, and some come from
@@ -84,6 +84,9 @@ the song, and suggests songs worth looking up. haystack fingerprints those sugge
 and drops the ones it can't find. The add-on is off unless you turn it on. It never sends audio or anything about
 your accounts. You choose the provider and set a weekly spending cap, or point it at a model running on your own
 computer, so nothing leaves your network.
+
+haystack 0.7.1 has the test, and you run it by hand. Once you turn the model on, it asks about the songs you've
+already judged, then shows how often the model was right and what that cost. It doesn't touch your batches.
 
 ## Smaller changes
 

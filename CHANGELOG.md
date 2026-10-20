@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/kurtlieber/haystack/compare/v0.7.0...v0.7.1) (2026-10-20)
+
+
+### Features
+
+* **llm:** `haystack llm judge` measures whether an optional language model's knowledge of artists, labels and scenes predicts your verdicts, blind and leave-one-out, against the re-ranker; `haystack llm suggest --dry-run` counts how many of its suggestions are real songs on Deezer. Off by default (`[llm]`, the `llm-api-key` secret, the optional extra `[llm]`); metadata only; providers `anthropic` and `openai_compatible` (ADR 0019) ([aa5d90a](https://github.com/kurtlieber/haystack/commit/aa5d90a845994719b1430aeb43a917a9d2e1af7b))
+
 ## [0.7.0](https://github.com/kurtlieber/haystack/compare/v0.6.0...v0.7.0) (2026-10-20)
 
 
