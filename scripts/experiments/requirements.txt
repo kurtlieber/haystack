@@ -1,0 +1,9 @@
+# For embedding_compare.py, in its own venv (not haystack's): see README.md.
+# CPU wheels: pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio torchvision
+torch>=2.6
+torchaudio>=2.6
+torchvision>=0.21
+# MERT's model code (trust_remote_code) breaks under transformers 5: hidden_states come back empty.
+transformers>=4.50,<5
+muq==0.1.0
+numpy>=1.26
