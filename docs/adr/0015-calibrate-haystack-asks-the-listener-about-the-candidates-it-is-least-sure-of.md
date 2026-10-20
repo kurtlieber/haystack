@@ -22,7 +22,9 @@ needle's card saying why haystack is unsure.
 
 A Calibrate Verdict is an ordinary Verdict. It has the same effects as on a Discoveries pick (a Rating of 3★ or
 more hearts the track, ADR 0002), it is a label for the re-ranker, and it is a query for the eval. A pick stays in
-the pool until its Verdict moves it on, and the batch never offers it.
+the pool until its Verdict moves it on, and the batch never offers it. A pick the listener hearts in Spotify
+without a Verdict is closed too: it is a yes for the re-ranker as a liked offer is, and it waits in Rate your
+likes for its stars rather than in Calibrate.
 
 **Why bands, and nothing below the 50th percentile.** The batch takes its top picks from the top of the pool and
 its exploration picks from the 40th to 75th percentile (ADR 0010). Labels where it draws tell the re-ranker how to

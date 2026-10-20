@@ -199,6 +199,37 @@ def test_top_up_fills_the_queue_and_then_waits_for_the_week(tmp_path, monkeypatc
     assert len({r["spotify_id"] for r in _picks(con)}) == 40
 
 
+def test_a_pick_hearted_in_spotify_is_judged_leaves_calibrate_and_is_a_yes(tmp_path, monkeypatch):
+    from haystack_music import rerank, review
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    calibrate.top_up(con, cfg, FakeSpotify(), FakeDeezer(), random.Random(0))
+    rows = _picks(con)
+    liked, rated = rows[0], rows[1]
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, ?), (?, ?)",
+                (liked["spotify_id"], db.now(), rated["spotify_id"], db.now()))
+    verdicts.record(con, rated["spotify_id"], "rating", 4, queue="calibrate")
+    assert verdicts.judge_picks(con) == 1                       # the heart closes its pick
+    got = {r["id"]: r for r in _picks(con)}
+    assert got[liked["id"]]["judged_at"] == con.execute("SELECT added_at FROM likes WHERE spotify_id=?",
+                                                         (liked["spotify_id"],)).fetchone()[0]
+    assert con.execute("SELECT state FROM candidates WHERE id=?", (liked["candidate_id"],)).fetchone()[0] == "liked"
+    sids, _ = review.calibrate_picks(con)
+    assert liked["spotify_id"] not in sids and rated["spotify_id"] in sids     # it waits in Rate your likes
+    assert liked["spotify_id"] in review.unrated_likes(con)
+    lab = {x["sid"]: x for x in rerank.labels(con, cfg)}[liked["spotify_id"]]
+    assert (lab["y"], lab["w"], lab["kind"], lab["soft"]) == (1, rerank.OUTCOME_WEIGHT, "liked", False)
+    assert calibrate.state(con, cfg)["outstanding"] == 28
+
+
+def test_the_top_up_frees_the_place_of_a_pick_hearted_since(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    cfg["calibrate"]["per_week"] = 60
+    calibrate.top_up(con, cfg, FakeSpotify(), FakeDeezer(), random.Random(0))
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, ?)", (_picks(con)[0]["spotify_id"], db.now()))
+    out = calibrate.top_up(con, cfg, FakeSpotify(), FakeDeezer(), random.Random(0))
+    assert out["picked"] == 1 and out["outstanding"] == 30
+
+
 def test_top_up_skips_unmapped_and_known_tracks(tmp_path, monkeypatch):
     con, cfg, _ = _world(tmp_path, monkeypatch)
     cfg["calibrate"].update(outstanding=10, per_week=10)

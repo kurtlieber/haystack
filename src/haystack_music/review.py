@@ -181,16 +181,20 @@ def discoveries(con) -> tuple[list[str], dict]:
 
 
 def calibrate_picks(con, ts: str | None = None) -> tuple[list[str], dict]:
-    """The Calibrate queue (ADR 0015): every open pick plus the picks judged this ISO week, in pick order.
+    """The Calibrate queue (ADR 0015): every open pick plus the picks judged this ISO week, in pick order. A pick
+    hearted in Spotify with no Verdict waits in Rate your likes for its stars instead.
     -> (track ids, calibrations rows). Empty on a database from before 0.5.0."""
     wk = calibrate.week(ts)
     try:
         rows = con.execute("SELECT * FROM calibrations ORDER BY id").fetchall()
     except Exception:  # noqa: BLE001 - no calibrations table yet
         return [], {}
+    hearted = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL AND spotify_id "
+                                         "NOT IN (SELECT spotify_id FROM verdicts)")}
     sids, picks = [], {}
     for r in rows:
-        if r["spotify_id"] in picks or (r["judged_at"] is not None and calibrate.week(r["judged_at"]) != wk):
+        if r["spotify_id"] in picks or r["spotify_id"] in hearted or (
+                r["judged_at"] is not None and calibrate.week(r["judged_at"]) != wk):
             continue
         sids.append(r["spotify_id"]); picks[r["spotify_id"]] = r
     return sids, picks

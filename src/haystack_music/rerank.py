@@ -51,11 +51,11 @@ def labels(con, cfg: dict | None = None) -> list[dict]:
     Rate your likes queue (those are all liked songs, so they say nothing about yes against no; they still feed
     the star features). The current verdict decides: a Rating of 3 stars or more is a yes weighted by stars, 1-2
     stars, a Pass or a Dislike a no. With no verdict an offer liked is a yes, and one that expired after a play or
-    was removed by hand a no; `unplayed` is not a label. Otherwise, with cfg's rerank.soft_labels, an offered or
-    Calibrate track not in Liked Songs whose latest needle play stopped before rerank.soft_pass_ms without finishing
-    is a soft no
-    (ADR 0016). `at` is when the label was given: the verdict's given_at, the offer's close, or the play. The
-    track needs a candidate row with a preview vector."""
+    was removed by hand a no; `unplayed` is not a label. A Calibrate pick hearted in Spotify is a yes as a liked
+    offer is. Otherwise, with cfg's rerank.soft_labels, an offered or Calibrate track not in Liked Songs whose
+    latest needle play stopped before rerank.soft_pass_ms without finishing is a soft no (ADR 0016). `at` is when
+    the label was given: the verdict's given_at, the offer's close, the heart, or the play. The track needs a
+    candidate row with a preview vector."""
     rr = (cfg or {}).get("rerank", {})
     cur = {r[0]: r for r in con.execute(_CURRENT)}
     offers: dict[str, tuple] = {}
@@ -72,9 +72,9 @@ def labels(con, cfg: dict | None = None) -> list[dict]:
             sid = r[1]
             if sid not in cands or r[0] == (offers.get(sid, (None,))[0] or picked.get(sid)):
                 cands[sid] = (r[0], r[2])                 # the offered (or picked) candidate, else the first one
+    liked = {r[0]: r[1] for r in con.execute("SELECT spotify_id, added_at FROM likes WHERE removed_at IS NULL")}
     short: dict[str, str] = {}
     if rr.get("soft_labels"):
-        liked = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
         quiet = [s for s in sids if s in asked and s not in cur and s not in liked and offers.get(s, (None, None))[1]
                  not in ("liked", "negative", "manual_removed")]
         for ch in _chunks(quiet):
@@ -109,6 +109,8 @@ def labels(con, cfg: dict | None = None) -> list[dict]:
                 y, w, kind = 1, OUTCOME_WEIGHT, "liked"
             elif outcome in ("negative", "manual_removed"):
                 y, w, kind = 0, OUTCOME_WEIGHT, outcome
+            elif sid in picked and sid in liked:
+                y, w, kind, at = 1, OUTCOME_WEIGHT, "liked", liked[sid]
             elif sid in short:
                 y, w, kind, soft, at = 0, rr["soft_pass_weight"], "soft_pass", True, short[sid]
             else:

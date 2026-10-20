@@ -318,7 +318,8 @@ rest of the pool keeps its stage-1 order below them, and exploration picks are s
   The current Verdict decides: a Rating of 3★ or more is a yes, weighted 1.0, 1.25 or 1.5 for 3, 4 or 5★; a
   Rating of 1-2★ is a no of weight 0.75 (to stage 1 it is still a positive: you like the track a little, but it
   is not for the batch); a Pass is a no of 1.0 and a Dislike of 1.5. With no Verdict an offer you liked is a yes,
-  and one that expired after a play or was removed by hand a no, both 1.0; `unplayed` is not a label. Otherwise
+  and one that expired after a play or was removed by hand a no, both 1.0, and a Calibrate pick you hearted in
+  Spotify is a yes of 1.0 as a liked offer is; `unplayed` is not a label. Otherwise
   an offer or Calibrate pick whose latest needle play stopped before `rerank.soft_pass_ms` (30 s) without
   finishing is a **soft no** of weight `rerank.soft_pass_weight` (0.5) (see **Plays**).
 - **Features**, computed the same way for a pool candidate and a labelled track (which is left out of its own
@@ -383,7 +384,8 @@ and the eval.
   `calibrate.per_week` (30) per ISO week. Each pick is mapped to Spotify as a batch pick is (one that can't be
   found is marked `not_found` and the next one tried; one already in Liked Songs is excluded), and stored in
   `calibrations` with its band, percentile, chance, disagreement and the reason the card shows. A pick stays in the
-  pool and never expires; the batch never offers it. Its Verdict moves it on as for an offer.
+  pool and never expires; the batch never offers it. Its Verdict, or a heart in Spotify, moves it on as for an
+  offer; a hearted pick with no Verdict waits in Rate your likes for its stars, not in Calibrate.
 - **Reasons**: `the re-ranker gives it even odds` (chance within 0.15 of 0.5), `the ways haystack measures
   closeness disagree about it` (10 percentile points or more), else `one of the closest calls at the top of the
   ranking` in the top band and `from the part of the ranking the batch rarely reaches` below it.
@@ -532,7 +534,9 @@ verdicts or to Spotify.
   just moving through the queue) is no play and no soft no.
 - **Unrated likes graded by plays** (`scoring.verdicts.unrated_like_plays`): an Unrated like gains a star per
   doubling of its plays (any context) in the last `unrated_like_days` (90) days, at most two:
-  `3 + min(2, floor(log2(1 + plays)))`, so 1 play is 4★ and 3 are 5★. A Rating always stands. This grades the
+  `3 + min(2, floor(log2(1 + plays)))`, so 1 play is 4★ and 3 are 5★. A needle skip (stopped before
+  `rerank.soft_pass_ms` without finishing) is no play. needle plays through Spotify, so a Spotify play of the track
+  within 5 minutes of a needle play is that same play and counts once. A Rating always stands. This grades the
   positives' bonus, the re-ranker's star features, the Baseline's weights and the eval's kept weights. With no
   plays stored an Unrated like is 3★, as before. For this release `haystack eval` also prints each variant's AUC
   and mean percentile without the grading.

@@ -25,7 +25,9 @@ not on what haystack inferred. A long play without a Verdict says little either 
 may be a radio station, a shuffle, or someone else at the speaker. needle knows when it started a track and when it
 stopped, and reports a play once it has run 5 s or reached the end, so moving quickly through the queue is no play.
 So only a needle play can be a soft no. For grading an Unrated like, plays from any context count: there a
-play means the listener chose to hear a song they had already hearted.
+play means the listener chose to hear a song they had already hearted. A needle skip, which would be a soft no
+elsewhere, is not a play there. needle plays through Spotify, so the recently played may report the same listen
+again; a Spotify play of the track within 5 minutes of a needle play is taken as that play and counted once.
 
 **Why a star per doubling, and at most 5★.** Repeat plays of a liked song say a lot at first and little later: the
 tenth play says less than the second. A star per doubling keeps a song on heavy rotation from outweighing a 5★

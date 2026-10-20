@@ -76,7 +76,8 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
             "plays.ms_played"]}}
 ```
 
-- **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):
+- **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
+  or up to 5 when the listener plays it often):
   the weighted mean and the 25th–75th percentile (`lo`, `hi`), or `null` for a Trait with no Readings. Traits:
   `tempo`, `valence`, `energy`, `danceability`, `acousticness`, `instrumentalness`, `loudness`.
 - **`queues.discoveries`**: the latest batch's offers plus any older offer still open, unreviewed first (in batch
@@ -86,7 +87,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   sure about (ADR 0015). Every pick with no Verdict yet, unreviewed first in pick order, then the picks given a
   Verdict this ISO week, with their Verdict. `done` counts those with a Verdict. The server keeps up to 30 open
   and adds at most 30 a week (`calibrate.outstanding`, `calibrate.per_week`). A pick is never also a Discoveries
-  offer.
+  offer. A pick the listener hearts in Spotify with no Verdict leaves this queue for `queues.likes`.
 - **`queues.likes`**: Liked Songs with no Verdict, newest like first.
 - **`playlists`**: every playlist in the listener's library (minus the server's own Discoveries and To Rip), with
   its songs' ids but no cards, plus the current Verdict of every one of those songs that has one, so a client can

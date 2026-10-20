@@ -168,7 +168,8 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     switched INTEGER
 );
 -- the Calibrate queue (ADR 0015): pool candidates needle asks the listener about. The candidate stays in the
--- pool (a Verdict moves it on, as for an offer); judged_at is set when a Verdict for the track arrives.
+-- pool (a Verdict moves it on, as for an offer); judged_at is set when a Verdict for the track arrives, or the
+-- like's time when the listener hearts it in Spotify without one.
 CREATE TABLE IF NOT EXISTS calibrations (
     id INTEGER PRIMARY KEY,
     candidate_id INTEGER NOT NULL, spotify_id TEXT NOT NULL,

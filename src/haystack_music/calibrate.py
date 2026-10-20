@@ -22,7 +22,7 @@ from datetime import datetime
 
 import numpy as np
 
-from . import db
+from . import db, verdicts
 
 log = logging.getLogger("haystack_music.calibrate")
 
@@ -254,6 +254,7 @@ def top_up(con, cfg: dict, sp, dz=None, rng: random.Random | None = None) -> dic
     from .batch import map_to_spotify
     from .deezer import Deezer
     from .sync import upsert_track
+    verdicts.judge_picks(con)                   # picks given a Verdict or a heart since: their places are free
     st = state(con, cfg)
     out = {"picked": 0, "outstanding": st["outstanding"], "by_band": {}, "unmapped": 0, "known": 0}
     if not st["need"]:

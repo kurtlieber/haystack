@@ -117,13 +117,22 @@ def record(con, spotify_id: str, kind: str, stars: int | None = None, *, given_a
 
 
 def judge_picks(con, sids=None, at: str | None = None) -> int:
-    """Mark the open Calibrate picks (ADR 0015) of these tracks judged (default: every open pick with a verdict, the
-    reconcile the state snapshot runs). -> picks marked. A database without the table marks none."""
+    """Mark the open Calibrate picks (ADR 0015) of these tracks judged (default: every open pick with a verdict or a
+    heart, the reconcile the state snapshot and the hourly top-up run). A pick hearted in Spotify with no verdict is
+    judged when it was liked, and its candidate leaves the pool as a liked offer's does. -> picks marked. A database
+    without the table marks none."""
     at = at or db.now()
     try:
         if sids is None:
-            return con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id IN "
-                               "(SELECT spotify_id FROM verdicts)", (at,)).rowcount
+            n = con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id IN "
+                            "(SELECT spotify_id FROM verdicts)", (at,)).rowcount
+            hearted = con.execute("""SELECT k.id, k.candidate_id, COALESCE(l.added_at, ?) FROM calibrations k
+                                     JOIN likes l ON l.spotify_id=k.spotify_id AND l.removed_at IS NULL
+                                     WHERE k.judged_at IS NULL""", (at,)).fetchall()
+            for kid, cid, liked_at in hearted:
+                con.execute("UPDATE calibrations SET judged_at=? WHERE id=?", (liked_at, kid))
+                con.execute("UPDATE candidates SET state='liked' WHERE id=? AND state='pool'", (cid,))
+            return n + len(hearted)
         return sum(con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id=?",
                                (at, s)).rowcount for s in sids)
     except sqlite3.OperationalError:
@@ -237,15 +246,45 @@ def stars_in_sd(cfg: dict) -> bool:
     return not cfg["scoring"]["verdicts"]["star_bonus"]
 
 
+PLAY_MATCH = timedelta(minutes=5)          # a Spotify play this close to a needle play of the track is that play
+
+
+def _at(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
 def like_plays(con, cfg: dict) -> dict[str, int]:
-    """{Spotify id: plays in the last scoring.verdicts.unrated_like_days days}, from any context (Spotify's recently
-    played and needle), for grading Unrated likes (ADR 0016); {} when scoring.verdicts.unrated_like_plays is off."""
+    """{Spotify id: listens in the last scoring.verdicts.unrated_like_days days}, from any context (Spotify's recently
+    played and needle), for grading Unrated likes (ADR 0016); {} when scoring.verdicts.unrated_like_plays is off.
+    A needle play that stopped before rerank.soft_pass_ms without finishing is a skip, not a listen. needle plays
+    through Spotify, so a Spotify play of the track from PLAY_MATCH before a needle play's start to PLAY_MATCH after
+    its end (15 minutes after its start when needle sent no length) is the same listen and counts once."""
     w = cfg["scoring"]["verdicts"]
     if not w.get("unrated_like_plays"):
         return {}
     since = (datetime.now(timezone.utc) - timedelta(days=w["unrated_like_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {r[0]: r[1] for r in con.execute("SELECT spotify_id, COUNT(*) FROM plays WHERE played_at >= ? "
-                                            "GROUP BY spotify_id", (since,))}
+    soft_ms = cfg["rerank"]["soft_pass_ms"]
+    needle: dict[str, list] = {}
+    spotify: dict[str, list] = {}
+    for sid, at, ctx, ms, done in con.execute("SELECT spotify_id, played_at, context, ms_played, completed FROM plays "
+                                              "WHERE played_at >= ? ORDER BY played_at", (since,)):
+        if ctx == "needle":
+            skip = done == 0 and ms is not None and ms < soft_ms
+            needle.setdefault(sid, []).append((_at(at), ms, not skip))
+        else:
+            spotify.setdefault(sid, []).append(_at(at))
+    out = {}
+    for sid in needle.keys() | spotify.keys():
+        rest, n = list(spotify.get(sid, [])), 0
+        for start, ms, listen in needle.get(sid, []):
+            end = start + timedelta(milliseconds=ms if ms is not None else 15 * 60_000) + PLAY_MATCH
+            hit = next((i for i, t in enumerate(rest) if start - PLAY_MATCH <= t <= end), None)
+            if hit is not None:
+                del rest[hit]
+            n += listen
+        if n + len(rest):
+            out[sid] = n + len(rest)
+    return out
 
 
 def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False, plays: int = 0) -> int | None:

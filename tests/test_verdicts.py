@@ -140,6 +140,26 @@ def test_an_unrated_like_gains_a_star_per_doubling_of_its_recent_plays(tmp_path)
     assert verdicts.like_plays(con, cfg) == {} and baseline.liked_weights(con, cfg) == {T1: 3.0, LIKE_ID: 3.0}
 
 
+def test_a_skip_is_no_play_and_a_needle_play_spotify_reports_too_counts_once(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    cfg, con = _cfg(), _con(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    def play(track, minutes_ago, ctx="needle", ms=None, done=None):
+        con.execute("INSERT INTO plays(spotify_id, played_at, context, ms_played, completed) VALUES(?,?,?,?,?)",
+                    (track, (now - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ"), ctx, ms, done))
+    for m in (300, 200, 100):
+        play(T1, m, ms=6000, done=0)                        # three skips at 6 s: soft nos, not listens
+    play(LIKE_ID, 120, ms=240000, done=1)                   # a full needle play ...
+    play(LIKE_ID, 116, ctx="spotify:album:x")               # ... that Spotify reports when it ends: one listen
+    play(LIKE_ID, 60, ctx="spotify:album:x")                # a later Spotify play is another
+    play(DISC_ID, 50, ms=6000, done=0)                      # a skip Spotify reports too: still no listen
+    play(DISC_ID, 49, ctx=None)
+    assert verdicts.like_plays(con, cfg) == {LIKE_ID: 2}
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01')", (T1,))
+    assert verdicts.positive_stars(cfg, None, liked=True, plays=verdicts.like_plays(con, cfg).get(T1, 0)) == 3
+
+
 def test_weights_are_configurable(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("[scoring.verdicts]\nstar_bonus = [0.0, 0.0, 0.01, 0.02, 0.04]\ndislike_strength = 3.0\n")
