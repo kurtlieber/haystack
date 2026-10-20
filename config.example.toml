@@ -79,3 +79,5 @@ allow_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 [alert]
 # A JSON POST to the alert-webhook-url secret when a job fails or the Spotify login needs renewing.
 enabled = false
+# Or write each alert as a JSON file to a folder that another program sends on (no secret needed):
+# outbox = "~/.local/state/backup-alert/outbox"

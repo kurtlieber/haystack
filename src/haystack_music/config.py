@@ -247,9 +247,10 @@ DEFAULTS: dict = {
         "harvest_broad": "Sun 04:00",  # `harvest --broad 150`, weekly (ADR 0013)
         "batch": "Mon 08:00",
     },
-    # Webhook alerts (alert.py): a JSON POST to the alert-webhook-url secret, with the alert-webhook-key secret
-    # (if set) as the bearer token, when a job fails or the Spotify login needs renewing.
-    "alert": {"enabled": False},
+    # Alerts (alert.py) when a job fails or the Spotify login needs renewing: a JSON POST to the alert-webhook-url
+    # secret, with the alert-webhook-key secret (if set) as the bearer token. With `outbox` set to a folder, each
+    # alert is a file there instead, for a collector to send on; no secret is needed.
+    "alert": {"enabled": False, "outbox": ""},
 }
 
 

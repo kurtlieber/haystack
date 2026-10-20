@@ -864,7 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name", nargs="?")
     s.set_defaults(fn=cmd_sources)
 
-    s = sub.add_parser("alert-failure", help="OnFailure= hook: POST a failure alert for UNIT to the webhook")
+    s = sub.add_parser("alert-failure", help="OnFailure= hook: send a failure alert for UNIT (webhook or outbox)")
     s.add_argument("unit")
     s.set_defaults(fn=cmd_alert_failure)
 

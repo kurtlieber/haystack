@@ -1,5 +1,5 @@
 [Unit]
-Description=haystack: failure alert for %i (alert.enabled: a webhook POST)
+Description=haystack: failure alert for %i (alert.enabled: a webhook POST, or a file in alert.outbox)
 
 [Service]
 Type=oneshot
