@@ -209,7 +209,8 @@ auth` run in an SSH session to the server.
 
 ## Working on the code
 
-- Tests: `python -m pytest -q` in a venv with `pip install -e ".[embed,test]"`.
+- Tests: `python -m pytest -q` in a venv with `pip install -e ".[embed,test]"`. They run in empty temporary
+  directories (`tests/conftest.py`), never against an installation.
 - How it fits together, the rules the code keeps (the library is read-only, the Deezer throttle, preview audio
   only in memory) and every command: [docs/reference.md](docs/reference.md). Terms: [GLOSSARY.md](GLOSSARY.md).
   Decisions: [docs/adr/](docs/adr/). needle's API: [docs/api.md](docs/api.md).
