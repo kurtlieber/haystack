@@ -444,7 +444,7 @@ class Harvester:
             self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,))
             return True
         try:
-            traits.store(self.con, did, traits.analyse_preview(self.dz, url, bpm_hint=t.get("bpm")))
+            traits.store(self.con, did, traits.analyse_preview(self.dz, url, bpm_hint=traits.deezer_bpm(self.dz, t)))
             self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
             st["embedded"] += 1
         except Exception as e:  # noqa: BLE001
@@ -462,7 +462,9 @@ class Harvester:
         try:
             x = it.find(artist, title, duration, self.tol)
             if x:
-                traits.store(self.con, did, traits.analyse_preview(it, x["previewUrl"]), provider="itunes")
+                bpm = traits.deezer_bpm(self.dz, {"id": did})     # Deezer has the song, just not its preview
+                traits.store(self.con, did, traits.analyse_preview(it, x["previewUrl"], bpm_hint=bpm),
+                             provider="itunes")
                 self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
         except Exception as e:  # noqa: BLE001 - the candidate stays without a preview, and is asked again later
             log.warning("itunes preview for deezer %s failed: %r", did, e)
@@ -802,6 +804,7 @@ class Harvester:
         retried = self.retry_errors() if retry else {"skipped": True}
         styles = self.backfill_styles(h["style_backfill_per_run"]) if retry else {"skipped": True}
         readings = self._readings_backfill(h.get("traits_backfill_per_run", 150)) if retry else {"skipped": True}
+        tempo = self._retempo() if retry else {"skipped": True}
         sources = [s for s in (sources or h["sources"]) if s not in h.get("retired_sources", [])]
         caps = self.caps(sources, cap)
         self.con.execute("DELETE FROM harvest_seeds WHERE at < ?", (_since(SEED_KEEP_DAYS),))
@@ -819,7 +822,8 @@ class Harvester:
         meta = metadata.backfill(self.con, self.dz, h["metadata_per_run"]) if retry else {"skipped": True}
         elsewhere = self.fallback_backfill() if retry else {"skipped": True}
         return {"per_source": self.stats, "caps": caps, "retry_previous_errors": retried, "style_backfill": styles,
-                "readings_backfill": readings, "metadata_backfill": meta, "preview_fallback": elsewhere,
+                "readings_backfill": readings, "tempo_fold": tempo, "metadata_backfill": meta,
+                "preview_fallback": elsewhere,
                 "deezer_requests": self.dz.requests, "listenbrainz_requests": self.lb.requests,
                 "lastfm_requests": self._lastfm.requests if self._lastfm else 0,
                 "itunes_requests": self._itunes.requests if self._itunes else 0}
@@ -841,3 +845,9 @@ class Harvester:
         if traits.missing_models():
             return {"skipped": f"models missing: {traits.missing_models()} (haystack models fetch)"}
         return traits.backfill(self.con, self.dz, limit)
+
+    def _retempo(self) -> dict:
+        """Drum & bass and jungle tempos folded (traits.retempo); skipped while the models are missing."""
+        if traits.missing_models():
+            return {"skipped": "models missing"}
+        return traits.retempo(self.con)

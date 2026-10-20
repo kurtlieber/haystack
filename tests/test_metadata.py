@@ -72,7 +72,7 @@ def test_the_harvest_keeps_the_album_and_rank_it_already_has(tmp_path, monkeypat
     assert h.offer("src", "detail", {**t, "id": 43, "title": "Another Song", "album": None, "rank": None})
     rows = con.execute("SELECT deezer_id, album_id, deezer_rank, deezer_artist_id FROM candidates ORDER BY deezer_id")
     assert [tuple(r) for r in rows] == [(42, 77, 654321, 9), (43, None, None, 9)]
-    assert h.dz.requests == 0                                        # nothing asked: the track object had it
+    assert h.dz.asked == ["track/42", "track/43"]    # only for the bpm (a list's track objects have none): no album
 
 
 def test_backfill_goes_judged_liked_then_the_pool_oldest_first(con):

@@ -5,8 +5,8 @@
     valence, energy                               deam-msd-musicnn-2 on msd-musicnn-1 embeddings; DEAM's 1-9
                                                   scale mapped to 0-1, energy = arousal
     tempo                                         RhythmExtractor2013 (multifeature), BPM, at 44.1 kHz; Deezer's
-                                                  own bpm when it agrees up to an octave (it counts the way people
-                                                  do: drum & bass at 170, not 85)
+                                                  own bpm when it agrees up to an octave; then drum & bass and
+                                                  jungle are folded into 155-190 (fold_tempo)
     loudness                                      LoudnessEBUR128 integrated loudness, LUFS, stereo 44.1 kHz
 
 Readings are model estimates from a clip, not Spotify's numbers. They are stored per Deezer track, like the
@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS readings (
 );
 """
 
+# Styles counted fast: a 30 s clip of drum & bass or jungle often reads at half its tempo (85: the beat tracker
+# follows the half-time snare) or at two thirds (115: it locks onto a triplet feel), and Deezer has a bpm for only
+# about a third of tracks. When the clip's top genre_discogs400 style is one of these, at FAST_STYLE_MIN or more,
+# the tempo is folded into the style's range (ADR 0001, note of 2026-10-20). Halftime, dubstep, trap and
+# hardcore are left alone: they are played at both levels, so no range is right for all of them.
+FAST_STYLES = {"Electronic---Drum n Bass": (155.0, 190.0), "Electronic---Jungle": (155.0, 190.0)}
+FAST_STYLE_MIN = 0.3        # below it the style guess is too weak (an indie song at 118 read as drum & bass)
+
 _state: dict = {}
 
 
@@ -83,6 +91,30 @@ def reconcile_tempo(estimate: float, deezer_bpm) -> float:
         if abs(estimate * f - hint) <= 0.04 * hint:
             return hint
     return estimate
+
+
+def top_style(style, classes: list[str]) -> tuple[str | None, float]:
+    """The strongest genre_discogs400 style of a clip -> (class name, activation); (None, 0) without one."""
+    if style is None or not len(classes):
+        return None, 0.0
+    s = np.asarray(style, dtype=np.float32).reshape(-1)
+    i = int(np.argmax(s))
+    return (classes[i] if i < len(classes) else None), float(s[i])
+
+
+def fold_tempo(tempo, style_name: str | None, activation: float = 1.0):
+    """A drum & bass or jungle tempo read at half (x2) or at two thirds (x3/2) -> the same tempo counted the way
+    people count these styles (FAST_STYLES); any other tempo or style is kept. Idempotent."""
+    rng = FAST_STYLES.get(style_name or "")
+    if not tempo or rng is None or activation < FAST_STYLE_MIN:
+        return tempo
+    lo, hi = rng
+    if lo <= tempo < hi:
+        return tempo
+    for f in (2.0, 1.5):
+        if lo <= tempo * f < hi:
+            return tempo * f
+    return tempo
 
 
 def finite(readings: dict) -> dict:
@@ -153,9 +185,10 @@ def _models():
 
 # ---------------- measuring ----------------
 
-def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm_hint=None) -> dict:
+def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm_hint=None, style=None) -> dict:
     """The seven Readings of a clip. audio16: mono 16 kHz; stereo44: [n, 2] at 44.1 kHz; backbone: the
-    discogs-effnet-bs64-1 patch embeddings [patches, 1280] the styles already computed."""
+    discogs-effnet-bs64-1 patch embeddings [patches, 1280] the styles already computed; style: the clip's
+    genre_discogs400 activations, for fold_tempo."""
     m = _models()
     out = {}
     emb = np.ascontiguousarray(backbone, dtype=np.float32)
@@ -166,7 +199,11 @@ def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm
     out["valence"], out["energy"] = deam_unit(va[0]), deam_unit(va[1])
     mono = np.ascontiguousarray(stereo44.mean(axis=1), dtype=np.float32)
     bpm, _ticks, confidence, _est, _iv = m["rhythm"](mono)
-    out["tempo"], out["tempo_confidence"] = reconcile_tempo(float(bpm), bpm_hint), float(confidence)
+    tempo = reconcile_tempo(float(bpm), bpm_hint)
+    if style is not None:
+        from . import embed
+        tempo = fold_tempo(tempo, *top_style(style, embed.style_classes()))
+    out["tempo"], out["tempo_confidence"] = tempo, float(confidence)
     _mom, _short, integrated, _range = m["loudness"](np.ascontiguousarray(stereo44, dtype=np.float32))
     out["loudness"] = float(integrated)
     return finite(out)
@@ -190,20 +227,32 @@ def analyse_bytes(data: bytes, style: bool = True, readings: bool = True, bpm_hi
     p = embed.patches(embed.mel_frames(audio))
     e5, e12 = embed.run(p)
     backbone = embed.effnet_embeddings(p) if (style or readings) else None
-    sty = embed.style_from_embeddings(backbone) if style else None
-    r = measure(audio, stereo, backbone, bpm_hint) if readings else None
+    sty = embed.style_from_embeddings(backbone) if (style or readings) else None     # the Readings fold by style
+    r = measure(audio, stereo, backbone, bpm_hint, sty) if readings else None
     return Analysis(e5.mean(0).astype(np.float32), e12.mean(0).astype(np.float32), len(e5), len(audio) / embed.SR,
-                    sty, r)
+                    sty if style else None, r)
 
 
 def analyse_preview(dz, url: str, style: bool = True, readings: bool = True, bpm_hint=None) -> Analysis:
     """Fetch a preview into memory (never to disk) and analyse it; the bytes go out of scope at once.
-    bpm_hint: the Deezer track's own bpm, when the track object has one."""
+    bpm_hint: the Deezer track's own bpm (deezer_bpm)."""
     data = dz.preview_bytes(url)
     try:
         return analyse_bytes(data, style, readings, bpm_hint)
     finally:
         del data
+
+
+def deezer_bpm(dz, t: dict):
+    """A Deezer track's own bpm. Only /track/{id} (and /track/isrc:) carry it: the track objects of a search, an
+    artist's top or radio, a chart or an album have no bpm key, so those cost one more request. None on failure."""
+    if "bpm" in t:
+        return t["bpm"]
+    try:
+        return (dz.track(t["id"]) or {}).get("bpm")
+    except Exception as e:  # noqa: BLE001 - the clip's own estimate is used instead
+        log.warning("bpm for deezer %s failed: %r", t.get("id"), e)
+        return None
 
 
 # ---------------- storage ----------------
@@ -236,6 +285,24 @@ def store(con, deezer_id: int, a: Analysis, provider: str = "deezer") -> None:
     vectors.put_deezer_vector(con, deezer_id, a.e512, a.e1280, a.n_patches, a.seconds, a.style, provider)
     if a.readings:
         put(con, deezer_id, a.readings)
+
+
+def retempo(con) -> dict:
+    """Fold the stored tempo of every reading whose stored style is drum & bass or jungle (fold_tempo): the same
+    result as measuring the preview again, without audio or network. Idempotent; each harvest runs it, so a style
+    stored after its Readings is folded too."""
+    from . import embed
+    classes = embed.style_classes()
+    c = dict(checked=0, folded=0)
+    rows = con.execute("""SELECT r.deezer_id, r.tempo, v.style400 FROM readings r JOIN deezer_vectors v USING(deezer_id)
+                          WHERE r.tempo IS NOT NULL AND v.style400 IS NOT NULL""").fetchall()
+    for did, tempo, blob in rows:
+        c["checked"] += 1
+        new = fold_tempo(tempo, *top_style(np.frombuffer(blob, dtype=np.float16), classes))
+        if new != tempo:
+            con.execute("UPDATE readings SET tempo=? WHERE deezer_id=?", (new, did))
+            c["folded"] += 1
+    return c
 
 
 # ---------------- coverage ----------------
@@ -333,7 +400,7 @@ def measure_track(con, cfg: dict, spotify_id: str, sp=None, dz=None, analyse=Non
     t, found_any, method = find_deezer(dz, ref, cfg["matching"]["duration_tolerance"])
     status = "ok" if t else ("no_preview" if found_any else "not_found")
     if t:
-        store(con, t["id"], analyse(dz, t["preview"], bpm_hint=t.get("bpm")))
+        store(con, t["id"], analyse(dz, t["preview"], bpm_hint=deezer_bpm(dz, t)))    # a search result has none
     con.execute("""INSERT INTO spotify_deezer(spotify_id, deezer_id, status, method, checked_at) VALUES(?,?,?,?,?)
                    ON CONFLICT(spotify_id) DO UPDATE SET deezer_id=excluded.deezer_id, status=excluded.status,
                    method=excluded.method, checked_at=excluded.checked_at""",

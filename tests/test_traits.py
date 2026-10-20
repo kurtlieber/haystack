@@ -121,6 +121,92 @@ def test_tempo_takes_deezers_count_only_when_it_is_the_same_tempo():
     assert traits.reconcile_tempo(90.0, 135) == 135              # 3:2
 
 
+DNB, HOUSE = "Electronic---Drum n Bass", "Electronic---House"
+
+
+def styles(top: str, act: float = 0.8) -> np.ndarray:
+    s = np.zeros(400, np.float32)
+    s[[DNB, HOUSE].index(top)] = act
+    return s
+
+
+@pytest.fixture
+def classes(monkeypatch):
+    from haystack_music import embed
+    names = [DNB, HOUSE] + [f"Other---{i}" for i in range(398)]
+    monkeypatch.setattr(embed, "style_classes", lambda: names)
+    return names
+
+
+def test_drum_and_bass_read_at_half_or_two_thirds_is_folded_into_its_range():
+    assert traits.fold_tempo(87.0, DNB) == 174.0                 # the half-time snare
+    assert traits.fold_tempo(115.1, DNB) == pytest.approx(172.65)  # a triplet feel: 2/3 of the tempo
+    assert traits.fold_tempo(172.3, DNB) == 172.3                # already counted the way people count it
+    assert traits.fold_tempo(140.0, DNB) == 140.0                # no fold lands in range: keep it
+    assert traits.fold_tempo(87.0, "Electronic---Jungle") == 174.0
+    assert traits.fold_tempo(87.0, HOUSE) == 87.0                # any other style keeps its tempo
+    assert traits.fold_tempo(118.1, DNB, 0.21) == 118.1          # too weak a style guess
+    assert traits.fold_tempo(None, DNB) is None
+    assert traits.fold_tempo(traits.fold_tempo(87.0, DNB), DNB) == 174.0    # idempotent
+
+
+def test_top_style_is_the_strongest_class(classes):
+    assert traits.top_style(styles(HOUSE, 0.6), classes) == (HOUSE, pytest.approx(0.6))
+    assert traits.top_style(None, classes) == (None, 0.0)
+
+
+def test_deezers_bpm_costs_a_request_only_when_the_track_object_has_none():
+    class Dz:
+        def __init__(self):
+            self.asked = []
+
+        def track(self, did):
+            self.asked.append(did)
+            if did == 3:
+                raise RuntimeError("synthetic")
+            return {"id": did, "bpm": 174.1}
+
+    dz = Dz()
+    assert traits.deezer_bpm(dz, {"id": 1, "bpm": 0}) == 0       # a /track object: Deezer has no bpm for it
+    assert dz.asked == []
+    assert traits.deezer_bpm(dz, {"id": 2, "title": "from a search"}) == 174.1
+    assert traits.deezer_bpm(dz, {"id": 3}) is None              # failed: the clip's own estimate is used
+    assert dz.asked == [2, 3]
+
+
+def test_a_clip_is_folded_after_deezers_bpm_is_reconciled(monkeypatch, classes):
+    seen = {}
+    monkeypatch.setattr(traits, "_state", {
+        "heads": {}, "musicnn": lambda a: np.zeros((1, 200), np.float32),
+        "deam": lambda x: np.array([[5.0, 5.0]], np.float32),
+        "rhythm": lambda mono: (seen["bpm"], None, 2.0, None, None),
+        "loudness": lambda s: (None, None, -9.0, None)})
+    audio, stereo, backbone = np.zeros(16000, np.float32), np.zeros((44100, 2), np.float32), np.zeros((1, 1280))
+
+    def tempo(bpm, hint=None, style=None):
+        seen["bpm"] = bpm
+        return traits.measure(audio, stereo, backbone, hint, style)["tempo"]
+
+    assert tempo(115.1, None, styles(DNB)) == pytest.approx(172.65)
+    assert tempo(86.0, 86.0, styles(DNB)) == 172.0               # Deezer's own count is at half time too
+    assert tempo(115.1, None, styles(HOUSE)) == 115.1
+    assert tempo(115.1, None, None) == 115.1                     # no style: as before
+
+
+def test_retempo_folds_the_stored_drum_and_bass_once(tmp_path, classes):
+    con = db.connect(tmp_path / "t.db")
+    for did, tempo, sty in ((1, 87.0, styles(DNB)), (2, 115.1, styles(DNB)), (3, 172.3, styles(DNB)),
+                            (4, 87.0, styles(HOUSE)), (5, 118.1, styles(DNB, 0.21)), (6, 87.0, None)):
+        con.execute("INSERT INTO deezer_vectors(deezer_id, e512, style400) VALUES(?, x'00', ?)",
+                    (did, None if sty is None else sty.astype(np.float16).tobytes()))
+        traits.put(con, did, {"tempo": tempo, "energy": 0.5})
+    assert traits.retempo(con) == {"checked": 5, "folded": 2}
+    got = {d: r["tempo"] for d, r in traits.get(con, range(1, 7)).items()}
+    assert got == {1: 174.0, 2: pytest.approx(172.65), 3: 172.3, 4: 87.0, 5: 118.1, 6: 87.0}
+    assert traits.get(con, [1])[1]["energy"] == 0.5
+    assert traits.retempo(con) == {"checked": 5, "folded": 0}
+
+
 def test_models_fetch_gets_every_model_once(tmp_path):
     class Resp:
         def __init__(self, url):
