@@ -54,7 +54,7 @@ Ask these together, with the defaults filled in, so they can just say "defaults 
    Tailscale's `100.64.0.0/10`)?
 7. **Contact for ListenBrainz.** An email or URL that MetaBrainz asks API users to send. Optional.
 8. **Alerts?** A webhook URL (ntfy, a chat webhook, anything that takes a JSON POST) for failures and sign-in
-   expiry. Optional.
+   expiry, or a folder that another program already sends on (`[alert] outbox`). Optional.
 
 Also tell them about the [Deezer notice](README.md#deezer-notice) and let them decide. If they want to avoid
 Deezer, explain that removing the Deezer sources leaves only ListenBrainz, which still needs Deezer previews,
@@ -105,7 +105,8 @@ listenbrainz_contact = "..."     # if they gave one
 allow_networks = ["192.168.1.0/24", "100.64.0.0/10", "172.16.0.0/12"]
 
 [alert]
-enabled = true                   # only with a webhook
+enabled = true                   # only with a webhook or an outbox
+# outbox = "~/alerts"            # only if they named a folder; then no webhook secrets
 ```
 
 Check it parses: `docker compose run --rm haystack status > /dev/null` fails with the line number on a TOML
@@ -130,8 +131,8 @@ Give the person this list, filled in, and wait until they say it's done:
    ```
    Open the printed link in any browser and agree. The page it lands on won't load; that's expected. Copy the
    whole address from the address bar and paste it into the terminal within a few minutes.
-4. Only with alerts: `docker compose run --rm haystack secret set alert-webhook-url` (and `alert-webhook-key` if
-   the webhook wants a bearer token).
+4. Only with webhook alerts: `docker compose run --rm haystack secret set alert-webhook-url` (and
+   `alert-webhook-key` if the webhook wants a bearer token). An outbox needs no secret.
 
 In Claude Code, the person can run these from the prompt with the `!` prefix only if it gives them an
 interactive terminal; a separate SSH session to the server is the reliable way.

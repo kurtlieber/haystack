@@ -12,7 +12,7 @@ The rest is open; turn each decision into an ADR.
 | Topology | one server; needle reaches its API on a private network (`api.allow_networks` plus the host firewall) with a token file | a server URL and a pairing step in needle |
 | Spotify auth | each user's own Spotify app; `haystack auth` prints the URL and takes the redirect address pasted back (or the loopback callback, through an SSH tunnel) | sign-in on the desktop (PKCE, below; on the README's roadmap) |
 | Secrets | done: 0600 files by default, 1Password `op` as the other backend (`secrets.py`) | the OS keyring, maybe |
-| Alerts | done: an optional generic webhook, off by default (`alert.py`) | ntfy or Apprise, maybe |
+| Alerts | done: an optional generic webhook, or an outbox folder, off by default (`alert.py`) | ntfy or Apprise, maybe |
 | Taste source | done: the local library is optional (`library.root`, unset by default); without one, Liked Songs and Ratings. A Spotify ID in the `MusicBrainz Track Id` tag is used when present | |
 | To Rip | done: optional, off by default (`spotify.to_rip`) | |
 | Candidates | Deezer previews + ListenBrainz; Deezer on by default, with the README's Deezer notice | pluggable sources |

@@ -199,6 +199,7 @@ The ones people change most:
 | `harvest.seed_policy` | `"verdicts"` | Where the harvest starts looking: your 4-5 star Ratings and kept discoveries first, then your liked songs, then your music folder. `"recent"` starts from your most recent liked songs. |
 | `api.allow_networks` | private ranges | Which networks may reach needle's API. Narrow it to your home network and VPN. In Docker, keep `172.16.0.0/12` if needle runs on the same machine. |
 | `alert.enabled` | `false` | Send a webhook when a job fails or the Spotify sign-in is running out. Set the `alert-webhook-url` secret first. |
+| `alert.outbox` | `""` | Instead of the webhook, write each alert as a JSON file to this folder, for another program to send on. No secret needed. See [Alerts](docs/reference.md#alerts). |
 
 For example, 25 songs every Friday evening, with a music folder:
 

@@ -50,7 +50,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |
 | `scheduler.py` | `haystack serve`'s job schedule (`[schedule]`), in place of the systemd timers |
-| `alert.py` | optional webhook alerts (`haystack:` prefix) |
+| `alert.py` | optional alerts: a webhook POST or a file in an outbox (`haystack:` prefix) |
 
 
 ### Key rules
@@ -573,6 +573,12 @@ secret is set. Messages start with `haystack:`. Sent for: the token expiry warni
 `auth.ok=false` (once a day), and a failure of the sync, harvest, library or batch job (exit 3, needs auth, is
 left to the daily auth alert). Alerting never fails a job. Dry run: `HAYSTACK_ALERT_DRY_RUN=1`. `host` is the
 container's `hostname` (compose.yaml sets `haystack`).
+
+With `[alert] outbox = "PATH"` as well, haystack sends nothing over the network and needs no secret: each alert
+is one file in that folder (`~` is expanded), the same JSON, named `YYYYMMDDTHHMMSSZ-JOB-N.json`, mode 0600,
+written under a dot name and then renamed. Another program sends the files on and deletes them. With 500 files
+waiting, haystack writes no more and logs a warning, since the program that empties it has stopped. The
+`alert-webhook-*` secrets are then not read.
 
 ## Development
 ```

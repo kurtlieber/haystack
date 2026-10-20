@@ -1,4 +1,7 @@
+import json
+import re
 import sqlite3
+import stat
 from datetime import datetime, timezone
 
 from haystack_music import alert, db
@@ -97,3 +100,55 @@ def test_job_failure_names_the_log(monkeypatch):
                              store=FakeStore(), post=post)
     assert seen["job"] == "haystack-harvest" and "see the log of `haystack serve`" in seen["message"]
     assert alert.job_failure(ON, "sync", "sync", 3, "x", store=FakeStore(), post=post) is False
+
+
+class NoStore:
+    """The outbox needs no secret: any read fails the test."""
+    def find(self, name): raise AssertionError(name)
+    read = find
+
+
+def no_post(*a, **k): raise AssertionError("POST with an outbox set")
+
+
+def outbox(folder) -> dict:
+    return {"alert": {"enabled": True, "outbox": str(folder)}}
+
+
+def test_outbox_writes_one_file_and_no_post(tmp_path, monkeypatch):
+    monkeypatch.delenv("HAYSTACK_ALERT_DRY_RUN", raising=False)
+    box = tmp_path / "outbox"
+    assert alert.unit_failure(outbox(box), "haystack-harvest-broad.service", "1", store=NoStore(), post=no_post)
+    files = list(box.iterdir())
+    assert len(files) == 1
+    # The name dotfiles' backup-alert.sh and failure-alerts accept.
+    assert re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9_-]+-[0-9]+\.json", files[0].name), files[0].name
+    assert "-haystack-harvest-broad-" in files[0].name
+    assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+    assert stat.S_IMODE(box.stat().st_mode) == 0o700
+    body = json.loads(files[0].read_text())
+    assert set(body) == {"job", "host", "status", "exit_code", "message", "ts"}
+    assert body["job"] == "haystack-harvest-broad" and body["status"] == "fail" and body["exit_code"] == "1"
+    assert body["message"].startswith("haystack: haystack-harvest-broad.service failed")
+
+
+def test_outbox_expands_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("HAYSTACK_ALERT_DRY_RUN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert alert.send(outbox("~/box"), "auth", "re-auth soon", "warn", store=NoStore(), post=no_post)
+    assert len(list((tmp_path / "box").glob("*-haystack-auth-*.json"))) == 1
+
+
+def test_a_full_outbox_takes_no_more(tmp_path, monkeypatch):
+    monkeypatch.delenv("HAYSTACK_ALERT_DRY_RUN", raising=False)
+    monkeypatch.setattr(alert, "OUTBOX_MAX", 1)
+    box = tmp_path / "outbox"
+    assert alert.send(outbox(box), "auth", "one", store=NoStore(), post=no_post)
+    assert alert.send(outbox(box), "auth", "two", store=NoStore(), post=no_post) is False
+    assert len(list(box.iterdir())) == 1
+
+
+def test_an_unwritable_outbox_never_raises(tmp_path, monkeypatch):
+    monkeypatch.delenv("HAYSTACK_ALERT_DRY_RUN", raising=False)
+    (tmp_path / "file").write_text("")
+    assert alert.send(outbox(tmp_path / "file" / "box"), "auth", "x", store=NoStore(), post=no_post) is False
