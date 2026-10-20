@@ -120,7 +120,7 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 def server(tmp_path):
     """Two offers (one rated and re-ranked, one exploration with Readings), a rated Calibrate pick with Readings
     and the re-ranker's chance, an Unrated like, a rated like with Readings (the Baseline), a playlist holding both
-    offers, and a Spotify write that failed."""
+    offers, a Spotify write that failed, and Deezer's label for every track with a Deezer id."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
@@ -166,6 +166,10 @@ def server(tmp_path):
                 (sid("mix"),))
     playlists.store(con, sid("mix"), "s1", [(sid("disc1"), None), (sid("disc2"), None)], "web")
     db.kv_set(con, "playlists_synced_at", "2026-01-05T00:00:00Z")
+    con.execute("INSERT INTO deezer_albums(album_id, label, release_date, record_type, fetched_at) "
+                "VALUES(77, 'Synthetic Records', '2020-01-02', 'single', 'x')")
+    con.execute("UPDATE candidates SET album_id=77")
+    con.execute("UPDATE liked_map SET album_id=77")
     srv = api.Server(("127.0.0.1", 0), config.load(tmp_path / "none.toml"), TOKEN, Worker(), db_path=path,
                      classes=[f"Parent---Style{i}" for i in range(400)])
     threading.Thread(target=srv.serve_forever, daemon=True).start()

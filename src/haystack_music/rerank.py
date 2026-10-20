@@ -21,7 +21,7 @@ import math
 
 import numpy as np
 
-from . import baseline, calibrate, db, traits, vectors
+from . import baseline, calibrate, db, metadata, traits, vectors
 from .evaluate import _chunks, _owner_keys, _track_keys
 from .scoring import (GENRE_VARIANTS, Space, hubness, is_centred, is_csls, l2norm, negative_penalty, owner_max,
                       topk_mean, zblend)
@@ -147,11 +147,21 @@ PHRASES = {
     "chart": ("typical of Deezer charts", None),
     "artist_in_positives": ("by an artist you like", "by an artist new to you"),
     "artist_has_dislike": ("by an artist you disliked before", None),
+    "log_rank": ("a very popular track", "an obscure track"),
+    "rank_missing": (None, None),
+    "log_fans": ("by a very popular artist", "by a little-known artist"),
+    "age_years": ("an older release", None),
+    "compilation": ("from a compilation", None),
+    "label_known": ("on the label of a song you like", None),
+    "label_kept_rate": ("on a label you like", None),
 }
+# what Deezer publishes about a track (ADR 0017); `rerank show` compares the model with and without them
+META_FEATURES = ("log_rank", "rank_missing", "log_fans", "age_years", "compilation", "label_known", "label_kept_rate")
 # the sign a feature's weight is expected to have; a weight with the other sign still orders the batch but is
 # never quoted as a reason ("held back: close to your 4-5★ tracks" reads as a bug, whatever the data says)
 EXPECTED_SIGN = {"stage1": 1, "raw_max": 1, "topk": 1, "near_stars": 1, "knn_stars": 1, "knn_hi": 1,
-                 "neg_excess_max": -1, "neg_penalty": -1, "artist_in_positives": 1, "artist_has_dislike": -1}
+                 "neg_excess_max": -1, "neg_penalty": -1, "artist_in_positives": 1, "artist_has_dislike": -1,
+                 "label_known": 1, "label_kept_rate": 1, "compilation": -1}
 
 
 def _artist(artist, title) -> str:
@@ -196,6 +206,10 @@ def _prepare(con, cfg: dict, variant: str, res: dict, labs: list[dict]) -> dict 
     for j, k in enumerate(okey_arr):
         if k:
             by_artist.setdefault(k.split("|", 1)[0], []).append(j)
+    by_label: dict[str, list[int]] = {}
+    for j, lab in enumerate(metadata.owner_labels(con, uo)):
+        if lab:
+            by_label.setdefault(lab, []).append(j)
     # leave-self-out masks for the labelled tracks
     owner_idx = {o: j for j, o in enumerate(uo)}
     local: dict[str, set] = {}
@@ -252,6 +266,7 @@ def _prepare(con, cfg: dict, variant: str, res: dict, labs: list[dict]) -> dict 
     return dict(con=con, variant=variant, cfg=cfg, n_pool=n_pool, ids=ids, labs=labs, meta=meta, X=X, S=S, dids=dids,
                 pos=pos, bonus=np.asarray(bonus, np.float32), stars=np.asarray(stars, np.float32), starts=starts,
                 uo=uo, owner_lib=np.array([o.startswith("local:") for o in uo]), by_artist=by_artist, mask=mask,
+                by_label=by_label, md=metadata.for_candidates(con, ids),
                 ls=LS, lb=np.asarray(lb, np.float32), gmask=gmask, negs=negs, nmask=nmask, neg_artist=neg_artist,
                 space=space, self_ref=np.array([ref_at.get(f"cand:{i}", -1) for i in ids]),
                 unit=float(res.get("unit", 1.0)))
@@ -384,6 +399,7 @@ def _features(ctx: dict, s1: np.ndarray, pen: np.ndarray, usual: dict, pca: dict
     dis = [(a, j) for j, (a, g_) in enumerate(zip(ctx["neg_artist"], ctx["negs"])) if a and g_["kind"] == "dislike"]
     cols["artist_has_dislike"] = np.array([any(a == b and not ctx["nmask"][r, j] for b, j in dis)
                                            for r, a in enumerate(arts)], np.float32)
+    cols.update(_meta_features(ctx))
     if pca:
         Z = (Xn - np.asarray(pca["mean"], np.float32)[None, :]) @ np.asarray(pca["components"], np.float32).T
         for c in range(Z.shape[1]):
@@ -391,6 +407,55 @@ def _features(ctx: dict, s1: np.ndarray, pen: np.ndarray, usual: dict, pca: dict
     names = list(cols)
     F = np.column_stack([np.asarray(cols[c], np.float64) for c in names])
     return np.nan_to_num(F, nan=0.0, posinf=0.0, neginf=0.0), names, side
+
+
+def _meta_features(ctx: dict) -> dict[str, np.ndarray]:
+    """What Deezer publishes about each row's track (ADR 0017). A missing number takes the pool's median; a track
+    with no rank also gets rank_missing. label_known: the label is on one of the positives (not the track itself);
+    label_kept_rate: see _label_rate."""
+    P, ids, md = ctx["n_pool"], ctx["ids"], ctx["md"]
+    rows = [md.get(i, {}) for i in ids]
+
+    def num(vals):
+        v = np.array([np.nan if x is None else float(x) for x in vals], np.float64)
+        pool = v[:P][np.isfinite(v[:P])]
+        return np.where(np.isfinite(v), v, float(np.median(pool)) if len(pool) else 0.0), ~np.isfinite(v)
+
+    out: dict[str, np.ndarray] = {}
+    rank, missing = num([None if m.get("rank") is None else math.log10(1 + max(0, m["rank"])) for m in rows])
+    out["log_rank"], out["rank_missing"] = rank, missing.astype(np.float32)
+    out["log_fans"] = num([None if m.get("fans") is None else math.log10(1 + max(0, m["fans"])) for m in rows])[0]
+    out["age_years"] = num([m.get("age") for m in rows])[0]
+    out["compilation"] = np.array([bool(m.get("compilation")) for m in rows], np.float32)
+    labels = [m.get("label") for m in rows]
+    out["label_known"] = np.array([bool(lab) and any(not ctx["mask"][r, j] for j in ctx["by_label"].get(lab, ()))
+                                   for r, lab in enumerate(labels)], np.float32)
+    out["label_kept_rate"] = _label_rate(ctx)
+    return out
+
+
+def _label_rate(ctx: dict, rows=None, drop: int | None = None) -> np.ndarray:
+    """label_kept_rate for `rows` (every row by default): the share of the hard labels on the row's record label
+    that were kept, the row's own verdict left out, shrunk toward the mean kept rate of every hard label by
+    rerank.label_prior_n pseudo-labels (the mean alone with no label). drop: a labelled row whose verdict is in no
+    row's rate and not in the mean, the held-out label of a leave-one-out fold (ADR 0017)."""
+    P, md = ctx["n_pool"], ctx["md"]
+    labels = [md.get(i, {}).get("label") for i in ctx["ids"]]
+    own = {P + i: x["y"] for i, x in enumerate(ctx["labs"]) if not x["soft"] and P + i != drop}
+    mean = float(np.mean(list(own.values()))) if own else 0.5
+    kept: dict[str, list[int]] = {}
+    for r, y in own.items():
+        if labels[r]:
+            kept.setdefault(labels[r], []).append(y)
+    n0 = float(ctx["cfg"]["rerank"]["label_prior_n"])
+    rows = range(len(labels)) if rows is None else rows
+    rate = np.full(len(rows), mean, np.float64)
+    for o, r in enumerate(rows):
+        if labels[r] in kept:
+            ys = kept[labels[r]]
+            k, m_ = sum(ys) - own.get(r, 0), len(ys) - (r in own)
+            rate[o] = (k + n0 * mean) / (m_ + n0) if m_ + n0 else mean
+    return rate
 
 
 def _fit_pca(ctx: dict, n_comp: int) -> dict:
@@ -444,16 +509,31 @@ def wauc(score, y, w) -> float | None:
     return float((wp * wn * gt).sum() / (w[pos].sum() * w[neg].sum()))
 
 
-def loo_logits(Z: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float, rows=None) -> np.ndarray:
-    """Each label's logit from a model fitted on all the other labels (rows: only these labels, NaN elsewhere)."""
+def loo_logits(Z: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float, rows=None, refresh=None) -> np.ndarray:
+    """Each label's logit from a model fitted on all the other labels (rows: only these labels, NaN elsewhere).
+    refresh(i): the features for label i's fold, when a feature is worked out from the verdicts themselves, so
+    the held-out verdict is in no row's features."""
     out = np.full(len(Z), np.nan)
     keep = np.ones(len(Z), bool)
     for i in (range(len(Z)) if rows is None else rows):
+        Zi = Z if refresh is None else refresh(i)
         keep[i] = False
-        b = fit(Z[keep], y[keep], w[keep], l2)
-        out[i] = b[0] + Z[i] @ b[1:]
+        b = fit(Zi[keep], y[keep], w[keep], l2)
+        out[i] = b[0] + Zi[i] @ b[1:]
         keep[i] = True
     return out
+
+
+def _loo_refresh(ctx: dict, Zl: np.ndarray, names: list[str], mu: np.ndarray, sd: np.ndarray, lab_rows):
+    """loo_logits' refresh for the labels' features Zl: label_kept_rate worked out again without the held-out
+    label's verdict, standardised like the rest."""
+    j = names.index("label_kept_rate")
+
+    def refresh(i):
+        Zi = Zl.copy()
+        Zi[:, j] = (_label_rate(ctx, lab_rows, drop=int(lab_rows[i])) - mu[j]) / sd[j]
+        return Zi
+    return refresh
 
 
 def _phrase(name: str, high: bool, side: int | None, up: bool = True) -> str | None:
@@ -514,8 +594,8 @@ def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict
     used), model}."""
     rr = cfg["rerank"]
     out = {"used": False, "reason": None, "variant": variant, "trigger": trigger, "n_labels": 0, "n_pos": 0,
-           "n_neg": 0, "n_soft": 0, "loo_auc_model": None, "loo_auc_stage1": None, "n_features": 0, "chance": None,
-           "ranks": None, "top": None, "model": None, "at": db.now()}
+           "n_neg": 0, "n_soft": 0, "loo_auc_model": None, "loo_auc_stage1": None, "loo_auc_no_meta": None,
+           "n_features": 0, "chance": None, "ranks": None, "top": None, "model": None, "at": db.now()}
     if not rr["enabled"]:
         return {**out, "reason": "rerank.enabled is false"}
     labs = labels(con, cfg)
@@ -548,7 +628,13 @@ def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict
     Zl = Z[lab_rows]
     h = np.nonzero(hard)[0]
     out["loo_auc_stage1"] = _r(wauc(s1[lab_rows][h], y[h], w[h]))
-    out["loo_auc_model"] = _r(wauc(loo_logits(Zl, y, w, rr["l2"], h)[h], y[h], w[h]))
+    refresh = _loo_refresh(ctx, Zl, names, mu, sd, lab_rows)
+    out["loo_auc_model"] = _r(wauc(loo_logits(Zl, y, w, rr["l2"], h, refresh)[h], y[h], w[h]))
+    meta = np.array([f in META_FEATURES for f in names])
+    if Zl[:, meta].std(0).max(initial=0.0) > 0:          # without Deezer's metadata, for `rerank show`
+        out["loo_auc_no_meta"] = _r(wauc(loo_logits(Zl[:, ~meta], y, w, rr["l2"], h)[h], y[h], w[h]))
+    else:                                                 # none known for any label: the same model
+        out["loo_auc_no_meta"] = out["loo_auc_model"]
     beta = fit(Zl, y, w, rr["l2"])
     prior = np.array([EXPECTED_SIGN.get(f, 0) for f in names])
     agree = (np.sign(beta[1:]) == direction(Zl, y, w)) & (beta[1:] != 0) & ((prior == 0) | (np.sign(beta[1:]) == prior))
@@ -604,7 +690,7 @@ def _rl(a, nd: int = 6) -> list:
 def summary(r: dict) -> dict:
     """The batch summary's `rerank` block (no per-candidate data)."""
     return {k: r.get(k) for k in ("used", "reason", "variant", "n_labels", "n_pos", "n_neg", "n_soft",
-                                  "loo_auc_model", "loo_auc_stage1", "n_features")}
+                                  "loo_auc_model", "loo_auc_stage1", "loo_auc_no_meta", "n_features")}
 
 
 def record(con, r: dict) -> None:
@@ -612,10 +698,10 @@ def record(con, r: dict) -> None:
     model = None if r.get("model") is None else {**r["model"], **summary(r), "at": r["at"]}
     db.kv_set(con, "rerank_model", json.dumps(model if model else summary(r)))
     con.execute("""INSERT INTO rerank_runs(at, trigger, variant, n_labels, n_pos, n_neg, n_soft, loo_auc_model,
-                   loo_auc_stage1, used, reason, model_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   loo_auc_stage1, loo_auc_no_meta, used, reason, model_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (r["at"], r["trigger"], r["variant"], r["n_labels"], r["n_pos"], r["n_neg"], r.get("n_soft", 0),
-                 r["loo_auc_model"], r["loo_auc_stage1"], int(bool(r["used"])), r["reason"],
-                 json.dumps(model) if model else None))
+                 r["loo_auc_model"], r["loo_auc_stage1"], r.get("loo_auc_no_meta"), int(bool(r["used"])),
+                 r["reason"], json.dumps(model) if model else None))
 
 
 def write_pool(con, r: dict) -> None:
@@ -636,6 +722,10 @@ def last(con) -> dict | None:
 
 
 def runs(con, limit: int = 10) -> list[dict]:
-    return [dict(x) for x in con.execute("SELECT id, at, trigger, variant, n_labels, n_pos, n_neg, n_soft, "
-                                         "loo_auc_model, loo_auc_stage1, used, reason FROM rerank_runs "
-                                         "ORDER BY id DESC LIMIT ?", (limit,))]
+    """The last fits, newest first (a database from before 0.6.0 has no loo_auc_no_meta: it reads as None)."""
+    out = []
+    for x in con.execute("SELECT * FROM rerank_runs ORDER BY id DESC LIMIT ?", (limit,)):
+        d = dict(x)
+        d.pop("model_json", None)
+        out.append({"loo_auc_no_meta": None, **d})
+    return out

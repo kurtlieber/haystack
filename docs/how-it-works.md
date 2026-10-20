@@ -72,6 +72,7 @@ closest matches, but only when the model would have predicted your past verdicts
 otherwise it goes by closeness and checks again next week. Each song the model moved comes with its chance that
 you keep it and a reason or two, such as "close to your 4-5★ tracks", which needle shows on the track. To the
 model, 1 or 2 stars means "not for the batch": you like the song a little, but the batch is for the ones you keep.
+haystack also notes the label, the year and how popular a track is, and learns whether those matter to you.
 
 Then it fills the batch (15 songs, unless you changed `batch.size`):
 

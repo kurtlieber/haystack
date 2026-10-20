@@ -144,6 +144,7 @@ def cmd_harvest(cfg, a) -> int:
 
     def run(con):
         seeds = liked = None
+        retry = not a.no_retry
         out = {}
         if a.broad:
             # the week's seeds: the same for every shard started this ISO week, different from last week's
@@ -158,12 +159,13 @@ def cmd_harvest(cfg, a) -> int:
             if a.shard:
                 i, n = (int(x) for x in a.shard.split("/"))
                 seeds, liked = seeds[i::n], liked[i::n]
+                retry = retry and i == 0            # one shard retries and backfills, not all of them at once
             out["seeds"] = len(seeds); out["liked_seeds"] = len(liked)
         if a.per_seed:
             for k in ("broad_radio_per_seed", "broad_related_per_seed", "broad_lb_per_seed"):
                 cfg["harvest"][k] = a.per_seed
         h = Harvester(con, cfg, seeds=seeds, liked_seeds=liked)
-        out.update(h.run(a.sources.split(",") if a.sources else None, a.limit_per_source, retry=not a.no_retry))
+        out.update(h.run(a.sources.split(",") if a.sources else None, a.limit_per_source, retry=retry))
         if a.styles:
             out["style_backfill_extra"] = h.backfill_styles(a.styles)
         if not a.no_score:
@@ -282,8 +284,10 @@ def cmd_rerank(cfg, a) -> int:
             w = sorted(zip(m["features"], m["beta"][1:]), key=lambda x: -abs(x[1]))
             print("weights (per pool sd, largest first): " + ", ".join(f"{f} {b:+.2f}" for f, b in w[:a.limit]))
         for r in runs:
+            no_meta = "" if r["loo_auc_no_meta"] is None else f" ({r['loo_auc_no_meta']} without metadata)"
             print(f"  {r['at']}  {r['trigger']:5}  {r['variant']:12}  {'used' if r['used'] else 'off '}  "
-                  f"{r['n_pos']}+/{r['n_neg']}-  AUC {r['loo_auc_model']} vs {r['loo_auc_stage1']}  {r['reason']}")
+                  f"{r['n_pos']}+/{r['n_neg']}-  AUC {r['loo_auc_model']}{no_meta} vs {r['loo_auc_stage1']}  "
+                  f"{r['reason']}")
         return 0
 
     def run(con):
@@ -337,8 +341,10 @@ def _align_line(m: dict) -> str:
 
 
 def _rerank_line(r: dict) -> str:
+    no_meta = ("" if r.get("loo_auc_no_meta") is None else
+               f" ({r['loo_auc_no_meta']:.3f} without Deezer's metadata)")
     auc = ("" if r.get("loo_auc_model") is None else
-           f"; leave-one-out AUC {r['loo_auc_model']:.3f} vs stage 1 {r['loo_auc_stage1']:.3f}")
+           f"; leave-one-out AUC {r['loo_auc_model']:.3f}{no_meta} vs stage 1 {r['loo_auc_stage1']:.3f}")
     soft = f", {r['n_soft']} soft" if r.get("n_soft") else ""
     return (f"re-ranker ({r.get('variant')}): {'used' if r.get('used') else 'not used'}, {r.get('n_labels')} labels "
             f"({r.get('n_pos')} yes, {r.get('n_neg')} no{soft}){auc}" + ("" if r.get("used") else f". {r.get('reason')}"))
@@ -550,6 +556,19 @@ def cmd_traits(cfg, a) -> int:
         print(json.dumps(out, indent=1))
         return out
     return job("traits", run, needs_spotify=a.action == "measure")
+
+
+def cmd_metadata(cfg, a) -> int:
+    from . import metadata
+    from .deezer import Deezer
+
+    def run(con):
+        dz = Deezer(cfg["harvest"]["deezer_min_interval"])
+        out = metadata.backfill(con, dz, a.limit)
+        print("album known: " + ", ".join(f"{k} {v['with_album']}/{v['n']}" for k, v in out["coverage"].items()) +
+              f"; {dz.requests} Deezer requests, {out['errors']} errors")
+        return out
+    return job("metadata", run)
 
 
 def cmd_baseline(cfg, a) -> int:
@@ -801,7 +820,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--broad", type=int, nargs="?", const=150, metavar="N",
                    help="seed artist radio / related from N stratified seeds and ListenBrainz from all liked songs")
     s.add_argument("--shard", help="i/N: this process takes every N-th seed starting at i (parallel harvesters)")
-    s.add_argument("--no-retry", action="store_true", help="skip retrying failed previews and the style backfill")
+    s.add_argument("--no-retry", action="store_true",
+                   help="skip retrying failed previews and the backfills (styles, Readings, Deezer's metadata)")
     s.add_argument("--per-seed", type=int, help="broad mode: new candidates per seed (overrides the config)")
     s.add_argument("--seed-rng", type=int,
                    help="broad mode: a different seed sample (default: harvest.broad_seed_rng and the ISO week)")
@@ -865,6 +885,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("track", nargs="?", help="Spotify track id (measure, show)")
     s.add_argument("--limit", type=int, default=150)
     s.set_defaults(fn=cmd_traits)
+
+    s = sub.add_parser("metadata", help="Deezer's facts about each track (ADR 0017: label, release date, rank, "
+                                        "artist fans): backfill the judged tracks, the liked songs and the pool "
+                                        "(token-free; run it outside the harvest's hours, they share the throttle)")
+    s.add_argument("action", choices=["backfill"])
+    s.add_argument("--limit", type=int, default=1000, help="at most N tracks (0: just print the coverage)")
+    s.set_defaults(fn=cmd_metadata)
 
     s = sub.add_parser("baseline", help="the listener's Baseline per Trait (star-weighted mean and usual range)")
     s.set_defaults(fn=cmd_baseline)
