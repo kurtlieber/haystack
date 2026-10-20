@@ -48,7 +48,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `report.py` | `haystack report`: offers, Verdicts, the pool, the latest eval, plays per week and the gates, as counts and shares, read-only |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
-| `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring; the Baseline and usual range |
+| `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
 | `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |
@@ -150,6 +150,7 @@ haystack models fetch|check          the Essentia models: download the missing o
 haystack traits backfill [--limit N] Readings for stored previews (Discoveries and likes first)
 haystack metadata backfill [--limit N]   Deezer's facts about each track: judged ones, liked songs, then the pool
 haystack traits measure|show TRACK   Readings for one Spotify track (measure: on demand)
+haystack traits retempo              fold the stored drum & bass and jungle tempos now (token-free, no network)
 haystack baseline                    your Baseline per Trait (mean, usual range)
 haystack api                         needle's API alone (the haystack-api unit runs it)
 haystack llm judge [--dry-run] [--tracks] [--json] [--debug]
@@ -225,6 +226,18 @@ Apple's iTunes Search API by artist and title (Apple's ISRC lookup returns nothi
 version check, and Apple's 30-second preview is embedded instead (`deezer_vectors.provider = 'itunes'`). The
 daily harvest's retry step also looks up 50 older `no_preview` pool candidates a run: those never asked first, then
 those Apple didn't have 30 days ago. `haystack report` counts the pool's vectors by provider.
+
+**Tempo** (ADR 0001). RhythmExtractor2013 (multifeature) on the clip at 44.1 kHz, then two corrections. (1) When
+Deezer has a bpm for the track and it is the same tempo at another metrical level (x2, x1/2, x3/2, x2/3) or within
+4%, the Reading is Deezer's. Only `/track/{id}` and `/track/isrc:` carry a bpm: the track objects of a search, a
+chart, an artist's top tracks or radio, and an album have none, so measuring one of those costs one more throttled
+request (`traits.deezer_bpm`; an Apple preview asks for its Deezer track's bpm too). About two thirds of tracks
+have no bpm (0) all the same. (2) When the clip's top genre_discogs400 style is Drum n Bass or Jungle at 0.3 or
+more, a tempo outside 155-190 is doubled, or else multiplied by 3/2, when that lands inside (`traits.fold_tempo`):
+a clip of these styles often reads at half time (85) or at two thirds (115). Each harvest also folds the stored
+Readings the same way (the style may be stored after them); `haystack traits retempo` does it at once. Halftime,
+dubstep, trap and hardcore are left as measured: they are played at both levels, so no range fits them. A drum &
+bass track whose clip the style head hears as another style is not folded.
 
 **Deezer's metadata** (ADR 0017). A new candidate keeps its Deezer album id and rank from the track object the
 harvest already has. After the sources, each daily harvest fetches what is still missing for up to

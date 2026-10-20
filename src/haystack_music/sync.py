@@ -267,7 +267,8 @@ def liked_preview_vectors(con, cfg: dict, limit: int) -> dict:
             c[st] = c.get(st, 0) + 1
             con.execute("UPDATE liked_map SET vector_status=? WHERE spotify_id=?", (st, sid)); continue
         try:
-            traits.store(con, t["id"], traits.analyse_preview(dz, t["preview"], readings=readings, bpm_hint=t.get("bpm")))
+            bpm = traits.deezer_bpm(dz, t) if readings else None
+            traits.store(con, t["id"], traits.analyse_preview(dz, t["preview"], readings=readings, bpm_hint=bpm))
             con.execute("UPDATE liked_map SET deezer_id=?, vector_status='ok' WHERE spotify_id=?", (t["id"], sid))
             c["embedded"] += 1
         except Exception as e:  # noqa: BLE001

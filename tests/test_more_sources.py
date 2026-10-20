@@ -349,6 +349,19 @@ def test_a_track_without_a_deezer_preview_is_embedded_from_itunes(world):
     assert dict(con.execute("SELECT deezer_id, found FROM preview_fallback").fetchall()) == {1: 1, 2: 0}
 
 
+def test_a_clip_from_itunes_or_deezer_gets_deezers_own_bpm(world, monkeypatch):
+    con, cfg, _ = world
+    cfg["harvest"]["preview_fallback"] = "itunes"
+    hints = []
+    monkeypatch.setattr(traits, "analyse_preview", lambda client, url, bpm_hint=None: hints.append((url, bpm_hint)))
+    h = Harvester(con, cfg, rng=random.Random(1))
+    t1 = track(1, "Apple Has", "This One", preview=False)
+    t2 = track(2, "Deezer Has", "A Preview")
+    h.dz.catalog += [{**t1, "bpm": 174.0}, {**t2, "bpm": 128.0}]       # only /track/{id} carries the bpm
+    h.itunes.has.add(("Apple Has", "This One"))
+    assert h.offer("src", "d", t1) and h.offer("src", "d", t2)
+    assert hints == [("https://itunes.test/This One.m4a", 174.0), ("https://example.test/2.mp3", 128.0)]
+
 def test_the_backfill_asks_never_asked_first_and_misses_again_after_a_month(world):
     con, cfg, stored = world
     cfg["harvest"]["preview_fallback"] = "itunes"

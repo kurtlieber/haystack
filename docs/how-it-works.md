@@ -149,7 +149,8 @@ Two things to know first:
   you usually like. Once haystack learns from your verdicts (see "Picking the week's songs"), it also notices if
   you tend to keep songs that are, say, darker or calmer than usual, and may give that as a reason for a pick.
 - **They're estimates.** An AI model makes an educated guess from a 30-second clip. A song that changes a lot
-  after its first minute may not match its numbers. Songs with no preview have no Traits.
+  after its first minute may not match its numbers. Songs with no preview have no Traits. Tempo is the hardest
+  to get right in a few genres (see Tempo below).
 
 needle compares each song with your **Baseline** (the typical value across the songs you like, weighted by your
 ratings) and your **usual range** (the middle half of your songs). When a song falls outside your usual range,
@@ -166,8 +167,31 @@ large number on needle's song card, with your own typical tempo ("Yours: …") u
 - 160 to 180: drum & bass, a lot of punk.
 
 Fast music isn't always *energetic* (see Energy), and slow music isn't always sad. Tempo is just the speed of
-the pulse. Measuring it is tricky because a beat can be counted at half or double speed; haystack counts the way
-people do, so drum & bass reads 170, not 85.
+the pulse.
+
+**Tempo is imperfect for some genres.** The same beat can be counted at more than one speed. Drum & bass has a
+fast pulse of about 174, but its snare lands on every other beat, so it also feels like 87. haystack measures the
+tempo from the 30-second clip, and the measurement sometimes follows that slower feel and gives half the real
+tempo. Sometimes it locks onto a skipping, triplet-like pattern and gives two thirds of it, so a song at 172 reads
+115. Two things correct this:
+
+- **Deezer's own number.** Deezer lists a BPM for about a third of songs. When it has one, and it's the same beat
+  counted another way, haystack uses Deezer's number.
+- **The genre.** When the clip clearly sounds like drum & bass or jungle, haystack moves a reading at half or two
+  thirds speed up into 155 to 190, the range those genres are counted in.
+
+Some songs can still read at the wrong speed:
+
+- **Halftime, dubstep, trap and hardcore** are made at both speeds. Dubstep is usually counted at 140, but some
+  of it really is 70, so the genre alone can't say which is right, and haystack leaves these as measured. Some may
+  read at half or double what you'd tap along to.
+- **The genre is a guess too.** A drum & bass song whose clip sounds more like hardcore isn't corrected and can
+  still say about 115.
+- **The clip is all haystack hears.** A song that changes speed, or whose clip catches a slow intro, shows the
+  clip's speed.
+
+Your own typical tempo ("Yours") is worked out from your liked songs with the same method, so these errors affect
+it too, though one wrong reading moves it only a little among many liked songs.
 
 ### Valence
 
