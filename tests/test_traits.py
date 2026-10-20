@@ -207,6 +207,61 @@ def test_retempo_folds_the_stored_drum_and_bass_once(tmp_path, classes):
     assert traits.retempo(con) == {"checked": 5, "folded": 0}
 
 
+def test_each_harvest_folds_the_stored_tempos_unless_told_not_to_retry(tmp_path, monkeypatch):
+    from haystack_music import harvest, metadata
+
+    class Dz:
+        requests = 0
+
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(config, "EMB_DIR", tmp_path / "emb")
+    monkeypatch.setattr(harvest, "Deezer", Dz)
+    monkeypatch.setattr(metadata, "backfill", lambda con, dz, limit: {})
+    folds = []
+    monkeypatch.setattr(traits, "retempo", lambda con: folds.append(con) or {"checked": 3, "folded": 1})
+    h = harvest.Harvester(db.connect(tmp_path / "t.db"), config.load(tmp_path / "none.toml"))
+    for name in ("retry_errors", "backfill_styles", "_readings_backfill", "fallback_backfill"):
+        monkeypatch.setattr(h, name, lambda *a: {})
+    monkeypatch.setattr(traits, "missing_models", lambda *a: [])
+    assert h.run(["no_such_source"], 1)["tempo_fold"] == {"checked": 3, "folded": 1}
+    assert h.run(["no_such_source"], 1, retry=False)["tempo_fold"] == {"skipped": True}
+    monkeypatch.setattr(traits, "missing_models", lambda *a: ["mood_happy"])
+    assert h.run(["no_such_source"], 1)["tempo_fold"] == {"skipped": "models missing"}
+    assert folds == [h.con]
+
+
+def test_a_liked_preview_asks_deezer_for_its_bpm_only_when_readings_are_on(tmp_path, monkeypatch):
+    from haystack_music import sync
+
+    class Dz:
+        def __init__(self, *a, **k):
+            self.asked = []
+
+        def track(self, did):
+            self.asked.append(did)
+            return {"id": did, "bpm": 174.0}
+
+    made, seen = [], []
+    monkeypatch.setattr(sync, "Deezer", lambda *a, **k: made.append(Dz()) or made[-1])
+    found = {"id": 7, "title": "from a search", "preview": "https://example.test/7.mp3"}     # no bpm key
+    monkeypatch.setattr(traits, "find_deezer", lambda dz, ref, tol: (found, True, "search"))
+    monkeypatch.setattr(traits, "analyse_preview",
+                        lambda dz, url, readings=True, bpm_hint=None: seen.append((readings, bpm_hint)) or {})
+    monkeypatch.setattr(traits, "store", lambda con, did, r: None)
+    cfg = config.load(tmp_path / "none.toml")
+    for name, missing in (("on", []), ("off", ["mood_happy"])):
+        con = db.connect(tmp_path / f"{name}.db")
+        con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01')", (sid(name),))
+        con.execute("INSERT INTO spotify_tracks(spotify_id, name, artists_json, duration) VALUES(?, 'Song', "
+                    "'[\"Artist\"]', 200)", (sid(name),))
+        con.execute("INSERT INTO liked_map(spotify_id) VALUES(?)", (sid(name),))
+        monkeypatch.setattr(traits, "missing_models", lambda *a, m=missing: m)
+        assert sync.liked_preview_vectors(con, cfg, 5)["embedded"] == 1
+    assert seen == [(True, 174.0), (False, None)]
+    assert [d.asked for d in made] == [[7], []]                   # readings off: no bpm, so no extra request
+
 def test_models_fetch_gets_every_model_once(tmp_path):
     class Resp:
         def __init__(self, url):
