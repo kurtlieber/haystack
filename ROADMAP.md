@@ -18,7 +18,7 @@ giving haystack better things to learn from.
 
 ## Now: helping haystack learn faster
 
-haystack 0.5.0 brings this. The Calibrate list shows in needle from needle 0.6.0, the next needle release.
+haystack 0.5.0 and needle 0.6.0 bring this.
 
 **A Calibrate list in needle.** Next to Discoveries and Rate your likes, needle gets a third list: the songs
 haystack can't make its mind up about. Some are close calls near the top of its ranking, and some come from
