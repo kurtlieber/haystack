@@ -10,11 +10,11 @@ the seven numbers needle shows for every song mean. You don't need to know anyth
 2. Every day it collects **candidates**, songs you probably haven't heard, and fingerprints a 30-second clip
    of each.
 3. Once a week it picks the candidates whose fingerprints are **closest to your songs**, and puts them in
-   Discoveries.
+   Discoveries. Once you've judged enough of its picks, it also learns which close matches you tend to keep.
 4. You listen. What you like, and what you don't, **teaches it** for next week.
 
-There's no genre list, no "people who liked X also liked Y", and no popularity ranking: just how the songs
-sound.
+There's no genre list to fill in and no popularity ranking. Other listeners' habits and the names of styles help
+find candidates, but what decides is how the songs sound and, once you've judged enough, what you kept before.
 
 ## 1. Listening to the songs you love
 
@@ -116,9 +116,10 @@ preview.
 
 Two things to know first:
 
-- **Traits describe a song; they don't pick it.** Discoveries are chosen by the fingerprint above, which captures
-  far more than seven numbers can. The Traits are there so you can see, at a glance, *how* a song differs from
-  what you usually like.
+- **Traits mostly describe a song.** Discoveries are chosen mainly by the fingerprint above, which captures far
+  more than seven numbers can. The Traits are there so you can see, at a glance, *how* a song differs from what
+  you usually like. Once haystack learns from your verdicts (see "Picking the week's songs"), it also notices if
+  you tend to keep songs that are, say, darker or calmer than usual, and may give that as a reason for a pick.
 - **They're estimates.** An AI model makes an educated guess from a 30-second clip. A song that changes a lot
   after its first minute may not match its numbers. Songs with no Deezer preview have no Traits.
 
@@ -201,7 +202,8 @@ says "quieter" or "louder".
 
 - **It doesn't use Spotify's audio**, or Spotify's recommendations. Only your own files and the Deezer previews are
   analysed, on your own machine.
-- **It doesn't look at popularity.** An obscure B-side and a chart hit get the same chance if they sound right.
+- **It doesn't rank by popularity.** An obscure B-side and a chart hit get the same chance if they sound right.
+  Chart songs fill at most a fifth of a batch, and if you keep passing on them, haystack learns that too.
 - **It doesn't read lyrics or genre tags** to choose. The fingerprint is all sound.
 - **It doesn't share your taste with anyone.** Your ratings and fingerprints stay in haystack's database on your
   server.

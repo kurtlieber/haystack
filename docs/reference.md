@@ -24,7 +24,9 @@ decisions behind the design are in [adr/](adr/).
 library.root (read-only) --scan--> SQLite: local_tracks --embed (9x30 s windows)--> embeddings/local/*.npz
 Spotify (likes, plays) --sync--> likes / plays / liked_map (ID tag -> ISRC -> fuzzy) --> positives
 Deezer + ListenBrainz --harvest--> candidates (+ source) --preview, in memory only--> deezer_vectors (512/1280-d)
-score = max cosine(candidate preview, any positive window) -> weekly batch -> Discoveries -> outcomes -> like rate
+score = max cosine(candidate preview, aligned to the library, any positive window; variant chosen by the eval)
+  -> top 400 re-ranked by a model of your Verdicts, once it beats the score -> weekly batch (spread, exploration)
+  -> Discoveries -> outcomes and Verdicts -> kept rate
 ```
 
 | Module | Role |
@@ -39,6 +41,8 @@ score = max cosine(candidate preview, any positive window) -> weekly batch -> Di
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
 | `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
+| `evaluate.py` | the scoring-variant eval (ADR 0009): how well each variant ranks your kept offers above the turned-down ones, with held-out liked songs as the fallback |
+| `report.py` | `haystack report`: offers, Verdicts, the pool and the latest eval, as counts and shares, read-only |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring; the Baseline and usual range |
@@ -577,3 +581,6 @@ python3.14 -m venv .venv && .venv/bin/pip install -e ".[embed,test]"
 .venv/bin/python -m pytest -q
 docker build -t haystack:local .     # the image; compose.yaml with image: haystack:local runs it
 ```
+A release bumps `version` in `pyproject.toml`, adds its section at the top of [CHANGELOG.md](../CHANGELOG.md)
+(the API's additions also go in [api.md](api.md)'s "Changes"), and is tagged `v<version>` on `main`, which
+publishes the image.
