@@ -132,6 +132,49 @@ def test_text_has_no_names_unless_asked(tmp_path, monkeypatch):
     assert "Secret" not in named
 
 
+def test_plays_per_week_and_the_gates(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from haystack_music import rerank, sources
+    path, cfg = _world(tmp_path, monkeypatch)
+    con = db.connect(path)
+    now = datetime.now(timezone.utc)
+    at = [(now - timedelta(minutes=m)).strftime("%Y-%m-%dT%H:%M:%SZ") for m in range(5)]
+    for t, ctx, ms in ((at[0], "needle", 10000), (at[1], "needle", 60000), (at[2], "needle", None),
+                       (at[3], "spotify:playlist:x", None), ("2001-01-01T00:00:00Z", "needle", 1000)):
+        con.execute("INSERT INTO plays(spotify_id, played_at, context, ms_played) VALUES(?,?,?,?)",
+                    (sid("kept_liked"), t, ctx, ms))
+    con.commit()
+    pl = report.plays(con)
+    assert len(pl["weeks"]) == report.WEEKS and list(pl["weeks"])[-1] == report._weeks()[-1]
+    assert pl["weeks"][report._weeks()[-1]] == {"needle": 3, "spotify": 1, "needle_with_length": 2, "needle_short": 1}
+    assert (pl["needle_with_length"], pl["needle_short_share"]) == (2, 0.5)
+    # nothing has evidence enough yet: every gate closed, none opened before
+    g = report.gates(con, cfg)
+    assert set(g) == {"auc_objective", "rerank", "exploration", "adaptive_caps"}
+    assert not any(x["open"] or x["opened_at"] for x in g.values())
+    assert g["auc_objective"]["value"] is None and g["rerank"]["gain"] is None
+    assert g["rerank"]["value"] == len(rerank.labels(con, cfg)) and g["rerank"]["soft"] == 0
+    # an AUC eval with enough of both kinds, a re-ranker run that beat stage 1, a busy source
+    con.execute("INSERT INTO eval_runs(at, trigger, objective, n_pos, n_neg) VALUES('2026-01-12T00:00:00Z', 'weekly', "
+                "'auc', 20, 16)")
+    con.execute("INSERT INTO rerank_runs(at, trigger, variant, n_labels, loo_auc_model, loo_auc_stage1, used) "
+                "VALUES('2026-01-19T00:00:00Z', 'batch', 'raw', 6, 0.81, 0.7, 1)")
+    cfg["rerank"]["min_labels"] = 1
+    cfg["harvest"]["sources"] = ["src_a", "src_b"]
+    busiest = max(sources.rates(con)["per_source"][s]["decided"] for s in ("src_a", "src_b"))
+    cfg["sources"]["min_offers_before_retire"] = busiest
+    g = report.gates(con, cfg)
+    assert g["auc_objective"] == {**g["auc_objective"], "value": 16, "threshold": 15, "open": True,
+                                  "opened_at": "2026-01-12T00:00:00Z"}
+    assert (g["rerank"]["open"], g["rerank"]["gain"], g["rerank"]["opened_at"]) == (True, 0.11, "2026-01-19T00:00:00Z")
+    assert g["adaptive_caps"]["open"] and g["adaptive_caps"]["value"] == busiest
+    cfg["eval"]["objective"] = "mean_pct"                                    # pinned to the old rule: closed
+    assert not report.gates(con, cfg)["auc_objective"]["open"]
+    cfg["eval"]["objective"] = "auc"
+    txt = report.text(report.build(con, cfg, STATUS))
+    assert "Plays per week" in txt and "Gates" in txt and "auc_objective  open" in txt and "1/2" in txt
+
+
 def test_report_on_an_empty_install(tmp_path):
     path = tmp_path / "fresh.db"
     db.connect(path).close()

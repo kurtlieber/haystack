@@ -48,6 +48,13 @@ align = "auto"                 # map previews into your library's space once 100
 [rerank]
 enabled = true                 # once 40 judged picks teach it more than similarity alone, it orders the batch
 
+[calibrate]
+# needle's Calibrate list: the candidates haystack is least sure about, from across its ranking. Rating a few
+# teaches it more than anything else.
+enabled = true
+per_week = 30                  # new songs a week
+outstanding = 30               # at most this many waiting for a verdict
+
 [harvest]
 sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
            "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar"]

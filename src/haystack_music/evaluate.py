@@ -6,11 +6,12 @@ share of the liked songs that have a vector is held out: their rows (and any lib
 removed from the positives, and each held-out song is ranked against the harvested candidate pool, which
 stands in for tracks nobody chose for the listener.
 
-The objective comes from the offers, each scored exactly like a candidate: the ones the listener kept (a Rating
-of 3 stars or more, or liked without a Rating), each with its own rows and same-song library files left out of its
-positives, against the ones they turned down (a Pass or a Dislike, or expired after a play or removed by hand).
-Both sides were offered, so both were picked from the top of the pool the same way; held-out liked songs were
-never picked, and next to offers they make whichever variant did the picking look worst. How well a variant ranks
+The objective comes from the offers and the Calibrate picks (ADR 0015), each scored exactly like a candidate: the
+ones the listener kept (a Rating of 3 stars or more, or liked without a Rating), each with its own rows and
+same-song library files left out of its positives, against the ones they turned down (a Pass or a Dislike, or an
+offer that expired after a play or was removed by hand). Both sides were picked from the pool the same way
+(offered from its top, or asked about across its score bands); held-out liked songs were never picked, and next
+to offers they make whichever variant did the picking look worst. Soft labels (ADR 0016) are not used here. How well a variant ranks
 the kept offers above the turned-down ones:
   auc              chance that a kept offer outscores a turned-down one (0.5 = chance), weighted by stars
   gap              mean percentile of the kept offers minus that of the turned-down ones
@@ -88,18 +89,20 @@ def _track_keys(con, sids) -> dict[str, set]:
 
 def _verdict_queries(con, cfg: dict, liked_q: list[dict], liked_ids: set, known: set) -> tuple[list[dict], list]:
     """The offers the listener decided, as queries by their own Deezer preview vector (ADR 0009). Also sets the
-    liked queries' weight (stars; an Unrated like counts as scoring.verdicts.unrated_like_stars).
+    liked queries' weight (stars; an Unrated like counts as scoring.verdicts.unrated_like_stars, graded by plays).
     kept: weighted by its stars: a Rating of 3 stars or more, or liked with no Rating (also when it is a liked
       song now: then it is a liked-song query as well).
     turned down: a current Pass or Dislike, or an offer that expired after a play or was removed by hand with no
       verdict since. Liked songs, and songs that are liked or in the library under another id, are left out.
-    Only offers count: a track rated or passed elsewhere was never picked from the pool (see the module doc)."""
-    from . import baseline, verdicts
+    Only offers and Calibrate picks count: a track rated or passed elsewhere was never picked from the pool (see
+    the module doc)."""
+    from . import baseline, calibrate, verdicts
     cur = verdicts.current(con)
     weights = baseline.liked_weights(con, cfg)
     for x in liked_q:
         x["weight"] = weights.get(x["sid"], 0.0)
     offered = {r[0] for r in con.execute("SELECT spotify_id FROM offers WHERE spotify_id IS NOT NULL")}
+    offered |= set(calibrate.picked(con))
 
     def kept(sid):
         v = cur.get(sid)

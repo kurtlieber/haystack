@@ -1,7 +1,8 @@
 """The Baseline: the listener's typical Reading per Trait.
 
 Over the tracks the listener likes (Liked Songs and every Rated track; Passes and Dislikes left out), each
-weighted by its stars, an Unrated like counting as 3 (5 stars count 5x a 1-star). Per Trait: the weighted mean,
+weighted by its stars, an Unrated like counting as 3 plus a star per doubling of its recent plays, at most 5
+(verdicts.positive_stars, ADR 0016; 5 stars count 5x a 1-star). Per Trait: the weighted mean,
 which Concept A draws as "your baseline", and the weighted 25th-75th percentile, the usual range that decides
 which Traits the summary sentence mentions."""
 from __future__ import annotations
@@ -32,12 +33,12 @@ def stats(values, weights) -> dict | None:
 def liked_weights(con, cfg: dict) -> dict[str, float]:
     """spotify id -> weight for every track the listener likes."""
     cur = verdicts.current(con)
-    unrated = cfg["scoring"]["verdicts"]["unrated_like_stars"]
+    plays = verdicts.like_plays(con, cfg)
     out = {}
     for (sid,) in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL"):
         v = cur.get(sid)
         if v is None:
-            out[sid] = float(unrated)
+            out[sid] = float(verdicts.positive_stars(cfg, None, liked=True, plays=plays.get(sid, 0)))
         elif v.kind == "rating":
             out[sid] = float(v.stars)
     for sid, v in cur.items():

@@ -158,6 +158,77 @@ def test_plays_are_recorded_once(world):
     assert con.execute("SELECT COUNT(*), context FROM plays").fetchone()[:] == (1, "needle")
 
 
+def test_plays_carry_their_length_when_needle_knows_it(world):
+    srv, _, con = world
+    t = sid("rezz")
+    good = [{"id": "p-1", "track": t, "started_at": "2026-10-11T07:00:00Z", "ms_played": 31000, "completed": False},
+            {"id": "p-2", "track": t, "started_at": "2026-10-11T08:00:00Z", "ms_played": None, "completed": None},
+            {"id": "p-3", "track": t, "started_at": "2026-10-11T09:00:00Z"},
+            {"id": "p-4", "track": t, "started_at": "2026-10-11T10:00:00Z", "ms_played": 0, "completed": True}]
+    bad = [{"id": "b-1", "track": t, "started_at": "2026-10-11T11:00:00Z", "ms_played": -1},
+           {"id": "b-2", "track": t, "started_at": "2026-10-11T11:00:00Z", "ms_played": True},
+           {"id": "b-3", "track": t, "started_at": "2026-10-11T11:00:00Z", "ms_played": 1.5},
+           {"id": "b-4", "track": t, "started_at": "2026-10-11T11:00:00Z", "completed": "yes"}]
+    code, body = call(srv, "POST", "/v1/plays", {"plays": good + bad})
+    assert code == 200 and body["accepted"] == ["p-1", "p-2", "p-3", "p-4"]
+    assert [r["id"] for r in body["rejected"]] == ["b-1", "b-2", "b-3", "b-4"]
+    assert {r["error"] for r in body["rejected"][:3]} == {"malformed play: ms_played must be a non-negative integer"}
+    assert body["rejected"][3]["error"] == "malformed play: completed must be true or false"
+    rows = con.execute("SELECT ms_played, completed FROM plays ORDER BY played_at").fetchall()
+    assert [tuple(r) for r in rows] == [(31000, 0), (None, None), (None, None), (0, 1)]
+
+
+def _pick(con, cid, name, *, band="90-97", pct=93.1, p=None, reasons=None, reason="the re-ranker gives it even odds",
+          judged_at=None):
+    con.execute("INSERT INTO candidates(id, deezer_id, artist, title, source, state, vector_status, spotify_id, "
+                "nearest, raw_cos) VALUES(?,?,?,?,'deezer_related','pool','ok',?,'local:967',0.91)",
+                (cid, cid, f"Artist {name}", f"Title {name}", sid(name)))
+    con.execute("INSERT INTO spotify_tracks(spotify_id, name, artists_json, duration) VALUES(?,?,?,200.0)",
+                (sid(name), f"Title {name}", json.dumps([f"Artist {name}"])))
+    vectors.put_deezer_vector(con, cid, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[cid * 7])
+    con.execute("INSERT INTO calibrations(candidate_id, spotify_id, picked_at, week, band, percentile, rerank_p, "
+                "disagreement, reason, rerank_reason, judged_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, sid(name), db.now(), "w", band, pct, p, 4.0, reason,
+                 None if reasons is None else json.dumps(reasons), judged_at))
+
+
+def test_state_has_the_calibrate_queue(world):
+    srv, worker, con = world
+    _pick(con, 3, "cal1", p=0.52, reasons=["close to your 4-5\u2605 tracks"])
+    _pick(con, 4, "cal2", band="50-75", pct=61.0, reason="from the part of the ranking the batch rarely reaches")
+    _pick(con, 5, "cal3", judged_at="2000-01-04T00:00:00Z")                 # judged in an earlier week
+    verdicts.record(con, sid("cal4"), "pass")                               # judged before it was picked
+    _pick(con, 6, "cal4")
+    con.commit()
+    v = {"id": "cal-0001", "track": sid("cal2"), "kind": "dislike", "given_at": db.now(), "queue": "calibrate"}
+    assert call(srv, "POST", "/v1/verdicts", {"verdicts": [v]})[1]["accepted"] == ["cal-0001"]
+    code, st = call(srv, "GET", "/v1/state")
+    assert code == 200
+    q = st["queues"]["calibrate"]
+    assert [c["id"] for c in q["items"]] == [sid("cal1"), sid("cal2"), sid("cal4")]     # unreviewed first
+    assert (q["total"], q["done"]) == (3, 2) and q["items"][1]["verdict"]["kind"] == "dislike"
+    assert con.execute("SELECT judged_at IS NOT NULL FROM calibrations WHERE candidate_id=6").fetchone()[0]
+    why = q["items"][0]["why"]
+    assert "band" not in why and why["exploration"] is False and why["source_label"]
+    assert (why["model"], why["confidence"], why["reasons"]) == ("rerank", 0.52, ["close to your 4-5\u2605 tracks"])
+    assert why["calibrate"] == {"band": "90-97", "percentile": 93.1, "chance": 0.52,
+                                "reason": "the re-ranker gives it even odds"}
+    why = q["items"][1]["why"]
+    assert (why["model"], why["confidence"], why["reasons"], why["calibrate"]["chance"]) == ("similarity", None, [], None)
+    assert sid("cal1") in worker.measured                                   # no Readings yet: measure
+    code, card = call(srv, "GET", f"/v1/tracks/{sid('cal1')}")
+    assert code in (200, 202) and card["why"]["calibrate"]["band"] == "90-97"
+    # the other queues never show a pick
+    assert sid("cal1") not in {c["id"] for c in st["queues"]["discoveries"]["items"]}
+
+
+def test_the_calibrate_queue_is_empty_on_an_older_database(tmp_path):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "old.db")
+    con.row_factory = sqlite3.Row
+    assert review.calibrate_picks(con) == ([], {}) and verdicts.judge_picks(con) == 0
+
+
 def test_unknown_track_is_measured_on_demand(world):
     srv, worker, _ = world
     code, card = call(srv, "GET", f"/v1/tracks/{sid('newone')}")

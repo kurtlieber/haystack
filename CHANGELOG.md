@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/kurtlieber/haystack/compare/v0.4.0...v0.5.0) (2026-10-20)
+
+
+### Features
+
+* **alert:** an [alert] outbox folder instead of the webhook ([35faa49](https://github.com/kurtlieber/haystack/commit/35faa4986b7485dd80b7f51dce850cf223e2488c))
+* **calibrate:** a third review queue, the candidates haystack is least sure of, for needle to ask about (ADR 0015; API feature `queue.calibrate`) ([456bb19](https://github.com/kurtlieber/haystack/commit/456bb1911939dcdfc7ba7c2f8e4ad16e45a7b41a))
+* **plays:** a short, unfinished play is a soft no for the re-ranker, and plays grade an Unrated like (ADR 0016; API feature `plays.ms_played`) ([456bb19](https://github.com/kurtlieber/haystack/commit/456bb1911939dcdfc7ba7c2f8e4ad16e45a7b41a))
+* **report:** which learning gates are open and what each still needs, and plays per week; status.json carries the gates ([456bb19](https://github.com/kurtlieber/haystack/commit/456bb1911939dcdfc7ba7c2f8e4ad16e45a7b41a))
+
 ## [0.4.0](https://github.com/kurtlieber/haystack/compare/v0.3.1...v0.4.0) (2026-10-19)
 
 

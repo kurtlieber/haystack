@@ -193,6 +193,7 @@ The ones people change most:
 | `batch.max_per_artist` | `1` | Songs per artist in one batch. |
 | `batch.diversity` | `0.5` | How much a batch spreads across the styles you like. `0` takes the closest matches only. |
 | `spotify.discoveries_name` | `"Discoveries"` | The playlist's name. |
+| `calibrate.enabled`, `calibrate.per_week` | `true`, `30` | needle's **Calibrate** list: up to this many songs a week that haystack is least sure about, for you to rate. `false` stops new ones. |
 | `spotify.to_rip` | `false` | Also keep a **To Rip** playlist of songs you rate 3 stars or more that aren't in your music folder, to buy later. |
 | `harvest.listenbrainz_contact` | `""` | Your email or website. ListenBrainz asks API users for one. |
 | `harvest.retired_sources` | `[]` | Candidate sources to stop using. `haystack sources` shows how well each one does for you, and by the seed it started from. |
@@ -236,7 +237,7 @@ paste the address back, as in step 5.
 hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song still in
 Discoveries when the next batch comes is a no, played or not, because the playlist is meant to be listened
 through. Songs added less than a day before are let off. Ratings in needle (1 to 5 stars, Pass, Dislike) count
-too, and say more than a like.
+too, and say more than a like. A discovery you skip in needle after 5 seconds but within 30 counts as a gentle no.
 
 Without Docker, haystack runs as systemd user services on any Linux machine with Python 3.14 and ffmpeg. See
 [docs/reference.md](docs/reference.md#running-it), which also covers every command, how the scoring works and
@@ -253,7 +254,8 @@ where the files live.
 
 [needle](https://github.com/kurtlieber/needle) is the desktop app that goes with haystack. It plays your
 Discoveries and lets you rate each song in a keystroke. haystack doesn't need it, but ratings teach haystack much
-faster than likes alone.
+faster than likes alone. Besides Discoveries, needle has a **Calibrate** list, the songs haystack is least sure
+about (rating a few of those teaches it the most), and your liked songs that have no rating yet.
 
 needle talks to haystack over your network, on port 8517. To connect a needle:
 

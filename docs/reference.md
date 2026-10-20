@@ -41,12 +41,13 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
 | `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
+| `calibrate.py` | the Calibrate queue (ADR 0015): the pool candidates haystack is least sure of, across the stage-1 score bands, topped up hourly for needle to ask about |
 | `evaluate.py` | the scoring-variant eval (ADR 0009): how well each variant ranks your kept offers above the turned-down ones, with held-out liked songs as the fallback |
-| `report.py` | `haystack report`: offers, Verdicts, the pool and the latest eval, as counts and shares, read-only |
+| `report.py` | `haystack report`: offers, Verdicts, the pool, the latest eval, plays per week and the gates, as counts and shares, read-only |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring; the Baseline and usual range |
-| `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues, verdicts and plays in |
+| `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |
 | `scheduler.py` | `haystack serve`'s job schedule (`[schedule]`), in place of the systemd timers |
@@ -87,9 +88,10 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
   tracks count as "unplayed" (the conservative direction). Not a bug.
 * **Metric.** Kept rate, overall, per source and per seed (`haystack sources`), and the fuller `haystack report`. A source
-  can't be retired before 30 offered tracks. No skip inference yet (skips later from the Extended Streaming
-  History export). The second stage (Re-ranking) learns from Verdicts and outcomes only, and switches itself on
-  once it has 40 labels and beats similarity alone.
+  can't be retired before 30 offered tracks. Spotify's plays carry no length, so they say nothing about skips;
+  a short, unfinished needle play of an offer or a Calibrate pick is a *soft no* for the re-ranker only (see
+  **Plays**). The second stage (Re-ranking) learns from Verdicts and outcomes (and a little from soft nos), and
+  switches itself on once it has 40 labels and beats similarity alone.
 * **Spotify dev mode (2026).** No audio-features / recommendations / browse / artist top tracks / batch track
   fetch; search capped at 10. None of these are used.
 
@@ -116,6 +118,9 @@ haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] 
 haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
                                               offline scoring-variant eval (no Spotify calls); --choose stores its pick
 haystack rerank fit|show [--limit N] fit the second stage on your Verdicts and record it / show the last fit
+haystack calibrate plan [--n N] [--tracks]
+                                              what the next Calibrate top-up would pick (no Spotify, no writes)
+haystack calibrate top-up            pick and map the Calibrate queue now (needs auth; the hourly sync does it)
 haystack align fit|show [--limit N]  fit the preview alignment and store it / show it, its fits and the eval's verdict
 haystack genres [--top 15]           genre makeup of the liked songs (400 Discogs styles)
 haystack harvest --broad [N] [--shard i/N] [--no-retry] [--styles N]   stratified broad harvest
@@ -223,11 +228,12 @@ shard of one week draws the same. `--shard i/N` splits the seeds across parallel
 throttle is shared). Chart + editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the
 pool, and of each batch (3 of 15).
 
-**Eval** (`haystack eval`, ADR 0009): each variant scores the past offers like candidates, and the eval asks how
-well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a Rating) above the ones you
-**turned down** (a Pass or a Dislike, or expired after a play or removed by hand). A kept offer is weighted by its
-stars (an Unrated like counts as 3★) and is left out of its own positives, with any library file of the same song;
-a turned-down offer that is a liked or library song is skipped. Reported per variant:
+**Eval** (`haystack eval`, ADR 0009): each variant scores the past offers and judged Calibrate picks like
+candidates, and the eval asks how well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a
+Rating) above the ones you **turned down** (a Pass or a Dislike, or an offer that expired after a play or was
+removed by hand). A kept offer is weighted by its stars (an Unrated like counts as 3★, graded by its plays: see
+**Plays**) and is left out of its own positives, with any library file of the same song; a turned-down offer that
+is a liked or library song is skipped. Soft nos are not used here. Reported per variant:
 
 - **AUC**: the chance that a kept offer outscores a turned-down one (0.5 = chance). The objective.
 - **gap**: mean percentile of the kept offers minus that of the turned-down ones, among the pool.
@@ -235,8 +241,9 @@ a turned-down offer that is a liked or library song is skipped. Reported per var
   *degenerate* (its top picks are near-ties, so the batch is decided by noise) and is not chosen unless
   every variant is.
 
-Only offers count: both sides were picked from the top of the pool the same way. Held-out liked songs were never
-picked, and set against offers they make whichever variant did the picking look worst.
+Only offers and Calibrate picks count: both were picked from the pool (offered from its top, or asked about across
+its score bands). Held-out liked songs were never picked, and set against offers they make whichever variant did
+the picking look worst.
 
 The choice is the best AUC among the variants that are not degenerate; within `eval.auc_tie` (0.02) is a tie and
 the simpler variant wins (simplest first: raw, topk_mean, centred, csls, csls_centred, genre, genre_blend). It
@@ -306,12 +313,15 @@ Verdicts gives each of them a *confidence*, its chance that you keep the track, 
 `alpha * z(logit) + (1 - alpha) * z(stage-1 score)` (`rerank.alpha`, 0.7), put back in stage-1 score units. The
 rest of the pool keeps its stage-1 order below them, and exploration picks are still drawn by stage-1 score.
 
-- **Labels**: one per track with a candidate row and a preview vector that was offered, or that carries a Verdict
-  given outside the Unrated likes queue (those are all liked songs, so they say nothing about yes against no).
+- **Labels**: one per track with a candidate row and a preview vector that was offered or picked for Calibrate,
+  or that carries a Verdict given outside the Unrated likes queue (those are all liked songs, so they say nothing about yes against no).
   The current Verdict decides: a Rating of 3★ or more is a yes, weighted 1.0, 1.25 or 1.5 for 3, 4 or 5★; a
   Rating of 1-2★ is a no of weight 0.75 (to stage 1 it is still a positive: you like the track a little, but it
   is not for the batch); a Pass is a no of 1.0 and a Dislike of 1.5. With no Verdict an offer you liked is a yes,
-  and one that expired after a play or was removed by hand a no, both 1.0; `unplayed` is not a label.
+  and one that expired after a play or was removed by hand a no, both 1.0, and a Calibrate pick you hearted in
+  Spotify is a yes of 1.0 as a liked offer is; `unplayed` is not a label. Otherwise
+  an offer or Calibrate pick whose latest needle play stopped before `rerank.soft_pass_ms` (30 s) without
+  finishing is a **soft no** of weight `rerank.soft_pass_weight` (0.5) (see **Plays**).
 - **Features**, computed the same way for a pool candidate and a labelled track (which is left out of its own
   positives and negatives): the stage-1 score; the nearest and top-k similarity and the genre top-k with no star
   bonus; hubness; the negative penalty and the largest excess over a turned-down track; the stars of the nearest
@@ -324,7 +334,7 @@ rest of the pool keeps its stage-1 order below them, and exploration picks are s
   milliseconds. `rerank.l2` (1.0) is the penalty on the weighted mean log-loss, per unit of label weight.
 - **Gate**: the model is used only with at least `rerank.min_labels` (40) labels and when its leave-one-out AUC
   (each label scored by a model fitted on all the others) beats stage 1's AUC on the same labels by
-  `rerank.min_gain` (0.05). Otherwise the batch goes by stage 1 and the log says why. The check runs again at
+  `rerank.min_gain` (0.05). Soft nos join the fit but not the gate: neither the count nor the AUCs include them. Otherwise the batch goes by stage 1 and the log says why. The check runs again at
   every batch, so the second stage switches itself on as labels grow. An error in it never stops a batch.
 - **Reasons**: each re-ranked candidate keeps up to two phrases for the features that pushed its chance up the
   most (`close to your 4-5★ tracks`, `brighter than you usually like`) and up to two for what held it back. A
@@ -333,9 +343,11 @@ rest of the pool keeps its stage-1 order below them, and exploration picks are s
   tracks is never a reason to hold a track back); such a weight still orders the batch. A Trait is quoted only
   when the track lies outside your usual range on the side the phrase names, or as `<trait> in your usual range`.
 
-Each fit is a row in `rerank_runs`, and the last model is kept in the `kv` table (`rerank_model`). When the model
-is used, a batch writes the chance and reasons of the pool's top 400 to `candidates` (`rerank_p`,
-`rerank_reason`), and the batch summary carries `rerank` (used, why, the labels, both AUCs). The API returns them
+Each fit is a row in `rerank_runs` (with `n_soft`, the soft nos it used), and the last model is kept in the `kv`
+table (`rerank_model`). Whenever the model can be fitted (two yes and two no labels), a batch writes its chance and
+reasons for every scored pool candidate to `candidates` (`rerank_p`, `rerank_reason`), used or not, and when it is
+used the blend of the top 400 goes to `rerank_score`, which marks a re-ranked pick. The batch summary carries
+`rerank` (used, why, the labels, the soft nos, both AUCs). The API returns them
 in a Discoveries card's `why` (features `rerank` and `why.reasons`). `haystack rerank fit` fits and records
 without touching the pool; `rerank show` prints the last fit, its largest weights and the recent fits; `batch
 --plan --stage1` shows what stage 1 alone would pick.
@@ -347,6 +359,49 @@ pool_top = 400
 min_labels = 40
 min_gain = 0.05
 alpha = 0.7
+soft_labels = true     # short, unfinished needle plays as soft nos (ADR 0016)
+soft_pass_ms = 30000
+soft_pass_weight = 0.5
+```
+
+**Calibrate** (`[calibrate]`, ADR 0015). Discoveries only ever shows the top of the pool, so the re-ranker hears
+about little else and its gate opens slowly. The Calibrate queue in needle asks about the candidates haystack is
+least sure of instead: a Verdict there is a Rating, Pass or Dislike like any other, and a label for the re-ranker
+and the eval.
+
+- **Bands**: the scored pool is split by stage-1 score percentile into `calibrate.bands`, each with its share of
+  the picks: `50-75` 0.2, `75-90` 0.3, `90-97` 0.3, `97-100` 0.2 (the lower bound is in the band, the upper one
+  not, except 100). Nothing under the 50th percentile is asked about. Each top-up goes to the bands furthest below
+  their share of the week's picks, one pick at a time, and skips a band with nothing left.
+- **Order**: within a band, the candidates the re-ranker gives the most even odds come first (`|chance - 0.5|`,
+  whenever a model can be fitted, its gate open or not). With no chance they are ordered by how much the ways of
+  measuring closeness disagree (the standard deviation of the candidate's percentile across `raw`, `topk_mean`,
+  `centred`, `csls`, `csls_centred` and `genre`), the largest first.
+- **Left out**: anything liked, offered, already asked about, judged or in the library; artists with a current
+  Dislike; retired sources. One pick per artist per ISO week, and chart sources within `harvest.chart_max_share`
+  of the week's picks.
+- **Top-up**: the hourly sync keeps up to `calibrate.outstanding` (30) unjudged picks and adds at most
+  `calibrate.per_week` (30) per ISO week. Each pick is mapped to Spotify as a batch pick is (one that can't be
+  found is marked `not_found` and the next one tried; one already in Liked Songs is excluded), and stored in
+  `calibrations` with its band, percentile, chance, disagreement and the reason the card shows. A pick stays in the
+  pool and never expires; the batch never offers it. Its Verdict, or a heart in Spotify, moves it on as for an
+  offer; a hearted pick with no Verdict waits in Rate your likes for its stars, not in Calibrate.
+- **Reasons**: `the re-ranker gives it even odds` (chance within 0.15 of 0.5), `the ways haystack measures
+  closeness disagree about it` (10 percentile points or more), else `one of the closest calls at the top of the
+  ranking` in the top band and `from the part of the ranking the batch rarely reaches` below it.
+
+`haystack calibrate plan` prints what the next top-up would pick (band, percentile, chance, disagreement, source,
+reason; `--tracks` adds the names) with no Spotify session and a read-only database; `calibrate top-up` runs the
+sync's top-up now. needle shows the queue when the server lists the feature `queue.calibrate` (`docs/api.md`).
+A fresh install has no scored pool, so the queue stays empty. `enabled = false` stops new picks; the open ones
+stay in the queue.
+
+```toml
+[calibrate]
+enabled = true
+outstanding = 30
+per_week = 30
+bands = { "50-75" = 0.2, "75-90" = 0.3, "90-97" = 0.3, "97-100" = 0.2 }
 ```
 
 **Picking the batch** (ADR 0010). About `batch.exploration_fraction` of the picks are exploration picks, taken at
@@ -418,8 +473,13 @@ kind and stars and how many Liked Songs are rated; the pool (size, embedded, sco
 the top 100 by stored score, how many have a library window as their nearest positive and how many a preview (by owner
 kind: like, discovery, manual, rated); the top 30's score range, distinct nearest positives and top-1 Discogs
 style; and the latest eval from `status.json`: the objective it chose by, the kept and turned-down offers it
-counted, and per variant the AUC (marked when degenerate) and mean percentile, with tracks never named. It
-prints counts and shares only, so it can be pasted into an issue; `--tracks` adds the top 30 by name and `--json`
+counted, and per variant the AUC (marked when degenerate) and mean percentile, with tracks never named; plays per
+ISO week (needle and Spotify, and how many needle plays stopped before 30 s) beside the re-ranker's hard and soft
+labels by the week they were given, for the last 8 weeks; and the **gates**, the thresholds that keep the adaptive
+parts off until there is enough evidence: the AUC objective (`eval.min_verdicts`), the re-ranker
+(`rerank.min_labels` and `rerank.min_gain`), the adaptive exploration share (`batch.explore_min_judged`) and the
+adaptive caps (`sources.min_offers_before_retire`), each with its threshold, current value, whether it is open and
+when it first opened. Every job also writes the gates to `status.json` (`gates`). It prints counts and shares only, so it can be pasted into an issue; `--tracks` adds the top 30 by name and `--json`
 prints everything as JSON.
 
 **Clear Discoveries** (`batch.clear_min_age_hours`, `batch.clear_recent`, `batch.clear_no_penalty`), run at the
@@ -457,9 +517,35 @@ with its stars. By default the bonus is one of five fixed cosine offsets, `star_
 `star_weight_sd = 0.25` per star above 3 (a penalty per star below), in units of the sd of the pool's
 nearest-positive similarity in the variant's space, measured at scoring time, so a 5★ track is worth the same
 lift in every pool whatever its spread. That form is opt-in until `haystack eval` shows it is not worse (ADR
-0011). An Unrated like counts as `unrated_like_stars = 3`; a library file nobody liked or rated gets 0. A Pass
+0011). An Unrated like counts as `unrated_like_stars = 3`, graded by its plays (see **Plays**); a library file
+nobody liked or rated gets 0. A Pass
 is a negative of `pass_strength = 1.0` (the old "normal" no), a Dislike `dislike_strength = 2.0` (the old
 "strong"), on the negative-penalty scale. Every variant adds the bonus before taking the nearest / top-k.
+
+**Plays** (ADR 0016). The sync stores Spotify's recently played and needle posts its own plays (`POST
+/v1/plays`). A needle play also carries how long it lasted (`ms_played`) and whether it reached the end
+(`completed`); Spotify's carry neither. Plays are evidence, never Verdicts: nothing they imply is written to the
+verdicts or to Spotify.
+
+- **Soft no**: an offer or Calibrate pick with no Verdict and no decided outcome whose latest needle play stopped
+  before `rerank.soft_pass_ms` (30 s) without finishing is a no of weight `rerank.soft_pass_weight` (0.5) for the
+  re-ranker's fit. A Verdict, a like, or a later full play takes it back. It counts toward neither the gate nor
+  the eval. needle reports a play only once it has run 5 s or reached the end, so a skip in the first 5 s (often
+  just moving through the queue) is no play and no soft no.
+- **Unrated likes graded by plays** (`scoring.verdicts.unrated_like_plays`): an Unrated like gains a star per
+  doubling of its plays (any context) in the last `unrated_like_days` (90) days, at most two:
+  `3 + min(2, floor(log2(1 + plays)))`, so 1 play is 4★ and 3 are 5★. A needle skip (stopped before
+  `rerank.soft_pass_ms` without finishing) is no play. needle plays through Spotify, so a Spotify play of the track
+  within 5 minutes of a needle play is that same play and counts once. A Rating always stands. This grades the
+  positives' bonus, the re-ranker's star features, the Baseline's weights and the eval's kept weights. With no
+  plays stored an Unrated like is 3★, as before. For this release `haystack eval` also prints each variant's AUC
+  and mean percentile without the grading.
+
+```toml
+[scoring.verdicts]
+unrated_like_plays = true
+unrated_like_days = 90
+```
 
 ## Running it
 
@@ -470,7 +556,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | library | daily 03:15 | rescan + embed new/changed files (+ To Rip check if signed in) | no |
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
 | harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
-| sync | hourly | plays, likes, outcomes, expiry, To Rip, your playlists, token check | yes |
+| sync | hourly | plays, likes, outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |

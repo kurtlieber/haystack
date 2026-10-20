@@ -118,14 +118,15 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 
 @pytest.fixture
 def server(tmp_path):
-    """Two offers (one rated and re-ranked, one exploration with Readings), an Unrated like, a rated like with
-    Readings (the Baseline), a playlist holding both offers, and a Spotify write that failed."""
+    """Two offers (one rated and re-ranked, one exploration with Readings), a rated Calibrate pick with Readings
+    and the re-ranker's chance, an Unrated like, a rated like with Readings (the Baseline), a playlist holding both
+    offers, and a Spotify write that failed."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
     con.execute("INSERT INTO local_tracks(id, path, size, content_hash, title_raw, artists_json) "
                 "VALUES(5, '/m/a.m4a', 1, 'h', 'Library Title', '[\"Library Artist\"]')")
-    for n, name in enumerate(("disc1", "disc2", "like1", "like2"), start=1):
+    for n, name in enumerate(("disc1", "disc2", "like1", "like2", "cal1"), start=1):
         con.execute("INSERT INTO spotify_tracks(spotify_id, name, artists_json, album, album_type, release_date, duration, "
                     "image_url, image_url_small) VALUES(?,?,?,?,?,?,?,?,?)",
                     (sid(name), f"Track {n}", json.dumps([f"Artist {n}"]), f"Album {n}", "single", "2020-01-02",
@@ -138,9 +139,18 @@ def server(tmp_path):
         con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, exploration, score_percentile, added_at) "
                     "VALUES(?,?,1,?,?,'x')", (cid, sid(name), explore, 55.0 if explore else 98.5))
         vectors.put_deezer_vector(con, cid, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[cid * 3])
-    con.execute("UPDATE candidates SET rerank_p=0.81, rerank_reason=? WHERE id=2",   # a top pick the re-ranker ordered
-                (json.dumps(["close to your 4-5★ tracks"]),))
+    con.execute("UPDATE candidates SET rerank_score=1.2, rerank_p=0.81, rerank_reason=? WHERE id=2",   # a top pick
+                (json.dumps(["close to your 4-5★ tracks"]),))                                   # the re-ranker ordered
     traits.put(con, 1, ALL_TRAITS)
+    con.execute("INSERT INTO candidates(id, deezer_id, artist, title, source, state, vector_status, spotify_id, "
+                "nearest, raw_cos) VALUES(3, 3, 'Artist 3', 'Track 3', 'deezer_related', 'pool', 'ok', ?, 'local:5', "
+                "0.77)", (sid("cal1"),))
+    vectors.put_deezer_vector(con, 3, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[12])
+    traits.put(con, 3, ALL_TRAITS)
+    con.execute("INSERT INTO calibrations(candidate_id, spotify_id, picked_at, week, band, percentile, rerank_p, "
+                "disagreement, reason, rerank_reason) VALUES(3, ?, '2026-01-05T00:00:00Z', '2026-W02', '90-97', 93.1, "
+                "0.52, 12.5, 'the re-ranker gives it even odds', ?)",
+                (sid("cal1"), json.dumps(["brighter than you usually like"])))
     for name in ("like1", "like2"):
         con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01')", (sid(name),))
     con.execute("INSERT INTO liked_map(spotify_id, use_local, deezer_id, vector_status) VALUES(?, 0, 10, 'ok')",
@@ -149,6 +159,7 @@ def server(tmp_path):
     traits.put(con, 10, ALL_TRAITS)
     verdicts.record(con, sid("disc2"), "rating", 4)
     verdicts.record(con, sid("like2"), "rating", 4)
+    verdicts.record(con, sid("cal1"), "rating", 2, queue="calibrate")       # judged this week: still in the queue
     con.execute("UPDATE verdicts SET effects_error='synthetic failure' WHERE spotify_id=?", (sid("disc2"),))
     con.execute("INSERT INTO playlists(id, name, owner_id, owner_name, mine, image_url, total, snapshot_id, position) "
                 "VALUES(?, 'Synthetic Mix', 'me', 'Listener', 1, 'https://example.invalid/p.jpg', 2, 's1', 0)",
@@ -182,7 +193,9 @@ def payloads(srv) -> dict:
              {"verdicts": [{"id": "contract-1", "track": sid("like1"), "kind": "pass", "given_at": "2026-01-06T00:00:00Z"},
                            {"id": "contract-2", "track": "short", "kind": "pass"}]}),
             ("plays_response", "POST", "/v1/plays",
-             {"plays": [{"id": "p1", "track": sid("disc1"), "started_at": "2026-01-06T00:00:00Z"}, {"id": "p2"}]}),
+             {"plays": [{"id": "p1", "track": sid("disc1"), "started_at": "2026-01-06T00:00:00Z"}, {"id": "p2"},
+                        {"id": "p3", "track": sid("disc2"), "started_at": "2026-01-06T00:05:00Z", "ms_played": 12000,
+                         "completed": False}]}),
             ("playlist_put_response", "PUT", f"/v1/playlists/{sid('mix')}/tracks",
              {"snapshot_id": "s2", "tracks": [{"id": sid("disc1"), "title": "Track 1", "artists": ["Artist 1"]}]})):
         code, out[name] = call(srv, method, path, body)
@@ -212,7 +225,9 @@ def test_every_fixture_section_is_checked(defs):
         elif isinstance(spec, dict):
             for k, s in spec.items():
                 if k == "$ref":
-                    used.add(s)
+                    if s not in used:
+                        used.add(s)
+                        refs(defs[s])                  # and what the definition refers to
                 else:
                     refs(s)
     roots = {"health", "state", "card", "playlist", "verdicts_response", "plays_response", "playlist_put_response"}

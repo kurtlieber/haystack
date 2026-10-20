@@ -7,9 +7,12 @@ current verdict, so a burst of re-ratings ends in one consistent state."""
 from __future__ import annotations
 
 import logging
+import math
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from . import db
 
@@ -109,7 +112,31 @@ def record(con, spotify_id: str, kind: str, stars: int | None = None, *, given_a
         # the server's own state follows at once (the Spotify writes may wait): a judged candidate is never offered
         # again, and its offer is closed so the sync can't mistake the server's playlist removal for the listener's.
         _close_offer(con, spotify_id, current(con, [spotify_id])[spotify_id])
+        judge_picks(con, [spotify_id], now)
     return {"id": vid, "status": "accepted" if cur.rowcount else "duplicate"}
+
+
+def judge_picks(con, sids=None, at: str | None = None) -> int:
+    """Mark the open Calibrate picks (ADR 0015) of these tracks judged (default: every open pick with a verdict or a
+    heart, the reconcile the state snapshot and the hourly top-up run). A pick hearted in Spotify with no verdict is
+    judged when it was liked, and its candidate leaves the pool as a liked offer's does. -> picks marked. A database
+    without the table marks none."""
+    at = at or db.now()
+    try:
+        if sids is None:
+            n = con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id IN "
+                            "(SELECT spotify_id FROM verdicts)", (at,)).rowcount
+            hearted = con.execute("""SELECT k.id, k.candidate_id, COALESCE(l.added_at, ?) FROM calibrations k
+                                     JOIN likes l ON l.spotify_id=k.spotify_id AND l.removed_at IS NULL
+                                     WHERE k.judged_at IS NULL""", (at,)).fetchall()
+            for kid, cid, liked_at in hearted:
+                con.execute("UPDATE calibrations SET judged_at=? WHERE id=?", (liked_at, kid))
+                con.execute("UPDATE candidates SET state='liked' WHERE id=? AND state='pool'", (cid,))
+            return n + len(hearted)
+        return sum(con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id=?",
+                               (at, s)).rowcount for s in sids)
+    except sqlite3.OperationalError:
+        return 0
 
 
 def judged_elsewhere(con, spotify_id: str) -> bool:
@@ -219,20 +246,65 @@ def stars_in_sd(cfg: dict) -> bool:
     return not cfg["scoring"]["verdicts"]["star_bonus"]
 
 
-def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False) -> int | None:
-    """A positive's stars (an Unrated like counts as `unrated_like_stars`), or None if it is not a positive."""
+PLAY_MATCH = timedelta(minutes=5)          # a Spotify play this close to a needle play of the track is that play
+
+
+def _at(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def like_plays(con, cfg: dict) -> dict[str, int]:
+    """{Spotify id: listens in the last scoring.verdicts.unrated_like_days days}, from any context (Spotify's recently
+    played and needle), for grading Unrated likes (ADR 0016); {} when scoring.verdicts.unrated_like_plays is off.
+    A needle play that stopped before rerank.soft_pass_ms without finishing is a skip, not a listen. needle plays
+    through Spotify, so a Spotify play of the track from PLAY_MATCH before a needle play's start to PLAY_MATCH after
+    its end (15 minutes after its start when needle sent no length) is the same listen and counts once."""
+    w = cfg["scoring"]["verdicts"]
+    if not w.get("unrated_like_plays"):
+        return {}
+    since = (datetime.now(timezone.utc) - timedelta(days=w["unrated_like_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    soft_ms = cfg["rerank"]["soft_pass_ms"]
+    needle: dict[str, list] = {}
+    spotify: dict[str, list] = {}
+    for sid, at, ctx, ms, done in con.execute("SELECT spotify_id, played_at, context, ms_played, completed FROM plays "
+                                              "WHERE played_at >= ? ORDER BY played_at", (since,)):
+        if ctx == "needle":
+            skip = done == 0 and ms is not None and ms < soft_ms
+            needle.setdefault(sid, []).append((_at(at), ms, not skip))
+        else:
+            spotify.setdefault(sid, []).append(_at(at))
+    out = {}
+    for sid in needle.keys() | spotify.keys():
+        rest, n = list(spotify.get(sid, [])), 0
+        for start, ms, listen in needle.get(sid, []):
+            end = start + timedelta(milliseconds=ms if ms is not None else 15 * 60_000) + PLAY_MATCH
+            hit = next((i for i, t in enumerate(rest) if start - PLAY_MATCH <= t <= end), None)
+            if hit is not None:
+                del rest[hit]
+            n += listen
+        if n + len(rest):
+            out[sid] = n + len(rest)
+    return out
+
+
+def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False, plays: int = 0) -> int | None:
+    """A positive's stars, or None if it is not a positive. An Unrated like counts as `unrated_like_stars` plus a
+    star per doubling of its recent plays (like_plays), at most two more and at most 5 (ADR 0016)."""
     if v is None:
-        return cfg["scoring"]["verdicts"]["unrated_like_stars"] if liked else None
+        if not liked:
+            return None
+        s = cfg["scoring"]["verdicts"]["unrated_like_stars"]
+        return min(5, s + min(2, int(math.log2(1 + plays)))) if plays > 0 else s
     return v.stars if v.kind == "rating" else None
 
 
-def positive_bonus(cfg: dict, v: Verdict | None, liked: bool = False) -> float | None:
+def positive_bonus(cfg: dict, v: Verdict | None, liked: bool = False, plays: int = 0) -> float | None:
     """The additive bonus a track gets as a discovery positive, or None if it is not a positive.
-    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3). With star_bonus
-    (a list) it is that star count's fixed offset; with an empty list it is star_weight_sd per star away from 3,
-    in pool-score sd, which the scorer multiplies by the pool's spread."""
+    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3), graded by its plays
+    (positive_stars). With star_bonus (a list) it is that star count's fixed offset; with an empty list it is
+    star_weight_sd per star away from 3, in pool-score sd, which the scorer multiplies by the pool's spread."""
     w = cfg["scoring"]["verdicts"]
-    s = positive_stars(cfg, v, liked)
+    s = positive_stars(cfg, v, liked, plays)
     if s is None:
         return None
     if stars_in_sd(cfg):

@@ -1,6 +1,6 @@
-"""What needle shows for a Review: track cards and the two Review queues (the `/v1/state` payload).
+"""What needle shows for a Review: track cards and the Review queues (the `/v1/state` payload).
 
-A track card carries everything the Concept A screen needs for one track, so needle can prefetch both queues and
+A track card carries everything the Concept A screen needs for one track, so needle can prefetch every queue and
 Review offline: metadata and cover, the current verdict, why the server picked it, its top Discogs styles and its
 Readings. Read-only: nothing here writes."""
 from __future__ import annotations
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from . import baseline, db, playlists, traits, verdicts
+from . import baseline, calibrate, db, playlists, traits, verdicts
 
 SOURCE_LABELS = {
     "deezer_chart": "the Deezer chart",
@@ -72,9 +72,11 @@ class Cards:
         self.names = style_names(classes)
         self.pending: set[str] = set()      # tracks the API is measuring right now
 
-    def build(self, sids: list[str], offers: dict | None = None) -> list[dict]:
+    def build(self, sids: list[str], offers: dict | None = None, picks: dict | None = None) -> list[dict]:
+        """Cards for these tracks; offers (track id: offers row) and picks (track id: calibrations row) give the
+        why of a Discoveries offer and of a Calibrate pick."""
         con = self.con
-        offers = offers or {}
+        offers, picks = offers or {}, picks or {}
         cur = verdicts.current(con, sids)
         tv = self._track_vectors(con, sids)
         dids = [t["deezer_id"] for t in tv.values()]
@@ -114,7 +116,7 @@ class Cards:
                 "cover": m["image_url"] if m else None,
                 "cover_small": m["image_url_small"] if m else None,
                 "verdict": {"kind": v.kind, "stars": v.stars, "given_at": v.given_at} if v else None,
-                "why": self._why(offers.get(sid)),
+                "why": self._why_pick(picks[sid]) if sid in picks else self._why(offers.get(sid)),
                 "styles": self._styles(st.get(did)) if did is not None else [],
                 "readings": readings or None,
                 "measure": measure,
@@ -125,12 +127,12 @@ class Cards:
     def _why(self, offer) -> dict | None:
         if offer is None:
             return None
-        c = self.con.execute("SELECT nearest, raw_cos, source, rerank_p, rerank_reason FROM candidates WHERE id=?",
-                             (offer["candidate_id"],)).fetchone()
+        c = self.con.execute("SELECT nearest, raw_cos, source, rerank_score, rerank_p, rerank_reason FROM candidates "
+                             "WHERE id=?", (offer["candidate_id"],)).fetchone()
         if c is None:
             return None
         # the re-ranker's view (ADR 0011): only for a top pick it ordered; exploration picks go by similarity
-        ranked = c["rerank_p"] is not None and not offer["exploration"]
+        ranked = c["rerank_score"] is not None and c["rerank_p"] is not None and not offer["exploration"]
         return {"sounds_like": nearest_label(self.con, c["nearest"]),
                 "similarity": round(float(c["raw_cos"]), 2) if c["raw_cos"] is not None else None,
                 "source": c["source"], "source_label": SOURCE_LABELS.get(c["source"], c["source"]),
@@ -140,6 +142,25 @@ class Cards:
                 "model": "rerank" if ranked else "similarity",
                 "confidence": round(float(c["rerank_p"]), 2) if ranked else None,
                 "reasons": json.loads(c["rerank_reason"] or "[]") if ranked else []}
+
+    def _why_pick(self, pick) -> dict | None:
+        """A Calibrate pick's why (ADR 0015): as for an offer, with no band (it is neither a top nor an exploration
+        pick) and with `calibrate`: its band, percentile, the re-ranker's chance and the card's phrase. The
+        re-ranker's view shows whenever a model was fitted at the pick, used for the batch or not."""
+        c = self.con.execute("SELECT nearest, raw_cos, source FROM candidates WHERE id=?",
+                             (pick["candidate_id"],)).fetchone()
+        if c is None:
+            return None
+        p = pick["rerank_p"]
+        return {"sounds_like": nearest_label(self.con, c["nearest"]),
+                "similarity": round(float(c["raw_cos"]), 2) if c["raw_cos"] is not None else None,
+                "source": c["source"], "source_label": SOURCE_LABELS.get(c["source"], c["source"]),
+                "exploration": False,
+                "model": "rerank" if p is not None else "similarity",
+                "confidence": round(float(p), 2) if p is not None else None,
+                "reasons": json.loads(pick["rerank_reason"] or "[]") if p is not None else [],
+                "calibrate": {"band": pick["band"], "percentile": pick["percentile"],
+                              "chance": round(float(p), 2) if p is not None else None, "reason": pick["reason"]}}
 
     def _styles(self, vec) -> list:
         if vec is None or not self.names:
@@ -157,6 +178,26 @@ def discoveries(con) -> tuple[list[str], dict]:
         if r["spotify_id"] not in offers:
             sids.append(r["spotify_id"]); offers[r["spotify_id"]] = r
     return sids, offers
+
+
+def calibrate_picks(con, ts: str | None = None) -> tuple[list[str], dict]:
+    """The Calibrate queue (ADR 0015): every open pick plus the picks judged this ISO week, in pick order. A pick
+    hearted in Spotify with no Verdict waits in Rate your likes for its stars instead.
+    -> (track ids, calibrations rows). Empty on a database from before 0.5.0."""
+    wk = calibrate.week(ts)
+    try:
+        rows = con.execute("SELECT * FROM calibrations ORDER BY id").fetchall()
+    except Exception:  # noqa: BLE001 - no calibrations table yet
+        return [], {}
+    hearted = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL AND spotify_id "
+                                         "NOT IN (SELECT spotify_id FROM verdicts)")}
+    sids, picks = [], {}
+    for r in rows:
+        if r["spotify_id"] in picks or r["spotify_id"] in hearted or (
+                r["judged_at"] is not None and calibrate.week(r["judged_at"]) != wk):
+            continue
+        sids.append(r["spotify_id"]); picks[r["spotify_id"]] = r
+    return sids, picks
 
 
 def unrated_likes(con) -> list[str]:
@@ -186,13 +227,18 @@ def next_batch_at(now: datetime | None = None, schedule: str = "Mon 08:00") -> s
 
 
 def state(con, cfg: dict, cards: Cards | None = None) -> dict:
-    """The whole /v1/state payload: both Review queues with full cards, the Baseline, the listener's playlists (the songs'
-    ids only: needle fetches a playlist's cards when a Playlist review starts) and Spotify write status."""
+    """The whole /v1/state payload: the Review queues (Discoveries, Calibrate, Rate your likes) with full cards, the
+    Baseline, the listener's playlists (the songs' ids only: needle fetches a playlist's cards when a Playlist review
+    starts) and Spotify write status."""
     cards = cards or Cards(con, cfg)
     d_sids, offers = discoveries(con)
     d_cards = cards.build(d_sids, offers)
     reviewed = [c for c in d_cards if c["verdict"]]
     d_cards = [c for c in d_cards if not c["verdict"]] + reviewed          # unreviewed first
+    c_sids, picks = calibrate_picks(con)
+    c_cards = cards.build(c_sids, picks=picks)
+    c_done = [c for c in c_cards if c["verdict"]]
+    c_cards = [c for c in c_cards if not c["verdict"]] + c_done
     l_sids = unrated_likes(con)
     pend = con.execute("SELECT COUNT(DISTINCT spotify_id) FROM verdicts WHERE effects='pending'").fetchone()[0]
     err = con.execute("SELECT effects_error FROM verdicts WHERE effects='pending' AND effects_error IS NOT NULL "
@@ -204,6 +250,7 @@ def state(con, cfg: dict, cards: Cards | None = None) -> dict:
             "discoveries": {"total": len(d_cards), "done": len(reviewed),
                             "next_batch_at": next_batch_at(schedule=cfg["schedule"]["batch"]),
                             "items": d_cards},
+            "calibrate": {"total": len(c_cards), "done": len(c_done), "items": c_cards},
             "likes": {"total": len(l_sids), "items": cards.build(l_sids)},
         },
         "playlists": playlists.summaries(con),

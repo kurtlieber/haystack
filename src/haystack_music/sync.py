@@ -1,6 +1,6 @@
 """Hourly sync (needs Spotify auth): recently-played, Liked Songs, liked->library mapping, liked-track preview
-vectors, Discoveries outcomes (like / 14-day expiry / manual removal), To Rip upkeep, the listener's playlists (for
-needle's Playlist review), token-expiry warning.
+vectors, Discoveries outcomes (like / 14-day expiry / manual removal), the Calibrate queue's top-up (ADR 0015), To
+Rip upkeep, the listener's playlists (for needle's Playlist review), token-expiry warning.
 
 Recently-played only returns the last 50 tracks, so more than ~50 plays between two hourly syncs are not
 visible; such offers count as "unheard" at expiry (the conservative direction, by design). On an always-on
@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from . import alert, db, library, playlists, status, traits, verdicts
+from . import alert, calibrate, db, library, playlists, status, traits, verdicts
 from .deezer import Deezer
 from .matching import Index, TrackRef, use_local_vector
 from .spotify import Spotify
@@ -135,7 +135,7 @@ def bot_remove(con, sp: Spotify, slot: str, pid: str, sids: list[str], reason: s
 
 def fill_metadata(con, sp: Spotify) -> dict:
     """Covers, years and album types for the tracks needle shows (the Review queues) that lack them: one pass
-    over Liked Songs (50 per call) for likes, GET /tracks/{id} for the rest."""
+    over Liked Songs (50 per call) for likes, GET /tracks/{id} for the rest (offers and Calibrate picks)."""
     need = {r[0] for r in con.execute("""SELECT l.spotify_id FROM likes l LEFT JOIN spotify_tracks s
                                          ON s.spotify_id=l.spotify_id WHERE l.removed_at IS NULL AND s.image_url IS NULL""")}
     c = {"likes": 0, "tracks": 0}
@@ -149,6 +149,9 @@ def fill_metadata(con, sp: Spotify) -> dict:
     rest = [r[0] for r in con.execute("""SELECT DISTINCT o.spotify_id FROM offers o LEFT JOIN spotify_tracks s
                                          ON s.spotify_id=o.spotify_id WHERE (o.removed_at IS NULL
                                          OR o.batch_id=(SELECT MAX(id) FROM batches)) AND s.image_url IS NULL""")]
+    rest += [r[0] for r in con.execute("""SELECT DISTINCT k.spotify_id FROM calibrations k LEFT JOIN spotify_tracks s
+                                          ON s.spotify_id=k.spotify_id WHERE s.image_url IS NULL""")
+             if r[0] not in rest]
     for sid in rest:
         upsert_track(con, sp.track(sid)); c["tracks"] += 1
     return c
@@ -394,6 +397,11 @@ def run(con, cfg: dict, sp: Spotify | None = None) -> dict:
     out["mapping"] = map_likes(con, cfg, lib)
     out["liked_vectors"] = liked_preview_vectors(con, cfg, cfg["spotify"]["liked_preview_vectors_per_run"])
     out["offers"] = process_offers(con, sp, cfg, pl, lib)
+    try:                                                              # the Calibrate queue (ADR 0015)
+        out["calibrate"] = calibrate.top_up(con, cfg, sp)
+    except Exception as e:  # noqa: BLE001 - the queue can wait an hour; the rest of the sync can't
+        log.warning("calibrate: %r", e)
+        out["calibrate"] = {"error": repr(e)[:300]}
     out["to_rip"] = torip_check(con, cfg, sp, lib)
     out["verdict_effects"] = verdicts.apply_effects(con, cfg, sp)     # retries any the API couldn't make
     try:                                                              # needle's Playlist review

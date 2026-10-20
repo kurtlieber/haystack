@@ -150,6 +150,70 @@ def test_labels_sort_verdicts_and_outcomes_into_yes_and_no(tmp_path, monkeypatch
     assert {x["sid"]: x["y"] for x in rerank.labels(con)}[sid("pool1")] == 0    # the verdict wins over the outcome
 
 
+def _play(con, name, at, ms=None, completed=None, context="needle"):
+    con.execute("INSERT INTO plays(spotify_id, played_at, context, ms_played, completed) VALUES(?,?,?,?,?)",
+                (sid(name), at, context, ms, completed))
+
+
+def test_a_short_unfinished_needle_play_is_a_soft_no(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch, n_lab=6, n_pool=10)
+    for j in range(1, 7):
+        con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, added_at, outcome) "
+                    "VALUES(?,?,1,'2026-01-05','unplayed')", (1000 + j, sid(f"pool{j}")))
+    con.execute("INSERT INTO calibrations(candidate_id, spotify_id, picked_at, week) VALUES(1007, ?, 'x', 'w')",
+                (sid("pool7"),))
+    _play(con, "pool1", "2026-01-06T10:00:00Z", 12000, 0)                   # short, unfinished: a soft no
+    _play(con, "pool2", "2026-01-06T10:00:00Z", 12000, 1)                   # finished (a short track)
+    _play(con, "pool3", "2026-01-06T10:00:00Z", 45000, 0)                   # long enough
+    _play(con, "pool4", "2026-01-06T10:00:00Z", context="spotify:playlist:x")   # Spotify carries no length
+    _play(con, "pool5", "2026-01-06T10:00:00Z", 5000, 0)
+    _play(con, "pool5", "2026-01-07T10:00:00Z", 200000, 1)                  # a later full play wins
+    _play(con, "pool6", "2026-01-06T10:00:00Z")                             # an older needle: no length
+    _play(con, "pool7", "2026-01-06T11:00:00Z", 3000, 0)                    # a Calibrate pick counts too
+    _play(con, "pool8", "2026-01-06T11:00:00Z", 3000, 0)                    # never offered or picked
+    soft = {x["sid"]: x for x in rerank.labels(con, cfg) if x["soft"]}
+    assert set(soft) == {sid("pool1"), sid("pool7")}
+    assert (soft[sid("pool1")]["y"], soft[sid("pool1")]["w"], soft[sid("pool1")]["kind"],
+            soft[sid("pool1")]["at"]) == (0, 0.5, "soft_pass", "2026-01-06T10:00:00Z")
+    assert not any(x["soft"] for x in rerank.labels(con))                   # without cfg: hard labels only
+    cfg["rerank"]["soft_labels"] = False
+    assert not any(x["soft"] for x in rerank.labels(con, cfg))
+    cfg["rerank"]["soft_labels"] = True
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-07')", (sid("pool7"),))
+    assert sid("pool7") not in {x["sid"] for x in rerank.labels(con, cfg) if x["soft"]}   # liked on Spotify since
+    verdicts.record(con, sid("pool1"), "rating", 4)                         # a Verdict always wins
+    got = {x["sid"]: x for x in rerank.labels(con, cfg)}
+    assert (got[sid("pool1")]["y"], got[sid("pool1")]["soft"]) == (1, False)
+
+
+def test_soft_labels_train_the_model_but_not_its_gate(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    for j in range(10):
+        con.execute("INSERT INTO offers(candidate_id, spotify_id, batch_id, added_at, outcome) "
+                    "VALUES(?,?,1,'2026-01-05','unplayed')", (1000 + j, sid(f"pool{j}")))
+        _play(con, f"pool{j}", "2026-01-06T10:00:00Z", 8000, 0)
+    r = _run(con, cfg)
+    assert (r["n_labels"], r["n_pos"], r["n_neg"], r["n_soft"]) == (60, 30, 30, 10)
+    assert rerank.summary(r)["n_soft"] == 10
+    cfg["rerank"]["min_labels"] = 61                                        # 70 labels, 60 of them hard
+    assert not _run(con, cfg)["used"]
+    rerank.record(con, r)
+    assert rerank.runs(con)[0]["n_soft"] == 10
+
+
+def test_a_calibrate_verdict_is_a_label_and_an_eval_query(tmp_path, monkeypatch):
+    from haystack_music import evaluate
+    con, cfg, _ = _world(tmp_path, monkeypatch, n_lab=6, n_pool=10)
+    con.execute("INSERT INTO calibrations(candidate_id, spotify_id, picked_at, week) VALUES(1008, ?, 'x', 'w')",
+                (sid("pool8"),))
+    verdicts.record(con, sid("pool8"), "dislike", None, queue="calibrate")
+    verdicts.record(con, sid("pool9"), "pass", None)                        # neither offered nor picked
+    assert {x["sid"]: (x["y"], x["kind"]) for x in rerank.labels(con, cfg)}[sid("pool8")] == (0, "dislike")
+    q, _ = evaluate._verdict_queries(con, cfg, [], set(), set())
+    down = {x["sid"] for x in q if x["kind"] == "turned down"}
+    assert sid("pool8") in down and sid("pool9") not in down
+
+
 # ---------------- stage 1 and the second stage ----------------
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -246,8 +310,12 @@ def test_record_write_pool_and_the_cli(tmp_path, monkeypatch, capsys):
     assert n == 150
     reason = con.execute("SELECT rerank_reason FROM candidates WHERE rerank_p IS NOT NULL LIMIT 1").fetchone()[0]
     assert isinstance(json.loads(reason), list)
+    assert con.execute("SELECT COUNT(*) FROM candidates WHERE rerank_score IS NOT NULL").fetchone()[0] == 150
     off = {**r, "used": False, "top": None}
-    rerank.write_pool(con, off)                                            # not used: the columns are cleared
+    rerank.write_pool(con, off)              # fitted, not used: the chance stays (Calibrate), the order is cleared
+    assert con.execute("SELECT COUNT(*) FROM candidates WHERE rerank_p IS NOT NULL").fetchone()[0] == 150
+    assert con.execute("SELECT COUNT(*) FROM candidates WHERE rerank_score IS NOT NULL").fetchone()[0] == 0
+    rerank.write_pool(con, {**off, "chance": None})                        # no model: the columns are cleared
     assert con.execute("SELECT COUNT(*) FROM candidates WHERE rerank_p IS NOT NULL").fetchone()[0] == 0
     con.close()
     monkeypatch.setattr(config, "DB_PATH", path)

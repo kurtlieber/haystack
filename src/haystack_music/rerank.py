@@ -6,6 +6,10 @@ is refitted at every scoring (it takes milliseconds) on the judged candidates an
 least `rerank.min_labels` labels and its leave-one-out AUC beats stage 1 alone over the same labels by
 `rerank.min_gain`. Exploration picks are not re-ranked (scoring.select_batch keeps the band in stage-1 order).
 
+Whenever it can fit (two yes and two no labels), the model's chance is computed for every scored pool row, used or
+not: the Calibrate queue (ADR 0015) asks about the candidates it gives even odds. Soft labels (ADR 0016) join the
+fit; the gate and the leave-one-out AUCs count the hard ones.
+
 Every feature is computed the same way for a pool candidate and for a judged one; a judged track is left out of
 its own positives, style positives and negatives (its own verdict must not explain it). Pure numpy; the only
 writes are record() and write_pool()."""
@@ -17,7 +21,7 @@ import math
 
 import numpy as np
 
-from . import baseline, db, traits, vectors
+from . import baseline, calibrate, db, traits, vectors
 from .evaluate import _chunks, _owner_keys, _track_keys
 from .scoring import (GENRE_VARIANTS, Space, hubness, is_centred, is_csls, l2norm, negative_penalty, owner_max,
                       topk_mean, zblend)
@@ -34,40 +38,62 @@ IRLS_STEPS = 50
 PCA_ROUND = 5
 REASON_MIN = 0.1                            # a reason moves the logit by at least this much
 
-_CURRENT = """SELECT v.spotify_id, v.kind, v.stars, v.queue FROM verdicts v
+_CURRENT = """SELECT v.spotify_id, v.kind, v.stars, v.queue, v.given_at FROM verdicts v
               WHERE v.id = (SELECT w.id FROM verdicts w WHERE w.spotify_id = v.spotify_id
                             ORDER BY w.given_at DESC, w.received_at DESC, w.rowid DESC LIMIT 1)"""
 
 
 # ---------------- labels ----------------
 
-def labels(con) -> list[dict]:
-    """The judged candidates, one per track: {sid, cand_id, deezer_id, y (1 yes, 0 no), w, kind}.
-    A track counts when it was offered, or carries a current verdict given outside the Rate your likes queue
-    (those are all liked songs, so they say nothing about yes against no; they still feed the star features).
-    The current verdict decides: a Rating of 3 stars or more is a yes weighted by stars, 1-2 stars, a Pass or a
-    Dislike a no. With no verdict an offer liked is a yes, and one that expired after a play or was removed by
-    hand a no; `unplayed` is not a label. The track needs a candidate row with a preview vector."""
+def labels(con, cfg: dict | None = None) -> list[dict]:
+    """The judged candidates, one per track: {sid, cand_id, deezer_id, y (1 yes, 0 no), w, kind, soft, at}.
+    A track counts when it was offered or picked for Calibrate, or carries a current verdict given outside the
+    Rate your likes queue (those are all liked songs, so they say nothing about yes against no; they still feed
+    the star features). The current verdict decides: a Rating of 3 stars or more is a yes weighted by stars, 1-2
+    stars, a Pass or a Dislike a no. With no verdict an offer liked is a yes, and one that expired after a play or
+    was removed by hand a no; `unplayed` is not a label. A Calibrate pick hearted in Spotify is a yes as a liked
+    offer is. Otherwise, with cfg's rerank.soft_labels, an offered or Calibrate track not in Liked Songs whose
+    latest needle play stopped before rerank.soft_pass_ms without finishing is a soft no (ADR 0016). `at` is when
+    the label was given: the verdict's given_at, the offer's close, the heart, or the play. The track needs a
+    candidate row with a preview vector."""
+    rr = (cfg or {}).get("rerank", {})
     cur = {r[0]: r for r in con.execute(_CURRENT)}
     offers: dict[str, tuple] = {}
-    for r in con.execute("SELECT spotify_id, candidate_id, outcome FROM offers WHERE spotify_id IS NOT NULL "
-                         "ORDER BY added_at, id"):
-        offers[r[0]] = (r[1], r[2])                       # the latest offer of the track wins
-    sids = sorted(set(offers) | {s for s, r in cur.items() if r[3] != "likes"})
+    for r in con.execute("SELECT spotify_id, candidate_id, outcome, removed_at FROM offers "
+                         "WHERE spotify_id IS NOT NULL ORDER BY added_at, id"):
+        offers[r[0]] = (r[1], r[2], r[3])                 # the latest offer of the track wins
+    picked = calibrate.picked(con)
+    asked = set(offers) | set(picked)
+    sids = sorted(asked | {s for s, r in cur.items() if r[3] != "likes"})
     cands: dict[str, tuple] = {}
     for ch in _chunks(sids):
         for r in con.execute(f"SELECT id, spotify_id, deezer_id FROM candidates WHERE vector_status='ok' AND "
                              f"spotify_id IN ({','.join('?' * len(ch))}) ORDER BY id", ch):
             sid = r[1]
-            if sid not in cands or r[0] == offers.get(sid, (None,))[0]:
-                cands[sid] = (r[0], r[2])                 # the offered candidate, else the first one
+            if sid not in cands or r[0] == (offers.get(sid, (None,))[0] or picked.get(sid)):
+                cands[sid] = (r[0], r[2])                 # the offered (or picked) candidate, else the first one
+    liked = {r[0]: r[1] for r in con.execute("SELECT spotify_id, added_at FROM likes WHERE removed_at IS NULL")}
+    short: dict[str, str] = {}
+    if rr.get("soft_labels"):
+        quiet = [s for s in sids if s in asked and s not in cur and s not in liked and offers.get(s, (None, None))[1]
+                 not in ("liked", "negative", "manual_removed")]
+        for ch in _chunks(quiet):
+            last: dict[str, tuple] = {}
+            for r in con.execute(f"SELECT spotify_id, played_at, ms_played, completed FROM plays WHERE "
+                                 f"context='needle' AND spotify_id IN ({','.join('?' * len(ch))}) "
+                                 f"ORDER BY played_at", ch):
+                last[r[0]] = r                            # the latest needle play wins
+            for sid, r in last.items():
+                if r[3] == 0 and r[2] is not None and r[2] < rr["soft_pass_ms"]:
+                    short[sid] = r[1]
     out = []
     for sid in sids:
         if sid not in cands:
             continue
         v = cur.get(sid)
+        soft, at = False, None
         if v is not None:
-            kind, stars = v[1], v[2]
+            kind, stars, at = v[1], v[2], v[4]
             if kind == "rating":
                 if stars is None:
                     continue
@@ -78,14 +104,19 @@ def labels(con) -> list[dict]:
             else:
                 continue
         else:
-            outcome = offers.get(sid, (None, None))[1]
+            _, outcome, at = offers.get(sid, (None, None, None))
             if outcome == "liked":
                 y, w, kind = 1, OUTCOME_WEIGHT, "liked"
             elif outcome in ("negative", "manual_removed"):
                 y, w, kind = 0, OUTCOME_WEIGHT, outcome
+            elif sid in picked and sid in liked:
+                y, w, kind, at = 1, OUTCOME_WEIGHT, "liked", liked[sid]
+            elif sid in short:
+                y, w, kind, soft, at = 0, rr["soft_pass_weight"], "soft_pass", True, short[sid]
             else:
                 continue
-        out.append(dict(sid=sid, cand_id=cands[sid][0], deezer_id=cands[sid][1], y=y, w=float(w), kind=kind))
+        out.append(dict(sid=sid, cand_id=cands[sid][0], deezer_id=cands[sid][1], y=y, w=float(w), kind=kind,
+                        soft=soft, at=at))
     return out
 
 
@@ -413,11 +444,11 @@ def wauc(score, y, w) -> float | None:
     return float((wp * wn * gt).sum() / (w[pos].sum() * w[neg].sum()))
 
 
-def loo_logits(Z: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float) -> np.ndarray:
-    """Each label's logit from a model fitted on all the other labels."""
-    out = np.empty(len(Z))
+def loo_logits(Z: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float, rows=None) -> np.ndarray:
+    """Each label's logit from a model fitted on all the other labels (rows: only these labels, NaN elsewhere)."""
+    out = np.full(len(Z), np.nan)
     keep = np.ones(len(Z), bool)
-    for i in range(len(Z)):
+    for i in (range(len(Z)) if rows is None else rows):
         keep[i] = False
         b = fit(Z[keep], y[keep], w[keep], l2)
         out[i] = b[0] + Z[i] @ b[1:]
@@ -476,16 +507,18 @@ def explain(beta: np.ndarray, z: np.ndarray, names: list[str], side_row: np.ndar
 
 def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict:
     """Fit the re-ranker on the current labels and, when it passes the gate, order the top of the pool.
-    res: vectors.compute_scores(con, cfg, variant). -> {used, reason, variant, n_labels, n_pos, n_neg,
-    loo_auc_model, loo_auc_stage1, n_features, ranks ({candidate id: rank in stage-1 score units}, every scored
-    pool row, only when used), top ({candidate id: {p, blend, reasons, held_back}}, only when used), model}."""
+    res: vectors.compute_scores(con, cfg, variant). -> {used, reason, variant, n_labels, n_pos, n_neg (hard
+    labels), n_soft, loo_auc_model, loo_auc_stage1 (over the hard labels), n_features, chance ({candidate id: {p,
+    reasons}}, every scored pool row, whenever the model is fitted), ranks ({candidate id: rank in stage-1 score
+    units}, every scored pool row, only when used), top ({candidate id: {p, blend, reasons, held_back}}, only when
+    used), model}."""
     rr = cfg["rerank"]
     out = {"used": False, "reason": None, "variant": variant, "trigger": trigger, "n_labels": 0, "n_pos": 0,
-           "n_neg": 0, "loo_auc_model": None, "loo_auc_stage1": None, "n_features": 0, "ranks": None, "top": None,
-           "model": None, "at": db.now()}
+           "n_neg": 0, "n_soft": 0, "loo_auc_model": None, "loo_auc_stage1": None, "n_features": 0, "chance": None,
+           "ranks": None, "top": None, "model": None, "at": db.now()}
     if not rr["enabled"]:
         return {**out, "reason": "rerank.enabled is false"}
-    labs = labels(con)
+    labs = labels(con, cfg)
     ctx = _prepare(con, cfg, variant, res, labs)
     if ctx is None:
         return {**out, "reason": "no positives or no scored pool"}
@@ -497,7 +530,9 @@ def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict
     labs = [x for x, o in zip(ctx["labs"], ok) if o]
     y = np.array([x["y"] for x in labs], np.int8)
     w = np.array([x["w"] for x in labs], np.float64)
-    out.update(n_labels=len(labs), n_pos=int(y.sum()), n_neg=int(len(y) - y.sum()))
+    hard = np.array([not x["soft"] for x in labs], bool)
+    out.update(n_labels=int(hard.sum()), n_pos=int(y[hard].sum()), n_neg=int(hard.sum() - y[hard].sum()),
+               n_soft=int((~hard).sum()))
     usual = baseline.compute(con, cfg)["traits"]
     sources = sorted({ctx["meta"][ctx["ids"][r]]["source"] for r in lab_rows})
     pca = _fit_pca(ctx, int(rr["pca_components"])) if len(labs) >= rr["min_labels_embed"] else None
@@ -511,22 +546,26 @@ def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict
     if out["n_pos"] < 2 or out["n_neg"] < 2:
         return {**out, "reason": f"{out['n_pos']} yes and {out['n_neg']} no labels: too few to fit"}
     Zl = Z[lab_rows]
-    out["loo_auc_stage1"] = _r(wauc(s1[lab_rows], y, w))
-    out["loo_auc_model"] = _r(wauc(loo_logits(Zl, y, w, rr["l2"]), y, w))
+    h = np.nonzero(hard)[0]
+    out["loo_auc_stage1"] = _r(wauc(s1[lab_rows][h], y[h], w[h]))
+    out["loo_auc_model"] = _r(wauc(loo_logits(Zl, y, w, rr["l2"], h)[h], y[h], w[h]))
     beta = fit(Zl, y, w, rr["l2"])
     prior = np.array([EXPECTED_SIGN.get(f, 0) for f in names])
     agree = (np.sign(beta[1:]) == direction(Zl, y, w)) & (beta[1:] != 0) & ((prior == 0) | (np.sign(beta[1:]) == prior))
     out["model"] = {"features": names, "mean": _rl(mu), "sd": _rl(sd), "beta": _rl(beta), "sources": sources,
                     "agree": [bool(x) for x in agree], "pca": pca, "l2": rr["l2"], "alpha": rr["alpha"]}
+    pool_rows = np.nonzero(pool_ok)[0]
+    p_all = _sigmoid(beta[0] + Z[pool_rows] @ beta[1:])
+    out["chance"] = {ctx["ids"][r]: {"p": round(float(pi), 4), "reasons": explain(beta, Z[r], names, side[r], agree)}
+                     for r, pi in zip(pool_rows, p_all)}
     gain = None if out["loo_auc_model"] is None or out["loo_auc_stage1"] is None else \
         out["loo_auc_model"] - out["loo_auc_stage1"]
-    if len(labs) < rr["min_labels"]:
-        return {**out, "reason": f"{len(labs)} labels (needs {rr['min_labels']})"}
+    if out["n_labels"] < rr["min_labels"]:
+        return {**out, "reason": f"{out['n_labels']} labels (needs {rr['min_labels']})"}
     if gain is None or gain < rr["min_gain"]:
         return {**out, "reason": f"leave-one-out AUC {out['loo_auc_model']} vs stage 1 {out['loo_auc_stage1']} "
                                  f"(needs +{rr['min_gain']})"}
     # blend over the top of the pool by stage-1 score
-    pool_rows = np.nonzero(pool_ok)[0]
     order = pool_rows[np.argsort(-s1[pool_rows], kind="stable")]
     top = order[:int(rr["pool_top"])]
     rest = order[len(top):]
@@ -564,27 +603,30 @@ def _rl(a, nd: int = 6) -> list:
 
 def summary(r: dict) -> dict:
     """The batch summary's `rerank` block (no per-candidate data)."""
-    return {k: r.get(k) for k in ("used", "reason", "variant", "n_labels", "n_pos", "n_neg", "loo_auc_model",
-                                  "loo_auc_stage1", "n_features")}
+    return {k: r.get(k) for k in ("used", "reason", "variant", "n_labels", "n_pos", "n_neg", "n_soft",
+                                  "loo_auc_model", "loo_auc_stage1", "n_features")}
 
 
 def record(con, r: dict) -> None:
     """Keep the fit: kv rerank_model (the last one) and a rerank_runs row."""
     model = None if r.get("model") is None else {**r["model"], **summary(r), "at": r["at"]}
     db.kv_set(con, "rerank_model", json.dumps(model if model else summary(r)))
-    con.execute("""INSERT INTO rerank_runs(at, trigger, variant, n_labels, n_pos, n_neg, loo_auc_model,
-                   loo_auc_stage1, used, reason, model_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (r["at"], r["trigger"], r["variant"], r["n_labels"], r["n_pos"], r["n_neg"], r["loo_auc_model"],
-                 r["loo_auc_stage1"], int(bool(r["used"])), r["reason"], json.dumps(model) if model else None))
+    con.execute("""INSERT INTO rerank_runs(at, trigger, variant, n_labels, n_pos, n_neg, n_soft, loo_auc_model,
+                   loo_auc_stage1, used, reason, model_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (r["at"], r["trigger"], r["variant"], r["n_labels"], r["n_pos"], r["n_neg"], r.get("n_soft", 0),
+                 r["loo_auc_model"], r["loo_auc_stage1"], int(bool(r["used"])), r["reason"],
+                 json.dumps(model) if model else None))
 
 
 def write_pool(con, r: dict) -> None:
-    """Clear the pool's re-ranker columns and, when the model was used, write its top rows."""
+    """Clear the pool's re-ranker columns, write the chance and reasons of every scored row when the model was
+    fitted, and the blend (rerank_score) of the top rows when it was used: rerank_score marks a re-ranked pick."""
     con.execute("BEGIN")
     con.execute("UPDATE candidates SET rerank_score=NULL, rerank_p=NULL, rerank_reason=NULL WHERE state='pool'")
-    for cid, x in (r.get("top") or {}).items():
-        con.execute("UPDATE candidates SET rerank_score=?, rerank_p=?, rerank_reason=? WHERE id=?",
-                    (x["blend"], x["p"], json.dumps(x["reasons"]), cid))
+    con.executemany("UPDATE candidates SET rerank_p=?, rerank_reason=? WHERE id=?",
+                    [(x["p"], json.dumps(x["reasons"]), cid) for cid, x in (r.get("chance") or {}).items()])
+    con.executemany("UPDATE candidates SET rerank_score=?, rerank_p=?, rerank_reason=? WHERE id=?",
+                    [(x["blend"], x["p"], json.dumps(x["reasons"]), cid) for cid, x in (r.get("top") or {}).items()])
     con.execute("COMMIT")
 
 
@@ -594,6 +636,6 @@ def last(con) -> dict | None:
 
 
 def runs(con, limit: int = 10) -> list[dict]:
-    return [dict(x) for x in con.execute("SELECT id, at, trigger, variant, n_labels, n_pos, n_neg, loo_auc_model, "
-                                         "loo_auc_stage1, used, reason FROM rerank_runs ORDER BY id DESC LIMIT ?",
-                                         (limit,))]
+    return [dict(x) for x in con.execute("SELECT id, at, trigger, variant, n_labels, n_pos, n_neg, n_soft, "
+                                         "loo_auc_model, loo_auc_stage1, used, reason FROM rerank_runs "
+                                         "ORDER BY id DESC LIMIT ?", (limit,))]
