@@ -7,16 +7,25 @@ into an issue without showing anyone's taste. The offer columns:
 - kept: the track's current verdict is a Rating of 3 stars or more, or it has no verdict and the offer closed as
   liked.
 - liked/decided: outcome liked, over decided (the like rate in status.json). `haystack sources` shows
-  kept/decided, the rate adaptive caps use (sources.py)."""
+  kept/decided, the rate adaptive caps use (sources.py).
+
+Plays per ISO week by context (needle, or Spotify's recently played) with the share of needle plays under 30 s;
+the labels the re-ranker learns from per ISO week (hard and soft, ADR 0016); and the gates (`gates`, also written
+to status.json after every job): for the AUC objective, the re-ranker, the adaptive exploration share and the
+adaptive caps, the threshold, the current value, whether it is open and when it first opened."""
 from __future__ import annotations
 
+import json
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
 from . import db, scoring, vectors, verdicts
 from .review import nearest_label, style_names
 
+WEEKS = 8       # plays and labels per ISO week: this many weeks, the current one last
+SHORT_MS = 30000    # a needle play under this is "short" in the plays table
 TOP = 100       # sample for the nearest-positive domain
 HEAD = 30       # the head of the pool a batch draws from
 LIBRARY = "local"   # owner prefix of a library window (vectors.positives); every other prefix is a preview
@@ -157,9 +166,116 @@ def eval_table(status_doc: dict | None) -> dict | None:
     return out
 
 
+def _weeks(now: datetime | None = None) -> list[str]:
+    """The last WEEKS ISO weeks, oldest first, e.g. ["2026-W36", ..., "2026-W43"]."""
+    from .calibrate import week
+    now = now or datetime.now(timezone.utc)
+    return [week((now - timedelta(weeks=k)).strftime("%Y-%m-%dT%H:%M:%SZ")) for k in range(WEEKS - 1, -1, -1)]
+
+
+def plays(con) -> dict:
+    """Plays per ISO week by context (needle, or spotify: recently played), and of needle's: how many carry their
+    length (ms_played, haystack 0.5.0) and how many of those stopped before 30 s."""
+    from .calibrate import week
+    weeks = _weeks()
+    out = {w: {"needle": 0, "spotify": 0, "needle_with_length": 0, "needle_short": 0} for w in weeks}
+    since = (datetime.now(timezone.utc) - timedelta(weeks=WEEKS, days=1)).strftime("%Y-%m-%d")
+    for r in con.execute("SELECT played_at, context, ms_played FROM plays WHERE played_at >= ?", (since,)):
+        try:
+            w = week(r["played_at"])
+        except ValueError:
+            continue
+        if w not in out:
+            continue
+        if r["context"] == "needle":
+            out[w]["needle"] += 1
+            if r["ms_played"] is not None:
+                out[w]["needle_with_length"] += 1
+                out[w]["needle_short"] += r["ms_played"] < SHORT_MS
+        else:
+            out[w]["spotify"] += 1
+    n = sum(x["needle_with_length"] for x in out.values())
+    return {"weeks": out, "needle_with_length": n,
+            "needle_short_share": _rate(sum(x["needle_short"] for x in out.values()), n)}
+
+
+def label_weeks(con, cfg: dict, labels: list[dict] | None = None) -> dict:
+    """The re-ranker's labels by the ISO week they were given: {week: {hard, soft}}, the last WEEKS weeks."""
+    from .calibrate import week
+    from .rerank import labels as rerank_labels
+    out = {w: {"hard": 0, "soft": 0} for w in _weeks()}
+    for lb in labels if labels is not None else rerank_labels(con, cfg):
+        w = week(lb["at"]) if lb.get("at") else None
+        if w in out:
+            out[w]["soft" if lb["soft"] else "hard"] += 1
+    return out
+
+
+def _first_run(con, job: str, test) -> str | None:
+    """When the first successful run of job whose summary passes test finished."""
+    for r in con.execute("SELECT finished_at, summary FROM runs WHERE job=? AND ok=1 ORDER BY id", (job,)):
+        try:
+            if test(json.loads(r["summary"] or "{}")):
+                return r["finished_at"]
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return None
+
+
+def gates(con, cfg: dict, labels: list[dict] | None = None) -> dict:
+    """The thresholds that keep haystack's adaptive parts off until it has enough evidence (the dashboard of plan 2):
+    each {threshold, value, open, opened_at}, opened_at the first batch (or harvest, for the caps) it was open."""
+    from .batch import exploration_share
+    from .rerank import labels as rerank_labels
+    from .sources import rates
+    out = {}
+    e, ev = cfg["eval"], con.execute("SELECT n_pos, n_neg FROM eval_runs ORDER BY id DESC LIMIT 1").fetchone()
+    have = None if ev is None or ev["n_pos"] is None else min(ev["n_pos"], ev["n_neg"] or 0)
+    first = con.execute("SELECT MIN(at) FROM eval_runs WHERE objective='auc' AND trigger IN ('weekly','set')"
+                        ).fetchone()[0]
+    out["auc_objective"] = {"what": "kept and turned-down offers, the fewer of the two (eval.min_verdicts)",
+                            "threshold": e["min_verdicts"], "value": have,
+                            "open": e["objective"] == "auc" and have is not None and have >= e["min_verdicts"],
+                            "opened_at": first}
+    rr = cfg["rerank"]
+    lbs = labels if labels is not None else rerank_labels(con, cfg)
+    hard = sum(not lb["soft"] for lb in lbs)
+    last = con.execute("SELECT loo_auc_model, loo_auc_stage1, used FROM rerank_runs ORDER BY id DESC LIMIT 1"
+                       ).fetchone()
+    gain = None if last is None or last["loo_auc_model"] is None or last["loo_auc_stage1"] is None \
+        else round(last["loo_auc_model"] - last["loo_auc_stage1"], 3)
+    first = con.execute("SELECT MIN(at) FROM rerank_runs WHERE used=1 AND trigger='batch'").fetchone()[0]
+    out["rerank"] = {"what": "hard labels (rerank.min_labels) and the leave-one-out AUC gain (rerank.min_gain)",
+                     "threshold": rr["min_labels"], "value": hard, "gain_threshold": rr["min_gain"], "gain": gain,
+                     "soft": len(lbs) - hard,
+                     "open": bool(rr["enabled"]) and hard >= rr["min_labels"] and gain is not None
+                     and gain >= rr["min_gain"], "opened_at": first}
+    b = cfg["batch"]
+    x = exploration_share(con, cfg)
+    moved = "moved by the recent kept rates"
+    judged = None if "explore_judged" not in x else min(x["explore_judged"], x["exploit_judged"])
+    out["exploration"] = {"what": "judged offers of each kind, exploration and top picks (batch.explore_min_judged)",
+                          "threshold": b["explore_min_judged"], "value": judged, "open": x.get("why") == moved,
+                          "opened_at": _first_run(con, "batch", lambda s: (s.get("exploration_share") or {})
+                                                  .get("why") == moved)}
+    h, need = cfg["harvest"], cfg["sources"]["min_offers_before_retire"]
+    live = [s for s in h["sources"] if s not in h.get("retired_sources", [])]
+    per = rates(con)["per_source"]
+    best = max((per.get(s, {}).get("decided", 0) for s in live), default=0)
+    out["adaptive_caps"] = {"what": "decided offers of the busiest source (sources.min_offers_before_retire)",
+                            "threshold": need, "value": best,
+                            "open": bool(h.get("adaptive_caps", True)) and best >= need,
+                            "opened_at": _first_run(con, "harvest", lambda s: any(
+                                str(c.get("why", "")).startswith("kept rate") for c in (s.get("caps") or {}).values()))}
+    return out
+
+
 def build(con, cfg: dict, status_doc: dict | None, classes: list[str] | None = None, tracks: bool = False) -> dict:
+    from .rerank import labels as rerank_labels
+    lbs = rerank_labels(con, cfg)
     return {"generated_at": db.now(), "offers": offers(con), "verdicts": verdict_counts(con), "pool": pool(con, cfg),
-            "head": head(con, classes, tracks), "eval": eval_table(status_doc)}
+            "head": head(con, classes, tracks), "eval": eval_table(status_doc), "plays": plays(con),
+            "labels": label_weeks(con, cfg, lbs), "gates": gates(con, cfg, lbs)}
 
 
 # ---------------- text ----------------
@@ -233,4 +349,21 @@ def text(r: dict) -> str:
             jp = f"{_num(x['judged_yes_pen'])} / {_num(x['judged_no_pen'])}"
             a = _num(x["auc"], ".3f") + (" deg" if x["degenerate"] else "")
             out.append(f"  {name:14} {a:>11} {_num(x['mean_pct']):>8} {_num(x['recall'], '.3f'):>9} {jd:>15} {jp:>13}")
+    pl, lb = r["plays"], r["labels"]
+    out += ["", "Plays per week (needle short = stopped before 30 s, of the needle plays with a length)",
+            f"  {'week':9} {'needle':>6} {'spotify':>7} {'short':>11}   {'labels':>6} {'soft':>5}"]
+    for w, x in pl["weeks"].items():
+        sh = f"{x['needle_short']}/{x['needle_with_length']}" if x["needle_with_length"] else "-"
+        out.append(f"  {w:9} {x['needle']:6} {x['spotify']:7} {sh:>11}   {lb[w]['hard']:6} {lb[w]['soft']:5}")
+    out.append(f"  needle plays with a length: {pl['needle_with_length']}, "
+               f"{_pct(pl['needle_short_share'])} under 30 s")
+    out += ["", "Gates (open = the adaptive part is in use)"]
+    for name, g in r["gates"].items():
+        val = f"{_num(g['value'])} of {g['threshold']}"
+        if "gain" in g:
+            val += f", gain {_num(g['gain'], '+.3f')} of {g['gain_threshold']}, {g['soft']} soft"
+        state = "open" if g["open"] else "closed"
+        since = f" (first open {g['opened_at']})" if g["opened_at"] else ""
+        out.append(f"  {name:14} {state:6} {val}{since}")
+        out.append(f"  {'':14} {g['what']}")
     return "\n".join(out) + "\n"

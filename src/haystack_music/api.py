@@ -23,12 +23,12 @@ log = logging.getLogger("haystack_music.api")
 VERSION = "1"
 # Capabilities beyond /v1 as first shipped (docs/api.md, "Server and features"). A client shows a newer element
 # only when its feature name is listed; a server without the `server` object has none of them.
-FEATURES: tuple[str, ...] = ("why.band", "rerank", "why.reasons")
+FEATURES: tuple[str, ...] = ("why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played")
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
 PLAYLIST_TRACKS_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})/tracks$")
-QUEUES = ("discoveries", "likes", "playlists")
+QUEUES = ("discoveries", "likes", "playlists", "calibrate")
 MEASURE_AHEAD = 20      # per queue; the harvest's backfill measures the rest
 PLAYLISTS_EVERY = 600   # s: a snapshot read re-lists the playlists at most this often (one call if none changed)
 MAX_PLAYLIST_BODY = 8 << 20      # a 10,000-song playlist read by needle's engine
@@ -59,6 +59,20 @@ def parse_verdict(v: dict) -> dict:
         raise ValueError(f"queue must be one of {', '.join(QUEUES)}")
     stars = verdicts.validate(v.get("track"), v.get("kind"), v.get("stars"))
     return {"spotify_id": v["track"], "kind": v["kind"], "stars": stars, "given_at": given, "id": vid, "queue": q}
+
+
+def parse_play(p) -> tuple:
+    """One play from the outbox -> (track, started_at, ms_played, completed). Raises ValueError with a reason.
+    ms_played (a non-negative integer) and completed (a boolean) are optional; null counts as absent."""
+    if not (isinstance(p, dict) and isinstance(p.get("track"), str) and verdicts.SPOTIFY_ID.match(p["track"])
+            and isinstance(p.get("started_at"), str) and isinstance(p.get("id"), str)):
+        raise ValueError("malformed play")
+    ms, done = p.get("ms_played"), p.get("completed")
+    if ms is not None and (isinstance(ms, bool) or not isinstance(ms, int) or ms < 0):
+        raise ValueError("malformed play: ms_played must be a non-negative integer")
+    if done is not None and not isinstance(done, bool):
+        raise ValueError("malformed play: completed must be true or false")
+    return p["track"], p["started_at"], ms, None if done is None else int(done)
 
 
 def server_info() -> dict:
@@ -214,10 +228,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/health":
             return self._send(200, {"ok": True, "version": VERSION, "time": db.now(), "server": server_info()})
         if path == "/v1/state":
+            verdicts.judge_picks(self._con())       # a Calibrate pick judged by a verdict from anywhere
             cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
             cards.pending = set(self.server.worker.measuring) if self.server.worker else set()
             st = review.state(self._con(), self.server.cfg, cards)
-            for qname in ("discoveries", "likes"):   # the next tracks with no Readings: measure them in the background
+            for qname in ("discoveries", "calibrate", "likes"):   # the next tracks with no Readings: measure them
                 for c in [c for c in st["queues"][qname]["items"] if c["measure"] == "unknown"][:MEASURE_AHEAD]:
                     if self.server.worker:
                         self.server.worker.measure(c["id"])
@@ -237,7 +252,9 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
             offer = review.discoveries(self._con())[1].get(m.group(1))
-            card = cards.build([m.group(1)], {m.group(1): offer} if offer else None)[0]
+            pick = review.calibrate_picks(self._con())[1].get(m.group(1))
+            card = cards.build([m.group(1)], {m.group(1): offer} if offer else None,
+                               {m.group(1): pick} if pick else None)[0]
             if card["measure"] == "unknown" and self.server.worker:
                 self.server.worker.measure(m.group(1))
                 card["measure"] = "pending"
@@ -277,13 +294,14 @@ class Handler(BaseHTTPRequestHandler):
             accepted, rejected = [], []
             con = self._con()
             for p in items:
-                if not (isinstance(p, dict) and isinstance(p.get("track"), str) and verdicts.SPOTIFY_ID.match(p["track"])
-                        and isinstance(p.get("started_at"), str) and isinstance(p.get("id"), str)):
-                    rejected.append({"id": p.get("id") if isinstance(p, dict) else None, "error": "malformed play"})
+                try:
+                    track, started, ms, done = parse_play(p)
+                except ValueError as e:
+                    rejected.append({"id": p.get("id") if isinstance(p, dict) else None, "error": str(e)})
                     continue
                 # plays is keyed by (track, time): a replayed play is a no-op
-                con.execute("INSERT OR IGNORE INTO plays(spotify_id, played_at, context) VALUES(?,?,?)",
-                            (p["track"], p["started_at"], "needle"))
+                con.execute("INSERT OR IGNORE INTO plays(spotify_id, played_at, context, ms_played, completed) "
+                            "VALUES(?,?,?,?,?)", (track, started, "needle", ms, done))
                 accepted.append(p["id"])
             return self._send(200, {"accepted": accepted, "rejected": rejected})
         self._error(404, "no such endpoint")

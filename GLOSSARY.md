@@ -47,7 +47,7 @@ A track's measured value for one Trait.
 _Avoid_: score, value
 
 **Baseline**:
-The listener's typical Reading for a Trait: the mean over the tracks they like, weighted by their Ratings, with an Unrated like counting as 3★.
+The listener's typical Reading for a Trait: the mean over the tracks they like, weighted by their Ratings, with an Unrated like counting as 3★, or up to 5★ when the listener plays it often.
 _Avoid_: average, taste profile, my rating
 
 **Usual range**:
@@ -61,7 +61,7 @@ Listening to a track in order to give it a verdict.
 _Avoid_: rating (that is the verdict, not the act)
 
 **Review queue**:
-The tracks waiting for a verdict, in the order the app plays them: Discoveries, Unrated likes, and a Playlist review once the listener starts one.
+The tracks waiting for a verdict, in the order the app plays them: Discoveries, Calibrate, Unrated likes, and a Playlist review once the listener starts one.
 _Avoid_: playlist (a Spotify object), queue (Spotify's play queue)
 
 **Followed playlist**:
@@ -71,6 +71,10 @@ _Avoid_: shared playlist, public playlist
 **Discoveries**:
 The private Spotify playlist where the server's weekly picks land for the listener to hear.
 _Avoid_: recommendations
+
+**Calibrate**:
+The Review queue of the candidates the server is least sure about, drawn from across its ranking rather than only the top. A verdict there is a Rating, Pass or Dislike like any other; it teaches the re-ranker the most.
+_Avoid_: test queue, training set, exploration (the batch's random picks)
 
 **To Rip**:
 The private Spotify playlist of tracks the listener rated 3★ or more that aren't in their music library yet (`spotify.to_rip`, off by default).
@@ -86,6 +90,10 @@ _Avoid_: positive (the songs a candidate is scored against), source (where a can
 The share of decided Discoveries picks the listener kept (a Rating of 3★ or more, or liked with no Rating), by source or by seed. A source's harvest cap follows it.
 _Avoid_: like rate (liked over decided, without the Ratings), hit rate
 
+**Soft no**:
+A short, unfinished play in needle of a Discoveries pick or a Calibrate track that has no verdict. It counts a little against the track for the re-ranker only; it is not a verdict and changes nothing in Spotify.
+_Avoid_: skip, Pass, implicit verdict
+
 **Confidence**:
-The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). Only a top pick of a re-ranked batch has one; a client may show it as a percentage.
+The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). A top pick of a re-ranked batch has one, and so does a Calibrate track whenever the re-ranker has a fitted model; a client may show it as a percentage.
 _Avoid_: score (the similarity the picks start from), match, certainty

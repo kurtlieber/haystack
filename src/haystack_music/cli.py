@@ -43,6 +43,7 @@ def job(name: str, fn, needs_spotify: bool = False) -> int:
         if needs_spotify:
             status.update("auth", {"ok": True, "message": "authorised"})
         _like_rate(con)
+        _gates(con)
         return 0
     except AuthMissing as e:
         msg = f"{e}"
@@ -79,6 +80,15 @@ def _like_rate(con) -> None:
     from .scoring import like_rates
     rows = [dict(r) for r in con.execute("SELECT source, outcome, played FROM offers")]
     status.update(None, like_rate=like_rates(rows))
+
+
+def _gates(con) -> None:
+    """status.json gates (report.gates): never fails the job."""
+    try:
+        from .report import gates
+        status.update(None, gates=gates(con, config.load()))
+    except Exception as e:  # noqa: BLE001
+        log.warning("gates not written: %r", e)
 
 
 def _have_auth(cfg) -> bool:
@@ -329,8 +339,9 @@ def _align_line(m: dict) -> str:
 def _rerank_line(r: dict) -> str:
     auc = ("" if r.get("loo_auc_model") is None else
            f"; leave-one-out AUC {r['loo_auc_model']:.3f} vs stage 1 {r['loo_auc_stage1']:.3f}")
+    soft = f", {r['n_soft']} soft" if r.get("n_soft") else ""
     return (f"re-ranker ({r.get('variant')}): {'used' if r.get('used') else 'not used'}, {r.get('n_labels')} labels "
-            f"({r.get('n_pos')} yes, {r.get('n_neg')} no){auc}" + ("" if r.get("used") else f". {r.get('reason')}"))
+            f"({r.get('n_pos')} yes, {r.get('n_neg')} no{soft}){auc}" + ("" if r.get("used") else f". {r.get('reason')}"))
 
 
 def _style_classes() -> list[str]:
@@ -379,8 +390,62 @@ def cmd_eval(cfg, a) -> int:
     def run(con):
         ev = evaluate.choose(con, cfg, "set" if a.choose else "report")
         print(evaluate.markdown(ev))
+        if cfg["scoring"]["verdicts"].get("unrated_like_plays"):
+            print(_eval_without_plays(con, cfg, ev))
         return ev
     return job("eval", run)
+
+
+def _eval_without_plays(con, cfg, ev: dict) -> str:
+    """The eval again with Unrated likes at a flat unrated_like_stars (ADR 0016): the effect of grading them by
+    plays, per variant. Shown for one release (0.5.0); nothing is written."""
+    import copy
+    from . import evaluate
+    off = copy.deepcopy(cfg)
+    off["scoring"]["verdicts"]["unrated_like_plays"] = False
+    if ev.get("align"):
+        off = evaluate._with_align(off, "candidate" if ev["align"]["gate"]["ok"] else "off")
+    ev_off = evaluate.run(con, off)
+    k = ev.get("recall_k", 15)
+    out = ["", "Unrated likes graded by plays (scoring.verdicts.unrated_like_plays), with and without:",
+           f"  {'variant':14} {'AUC with':>9} {'without':>8} {'mean pct with':>14} {'without':>8}"]
+    for v, x in (ev.get("variants") or {}).items():
+        y = (ev_off.get("variants") or {}).get(v) or {}
+        f = (lambda n, fmt: "-" if n is None else format(n, fmt))
+        out.append(f"  {v:14} {f(x.get('auc'), '.3f'):>9} {f(y.get('auc'), '.3f'):>8} "
+                   f"{f(x.get('mean_pct'), '.1f'):>14} {f(y.get('mean_pct'), '.1f'):>8}")
+    out.append(f"  chosen with: {ev.get('chosen')}; without: {ev_off.get('chosen')} (recall@{k} in the table above)")
+    return "\n".join(out)
+
+
+def cmd_calibrate(cfg, a) -> int:
+    """The Calibrate queue (ADR 0015): plan prints what the next top-up would pick (token-free, no writes); top-up
+    picks and maps them now (needs auth; the hourly sync does the same)."""
+    from . import calibrate
+    if a.action == "plan":
+        con = _readonly_db()
+        if con is None:
+            return 1
+        out = calibrate.plan(con, cfg, n=a.n)
+        rr = out["rerank"] or {}
+        print(f"calibrate: {'on' if out['enabled'] else 'off (calibrate.enabled)'}; week {out['week']}: "
+              f"{out['this_week']} picked, {out['outstanding']} open, the queue takes {out['need']} now")
+        print(f"calibrate: variant {out['variant']}, {out['scored']} scored, {out['eligible']} eligible; re-ranker "
+              f"{'fitted' if out['fitted'] else 'not fitted'}"
+              f" ({rr.get('n_labels', 0)} labels, {rr.get('n_soft', 0)} soft)")
+        print("calibrate: by band " + (", ".join(f"{b} {n}" for b, n in sorted(out["by_band"].items())) or "-"))
+        for p in out["picks"]:
+            ch = "-" if p["rerank_p"] is None else f"{p['rerank_p']:.2f}"
+            dis = "-" if p["disagreement"] is None else f"{p['disagreement']:.1f}"
+            name = f"  {p['artist']} - {p['title']}" if a.tracks else ""
+            print(f"  {p['band']:7} p{p['percentile']:5.1f}  chance {ch:>4}  disagree {dis:>5}  {p['source']:22}"
+                  f"{name}  ({p['reason']})")
+        return 0
+
+    def run(con):
+        from .spotify import Spotify
+        return calibrate.top_up(con, cfg, Spotify(cfg))
+    return job("calibrate", run, needs_spotify=True)
 
 
 def cmd_feedback(cfg, a) -> int:
@@ -829,6 +894,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["fit", "show"])
     s.add_argument("--limit", type=int, default=10, help="show: how many weights and past fits")
     s.set_defaults(fn=cmd_rerank)
+
+    s = sub.add_parser("calibrate", help="the Calibrate queue (ADR 0015): plan (what the next top-up would pick; "
+                                         "token-free, no writes) or top-up (pick and map now; needs auth)")
+    s.add_argument("action", choices=["plan", "top-up"])
+    s.add_argument("--n", type=int, help="plan: this many picks (default what the queue takes now, else a week's)")
+    s.add_argument("--tracks", action="store_true", help="plan: show artist and title")
+    s.set_defaults(fn=cmd_calibrate)
 
     s = sub.add_parser("align", help="the preview alignment (ADR 0012): fit the map from preview vectors to the "
                                      "library's space on the liked songs that have both, or show it")

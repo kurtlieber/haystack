@@ -27,7 +27,8 @@ clients have moved.
 `GET /v1/health` and `GET /v1/state` both carry a `server` object:
 
 ```json
-{"version": "0.4.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}
+{"version": "0.5.0", "api": "1",
+ "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -42,6 +43,11 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - `rerank`: the top of each batch is ordered by a model trained on the listener's Verdicts (ADR 0011); a
   Discoveries offer's `why` carries `model` and `confidence` (Track card).
 - `why.reasons`: a Discoveries offer's `why` carries `reasons` (Track card).
+- `queue.calibrate`: `GET /v1/state` carries `queues.calibrate`, the pool tracks haystack is least sure about
+  (ADR 0015). A Verdict there is an ordinary Verdict, sent with `"queue": "calibrate"`. A Calibrate card's `why`
+  carries `calibrate` and no `band` (Track card).
+- `plays.ms_played`: the server stores a play's `ms_played` and `completed` and learns from them (ADR 0016): a
+  short, unfinished play of an offered or Calibrate track with no Verdict counts a little against it.
 
 ## Endpoints
 
@@ -62,10 +68,12 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
  "baseline": {"tracks": 412, "traits": {"tempo": {"mean": 118.2, "lo": 98.0, "hi": 128.0, "n": 380}, "…": null}},
  "queues": {
    "discoveries": {"total": 25, "done": 3, "next_batch_at": "…Z", "items": [<track card>, …]},
+   "calibrate": {"total": 30, "done": 4, "items": [<track card>, …]},
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
- "server": {"version": "0.4.0", "api": "1", "features": ["why.band", "rerank", "why.reasons"]}}
+ "server": {"version": "0.5.0", "api": "1", "features": ["why.band", "rerank", "why.reasons", "queue.calibrate",
+            "plays.ms_played"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3):
@@ -74,6 +82,11 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - **`queues.discoveries`**: the latest batch's offers plus any older offer still open, unreviewed first (in batch
   order), then the reviewed ones with their Verdict. `done` counts those with a Verdict. `next_batch_at` may be
   `null`.
+- **`queues.calibrate`** (feature `queue.calibrate`): the Calibrate picks, the pool tracks the server is least
+  sure about (ADR 0015). Every pick with no Verdict yet, unreviewed first in pick order, then the picks given a
+  Verdict this ISO week, with their Verdict. `done` counts those with a Verdict. The server keeps up to 30 open
+  and adds at most 30 a week (`calibrate.outstanding`, `calibrate.per_week`). A pick is never also a Discoveries
+  offer.
 - **`queues.likes`**: Liked Songs with no Verdict, newest like first.
 - **`playlists`**: every playlist in the listener's library (minus the server's own Discoveries and To Rip), with
   its songs' ids but no cards, plus the current Verdict of every one of those songs that has one, so a client can
@@ -104,8 +117,8 @@ Readings, and refreshes the playlists at most every 10 minutes.
 - Any of `title`, `album`, `album_type`, `year`, `duration_ms`, `cover`, `cover_small` may be `null`; `artists`
   may be empty.
 - `verdict` is the track's current Verdict, or `null`.
-- `why` is set only for a Discoveries offer: the liked track it sounded most like, the raw similarity, and where
-  the candidate came from. `null` otherwise.
+- `why` is set only for a Discoveries offer or a Calibrate pick: the liked track it sounded most like, the raw
+  similarity, and where the candidate came from. `null` otherwise.
 - `why.band` (feature `why.band`): which part of the ranking the offer was picked from. `kind` is `top` (the
   best-scored picks) or `explore` (a random pick from the middle of the ranking, the same as `exploration`), and
   `percentile` is the offer's score percentile, 0–100, in the pool its batch was picked from. `percentile` is
@@ -117,6 +130,12 @@ Readings, and refreshes the playlists at most every 10 minutes.
 - `why.reasons` (feature `why.reasons`): up to two short phrases, strongest first, for what made the re-ranker
   rate the offer up, such as `close to your 4-5★ tracks` or `brighter than you usually like`. Empty when `model`
   is `similarity`. Phrases are display text and may change between releases; a client never parses them.
+- `why.calibrate` (feature `queue.calibrate`), on a Calibrate card only, which has no `band`:
+  `{"band": "90-97", "percentile": 93.1, "chance": 0.52, "reason": "the re-ranker gives it even odds"}`. `band`
+  names the part of the ranking it was picked from (stage-1 percentiles, `calibrate.bands`), `percentile` its
+  score percentile then, `chance` the re-ranker's chance that the listener keeps it (`null` when no model was
+  fitted), and `reason` a short phrase for why the server is unsure, display text a client never parses. `model`,
+  `confidence` and `reasons` show the re-ranker's view whenever a model was fitted, used for a batch or not.
 - `styles`: the top three Discogs styles with their scores; empty when unmeasured.
 - `readings`: only the Traits that were measured; `null` when none. `tempo` is BPM, `loudness` integrated LUFS,
   the rest 0–1.
@@ -146,7 +165,7 @@ its Verdict with the latest `given_at` (on a tie, the one the server received la
 - `given_at`: when the listener gave it, by the client's clock. It orders the history, so a late resend never
   overrides a newer Verdict.
 - `stars`: 1–5 for a `rating`, absent or `null` otherwise.
-- `queue` (optional): `discoveries`, `likes` or `playlists`.
+- `queue` (optional): `discoveries`, `likes`, `playlists` or `calibrate`.
 - Each item is checked on its own: one bad item is rejected with a reason and the rest are still accepted.
 
 ### `POST /v1/plays`
@@ -160,10 +179,16 @@ its Verdict with the latest `given_at` (on a tie, the one the server received la
 `started_at` are required; the other fields are optional. A play counts an offer as played; a second play of the
 same track with the same `started_at` is a no-op.
 
+- `ms_played` (feature `plays.ms_played`): how long it played, a non-negative integer in milliseconds.
+  `completed`: `true` when it played to the end. Either may be absent or `null`, which counts as absent; any other
+  value rejects that play with a reason. A play that stopped before 30 s without finishing, of an offered or
+  Calibrate track with no Verdict, is a soft no for the re-ranker (ADR 0016).
+
 ### `GET /v1/tracks/{id}`
 
 One track card, for any Spotify track. A track the server has never measured is queued for measuring and answered
-`202` with `"measure": "pending"`; ask again later. A track with no preview stays `no_preview`.
+`202` with `"measure": "pending"`; ask again later. A track with no preview stays `no_preview`. A Discoveries offer
+or a Calibrate pick comes with its `why`.
 
 ### `GET /v1/playlists/{id}`
 
@@ -208,3 +233,6 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 - 2026-10-19, haystack 0.2.0, `why.band`: `band` (`kind`, `percentile`) in a track card's `why`.
 - 2026-10-19, haystack 0.3.0, `rerank`: `model` and `confidence` in a track card's `why`.
 - 2026-10-19, haystack 0.3.0, `why.reasons`: `reasons` in a track card's `why`.
+- 2026-10-20, haystack 0.5.0, `queue.calibrate`: `queues.calibrate` in `GET /v1/state`, `calibrate` as a
+  Verdict's `queue`, and `calibrate` in a Calibrate card's `why`.
+- 2026-10-20, haystack 0.5.0, `plays.ms_played`: the server stores a play's `ms_played` and `completed`.

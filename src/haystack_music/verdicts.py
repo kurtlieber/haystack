@@ -7,9 +7,12 @@ current verdict, so a burst of re-ratings ends in one consistent state."""
 from __future__ import annotations
 
 import logging
+import math
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from . import db
 
@@ -109,7 +112,22 @@ def record(con, spotify_id: str, kind: str, stars: int | None = None, *, given_a
         # the server's own state follows at once (the Spotify writes may wait): a judged candidate is never offered
         # again, and its offer is closed so the sync can't mistake the server's playlist removal for the listener's.
         _close_offer(con, spotify_id, current(con, [spotify_id])[spotify_id])
+        judge_picks(con, [spotify_id], now)
     return {"id": vid, "status": "accepted" if cur.rowcount else "duplicate"}
+
+
+def judge_picks(con, sids=None, at: str | None = None) -> int:
+    """Mark the open Calibrate picks (ADR 0015) of these tracks judged (default: every open pick with a verdict, the
+    reconcile the state snapshot runs). -> picks marked. A database without the table marks none."""
+    at = at or db.now()
+    try:
+        if sids is None:
+            return con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id IN "
+                               "(SELECT spotify_id FROM verdicts)", (at,)).rowcount
+        return sum(con.execute("UPDATE calibrations SET judged_at=? WHERE judged_at IS NULL AND spotify_id=?",
+                               (at, s)).rowcount for s in sids)
+    except sqlite3.OperationalError:
+        return 0
 
 
 def judged_elsewhere(con, spotify_id: str) -> bool:
@@ -219,20 +237,35 @@ def stars_in_sd(cfg: dict) -> bool:
     return not cfg["scoring"]["verdicts"]["star_bonus"]
 
 
-def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False) -> int | None:
-    """A positive's stars (an Unrated like counts as `unrated_like_stars`), or None if it is not a positive."""
+def like_plays(con, cfg: dict) -> dict[str, int]:
+    """{Spotify id: plays in the last scoring.verdicts.unrated_like_days days}, from any context (Spotify's recently
+    played and needle), for grading Unrated likes (ADR 0016); {} when scoring.verdicts.unrated_like_plays is off."""
+    w = cfg["scoring"]["verdicts"]
+    if not w.get("unrated_like_plays"):
+        return {}
+    since = (datetime.now(timezone.utc) - timedelta(days=w["unrated_like_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {r[0]: r[1] for r in con.execute("SELECT spotify_id, COUNT(*) FROM plays WHERE played_at >= ? "
+                                            "GROUP BY spotify_id", (since,))}
+
+
+def positive_stars(cfg: dict, v: Verdict | None, liked: bool = False, plays: int = 0) -> int | None:
+    """A positive's stars, or None if it is not a positive. An Unrated like counts as `unrated_like_stars` plus a
+    star per doubling of its recent plays (like_plays), at most two more and at most 5 (ADR 0016)."""
     if v is None:
-        return cfg["scoring"]["verdicts"]["unrated_like_stars"] if liked else None
+        if not liked:
+            return None
+        s = cfg["scoring"]["verdicts"]["unrated_like_stars"]
+        return min(5, s + min(2, int(math.log2(1 + plays)))) if plays > 0 else s
     return v.stars if v.kind == "rating" else None
 
 
-def positive_bonus(cfg: dict, v: Verdict | None, liked: bool = False) -> float | None:
+def positive_bonus(cfg: dict, v: Verdict | None, liked: bool = False, plays: int = 0) -> float | None:
     """The additive bonus a track gets as a discovery positive, or None if it is not a positive.
-    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3). With star_bonus
-    (a list) it is that star count's fixed offset; with an empty list it is star_weight_sd per star away from 3,
-    in pool-score sd, which the scorer multiplies by the pool's spread."""
+    A Rating's bonus grows with its stars; an Unrated like counts as `unrated_like_stars` (3), graded by its plays
+    (positive_stars). With star_bonus (a list) it is that star count's fixed offset; with an empty list it is
+    star_weight_sd per star away from 3, in pool-score sd, which the scorer multiplies by the pool's spread."""
     w = cfg["scoring"]["verdicts"]
-    s = positive_stars(cfg, v, liked)
+    s = positive_stars(cfg, v, liked, plays)
     if s is None:
         return None
     if stars_in_sd(cfg):

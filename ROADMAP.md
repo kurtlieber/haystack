@@ -16,22 +16,24 @@ until then haystack carries on as before. A weekly batch of 15 songs adds only a
 it can take months before those parts switch on. Most of what's next is about getting there sooner, and then
 giving haystack better things to learn from.
 
-## Next: helping haystack learn faster
+## Now: helping haystack learn faster
 
-**A Calibrate list in needle.** Next to Discoveries and Rate your likes, needle will get a third list: the songs
+haystack 0.5.0 brings this. The Calibrate list shows in needle from needle 0.6.0, the next needle release.
+
+**A Calibrate list in needle.** Next to Discoveries and Rate your likes, needle gets a third list: the songs
 haystack can't make its mind up about. Some are close calls near the top of its ranking, and some come from
 further down, where the weekly batch rarely reaches. Rating them works like rating anything else, but each one
 teaches haystack much more. Rating songs you already like tells haystack how much you like them, but each of
 them is already a yes. Calibrate asks about songs that could go either way, so haystack learns where your yes
 ends and your no begins.
 
-**How you listen will count a little.** If you skip a song in needle after a few seconds without rating it,
-haystack will take that as a quiet "probably not". It weighs far less than a real verdict and never changes
-anything in your Spotify account. And a liked song you haven't rated but play often will count for more than one
-you liked once and forgot.
+**How you listen counts a little.** If you skip a discovery in needle within 30 seconds without rating it,
+haystack takes that as a quiet "probably not". It weighs far less than a real verdict and never changes anything
+in your Spotify account. And a liked song you haven't rated but play often counts for more than one you liked
+once and forgot.
 
-**You'll be able to see the progress.** `haystack report` will show which of the learning parts have switched
-on, and how many more verdicts each one still needs.
+**You can see the progress.** `haystack report` shows which of the learning parts have switched on, and how many
+more verdicts each one still needs.
 
 ## Next: knowing more about each song
 

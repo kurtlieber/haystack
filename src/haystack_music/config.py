@@ -130,6 +130,11 @@ DEFAULTS: dict = {
             "unrated_like_stars": 3,
             "pass_strength": 1.0,
             "dislike_strength": 2.0,
+            # ADR 0016: an Unrated like gains a star per doubling of its plays in the last unrated_like_days days
+            # (any context: Spotify's recently played and needle), at most two: 3 + min(2, floor(log2(1 + plays))).
+            # With no plays stored it counts as unrated_like_stars, as before.
+            "unrated_like_plays": True,
+            "unrated_like_days": 90,
         },
         # raw | topk_mean | centred | csls | csls_centred | genre | genre_blend | auto
         # (auto = the variant the eval chose: at the first batch, then re-checked at every batch, ADR 0009)
@@ -189,6 +194,22 @@ DEFAULTS: dict = {
         "neighbours": 10,              # the star-aware neighbourhood: this many nearest positives
         "min_labels_embed": 300,       # 32 principal components of the preview vector join the features
         "pca_components": 32,
+        # ADR 0016: a judged candidate (an offer or a Calibrate pick) with no Verdict whose latest needle play
+        # stopped before soft_pass_ms without finishing is a soft no of weight soft_pass_weight. Soft labels help
+        # the fit only: min_labels and the leave-one-out AUCs count the hard labels, and nothing is written to the
+        # verdicts or to Spotify.
+        "soft_labels": True,
+        "soft_pass_ms": 30000,
+        "soft_pass_weight": 0.5,
+    },
+    # The Calibrate queue (ADR 0015): needle asks about the pool candidates haystack is least sure of, across the
+    # stage-1 score bands below (shares of each top-up). The hourly sync keeps up to `outstanding` unjudged picks
+    # and adds at most `per_week` a week (ISO weeks); false stops new picks (the open ones stay in the queue).
+    "calibrate": {
+        "enabled": True,
+        "outstanding": 30,
+        "per_week": 30,
+        "bands": {"50-75": 0.2, "75-90": 0.3, "90-97": 0.3, "97-100": 0.2},
     },
     "matching": {"duration_tolerance": 3.0, "confident_dt": 2.0},
     "harvest": {

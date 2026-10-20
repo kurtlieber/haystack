@@ -127,8 +127,9 @@ def positives(con, cfg: dict):
     Positives = the local library (one row per window) + Liked Songs + liked discoveries + every Rated track
     (ADR 0002). A liked track uses its local vector only if liked_map.use_local (confident, same version, <=2 s),
     otherwise its Deezer-preview vector. The bonus comes from the verdict (stars) or, for an Unrated like, counts
-    as 3 stars; library tracks the listener hasn't liked get bonus_library (0 with star_weight_sd). A track whose
-    current verdict is a Pass or a Dislike is never a positive. One owner per track. With star_weight_sd the
+    as 3 stars graded by its recent plays (verdicts.positive_stars); library tracks the listener hasn't liked get
+    bonus_library (0 with star_weight_sd). A track whose current verdict is a Pass or a Dislike is never a
+    positive. One owner per track. With star_weight_sd the
     bonus is in pool-score sd (verdicts.stars_in_sd): the scorer resolves it (star_unit)."""
     return positives_with_stars(con, cfg)[:3]
 
@@ -140,16 +141,17 @@ def positives_with_stars(con, cfg: dict):
     cur = verdicts.current(con)
     liked = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
     disc_liked = {r[0] for r in con.execute("SELECT spotify_id FROM offers WHERE outcome='liked'")}
+    plays = verdicts.like_plays(con, cfg)
 
     def rejected(sid):
         v = cur.get(sid)
         return v is not None and v.kind != "rating"
 
     def bonus_of(sid, is_liked):
-        return verdicts.positive_bonus(cfg, cur.get(sid), liked=is_liked)
+        return verdicts.positive_bonus(cfg, cur.get(sid), liked=is_liked, plays=plays.get(sid, 0))
 
     def stars_of(sid, is_liked):
-        s = verdicts.positive_stars(cfg, cur.get(sid), liked=is_liked)
+        s = verdicts.positive_stars(cfg, cur.get(sid), liked=is_liked, plays=plays.get(sid, 0))
         return np.nan if s is None else float(s)
 
     local_like = {}
@@ -258,10 +260,11 @@ def liked_styles(con, cfg: dict | None = None) -> tuple[list[str], np.ndarray, n
     rated = [sid for sid, v in cur.items() if v.kind == "rating" and sid not in seen]
     rows = [(r[0], r[1]) for r in rows] + [(sid, t["deezer_id"]) for sid, t in track_vectors(con, rated).items()]
     st = get_styles(con, [r[1] for r in rows])
+    plays = verdicts.like_plays(con, cfg)
     labels, mats, bonus, done = [], [], [], set()
     for sid, did in rows:
         v = cur.get(sid)
-        b = verdicts.positive_bonus(cfg, v, liked=True)
+        b = verdicts.positive_bonus(cfg, v, liked=True, plays=plays.get(sid, 0))
         if did in st and sid not in done and b is not None:
             done.add(sid); labels.append(sid); mats.append(st[did]); bonus.append(b)
     if not mats:

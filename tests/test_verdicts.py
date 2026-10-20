@@ -119,6 +119,27 @@ def test_unrated_like_counts_as_three_stars_and_negatives_are_not_positives():
     assert verdicts.negative_strength(cfg, Verdict("t", "rating", 1, "")) is None
 
 
+def test_an_unrated_like_gains_a_star_per_doubling_of_its_recent_plays(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from haystack_music import baseline
+    cfg = _cfg()
+    assert [verdicts.positive_stars(cfg, None, liked=True, plays=n) for n in (0, 1, 2, 3, 7, 50)] == [3, 4, 4, 5, 5, 5]
+    assert verdicts.positive_stars(cfg, Verdict("t", "rating", 2, ""), plays=50) == 2      # a Rating stands
+    assert verdicts.positive_stars(cfg, None, liked=False, plays=50) is None
+    con = _con(tmp_path)
+    now = datetime.now(timezone.utc)
+    for h, ctx in ((1, "needle"), (2, "spotify:playlist:x"), (3, None)):
+        con.execute("INSERT INTO plays(spotify_id, played_at, context) VALUES(?,?,?)",
+                    (T1, (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ"), ctx))
+    con.execute("INSERT INTO plays(spotify_id, played_at, context) VALUES(?, '2000-01-01T00:00:00Z', 'needle')",
+                (LIKE_ID,))                                         # outside unrated_like_days
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01'), (?, '2026-01-01')", (T1, LIKE_ID))
+    assert verdicts.like_plays(con, cfg) == {T1: 3}
+    assert baseline.liked_weights(con, cfg) == {T1: 5.0, LIKE_ID: 3.0}
+    cfg["scoring"]["verdicts"]["unrated_like_plays"] = False
+    assert verdicts.like_plays(con, cfg) == {} and baseline.liked_weights(con, cfg) == {T1: 3.0, LIKE_ID: 3.0}
+
+
 def test_weights_are_configurable(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("[scoring.verdicts]\nstar_bonus = [0.0, 0.0, 0.01, 0.02, 0.04]\ndislike_strength = 3.0\n")

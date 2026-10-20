@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS likes (
 );
 
 CREATE TABLE IF NOT EXISTS plays (
-    spotify_id TEXT NOT NULL, played_at TEXT NOT NULL, context TEXT,
+    spotify_id TEXT NOT NULL, played_at TEXT NOT NULL, context TEXT,   -- context: a Spotify URI, or 'needle'
     PRIMARY KEY (spotify_id, played_at)
 );
 
@@ -167,6 +167,22 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     auc_json TEXT,                       -- {variant: AUC or null}
     switched INTEGER
 );
+-- the Calibrate queue (ADR 0015): pool candidates needle asks the listener about. The candidate stays in the
+-- pool (a Verdict moves it on, as for an offer); judged_at is set when a Verdict for the track arrives.
+CREATE TABLE IF NOT EXISTS calibrations (
+    id INTEGER PRIMARY KEY,
+    candidate_id INTEGER NOT NULL, spotify_id TEXT NOT NULL,
+    picked_at TEXT NOT NULL,
+    week TEXT NOT NULL,                  -- ISO week of the pick, e.g. 2026-W43 (calibrate.per_week)
+    band TEXT,                           -- the stage-1 percentile band, e.g. 90-97
+    percentile REAL, rerank_p REAL, disagreement REAL,   -- at the pick
+    reason TEXT,                         -- the phrase the card shows
+    rerank_reason TEXT,                  -- the re-ranker's reasons at the pick (JSON), when fitted
+    judged_at TEXT
+);
+CREATE INDEX IF NOT EXISTS calibrations_open ON calibrations(judged_at);
+CREATE INDEX IF NOT EXISTS calibrations_track ON calibrations(spotify_id);
+
 CREATE TABLE IF NOT EXISTS rerank_runs (
     id INTEGER PRIMARY KEY, at TEXT,
     trigger TEXT,                        -- batch | fit (haystack rerank fit)
@@ -230,6 +246,9 @@ def _migrate(con) -> None:
     _add_column(con, "candidates", "rerank_score", "REAL")         # the re-ranker's blend, in z units (ADR 0011)
     _add_column(con, "candidates", "rerank_p", "REAL")             # its chance the listener keeps it
     _add_column(con, "candidates", "rerank_reason", "TEXT")        # JSON list of up to two phrases
+    _add_column(con, "rerank_runs", "n_soft", "INTEGER")           # soft labels in the fit (ADR 0016)
+    _add_column(con, "plays", "ms_played", "INTEGER")              # needle plays: how long it played (0.5.0)
+    _add_column(con, "plays", "completed", "INTEGER")              # and whether it reached the end
     for col in ("album_type", "release_date", "image_url", "image_url_small"):   # needle's track cards
         _add_column(con, "spotify_tracks", col, "TEXT")
 

@@ -1,7 +1,7 @@
 """Weekly discovery batch (needs Spotify auth): clear Discoveries, then score the pool, pick ~15
 (about 20 % exploration, moved by the outcomes; 1 per artist; spread across styles and liked songs, ADR 0010),
 map to Spotify (ISRC search, then artist/title + duration + version check), drop anything already liked, in the
-library or offered before, and add to the Discoveries playlist."""
+library, offered before or asked about in Calibrate (ADR 0015), and add to the Discoveries playlist."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from . import db, library, rerank, vectors
+from . import calibrate, db, library, rerank, vectors
 from .deezer import Deezer
 from .matching import Index, TrackRef, compare
 from .scoring import Pick, adapt_exploration, l2norm, select_batch
@@ -213,7 +213,8 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     scores: {candidate id: (score, nearest owner)} in place of the stored scores (`--plan` scores in memory).
     resolve(row) -> Spotify id, or None to drop the candidate (the live batch maps it and records the result).
     Without resolve a candidate keeps its stored spotify_id, and None means not mapped yet.
-    on_known(row): the candidate's track is already liked, offered or in the library, so it is skipped.
+    on_known(row): the candidate's track is already liked, offered, asked about in Calibrate or in the library,
+    so it is skipped.
     explore_fraction: this batch's exploration share (exploration_share), default batch.exploration_fraction.
     ranks: {candidate id: rank} from the re-ranker (rerank.run); the top picks follow it instead of the score.
     Each pick carries its top-1 style and its score's percentile in the scored pool; the batch is spread across
@@ -223,11 +224,12 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     size = size or b["size"]
     rng = rng or random.Random()
     retired = set(cfg["harvest"].get("retired_sources", []))
+    asked = set(calibrate.picked(con).values())          # in the Calibrate queue: never also a Discoveries offer
     rows = {}
     for r in con.execute("SELECT * FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         r = dict(r)
-        if r["source"] in retired:
+        if r["source"] in retired or r["id"] in asked:
             continue
         if scores is not None:
             if r["id"] not in scores:
@@ -248,9 +250,7 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
         if ids:
             u = l2norm(np.vstack([vec[rows[i]["deezer_id"]] for i in ids]))
             unit = dict(zip(ids, l2norm(u - u.mean(0))))    # centred on the pool: raw cosines are all close to 1
-    known = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
-    known |= {r[0] for r in con.execute("SELECT spotify_id FROM offers")}
-    known |= {r[0] for r in con.execute("SELECT spotify_id FROM local_tracks WHERE present=1 AND spotify_id IS NOT NULL")}
+    known = calibrate.known(con)
     active_artists = {r[0] for r in con.execute(
         "SELECT c.artist_key FROM offers o JOIN candidates c ON c.id=o.candidate_id WHERE o.removed_at IS NULL")}
     chart = frozenset(cfg["harvest"]["chart_sources"])

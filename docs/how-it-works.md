@@ -100,6 +100,16 @@ You don't have to do anything special. haystack watches what happens to each dis
 
 Songs added less than a day before a new batch get a pass, so a late Sunday batch doesn't count against you.
 
+How you listen counts a little too. If you play a discovery in needle and skip it in the first 30 seconds, haystack
+takes that as a gentle no, much weaker than a Pass, and only for working out which close matches you keep. It never
+removes the song or touches Spotify because of it. And of the liked songs you haven't rated, the ones you keep
+playing count as more loved than the ones you never play.
+
+**Help it learn faster.** The Calibrate list in needle is the songs haystack can't make its mind up about: some
+from near the top of its ranking, some from further down that the weekly batch would never reach. Rate a few and
+the next batch learns more from them than from anything else. A rating there is the same as anywhere else in
+needle; it just goes where haystack is most unsure.
+
 haystack also keeps score of where its good finds come from. `haystack sources` shows how many of each
 source's songs you kept, and how many of the songs found from each kind of seed, so you can turn off the sources
 that don't work for you. `haystack report` gives the bigger picture: how
