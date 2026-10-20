@@ -70,6 +70,8 @@ DEFAULTS: dict = {
         "lastfm_field": "credential",
         "listenbrainz_item": "",   # listenbrainz-token (ADR 0020)
         "listenbrainz_field": "credential",
+        "llm_item": "",            # llm-api-key (ADR 0019)
+        "llm_field": "credential",
     },
     "spotify": {
         # must be listed in the Spotify app's Redirect URIs; Spotify only accepts 127.0.0.1 for loopback
@@ -293,6 +295,21 @@ DEFAULTS: dict = {
     # secret, with the alert-webhook-key secret (if set) as the bearer token. With `outbox` set to a folder, each
     # alert is a file there instead, for a collector to send on; no secret is needed.
     "alert": {"enabled": False, "outbox": ""},
+    # An optional language model (ADR 0019), off until enabled. For now only `haystack llm judge` and
+    # `haystack llm suggest --dry-run` use it, by hand: they measure whether what a model knows about artists, labels
+    # and scenes predicts your verdicts. Each request sends the tracks' artist, title, album, year, label, top
+    # styles and source, and a profile of your taste (artist names, styles, Trait ranges): README, "Optional: a
+    # language model".
+    "llm": {
+        "enabled": False,
+        "provider": "anthropic",       # or "openai_compatible": {base_url}/chat/completions (Ollama, llama.cpp,
+                                       # vLLM); the anthropic provider needs pip install "haystack-music[llm]"
+        "model": "claude-opus-5-5",
+        "base_url": "",                # openai_compatible only, e.g. "http://127.0.0.1:11434/v1"
+        "min_profile_tracks": 30,      # liked and rated tracks needed before a profile is worth sending
+        "price_in_per_mtok": 4.0,      # US dollars per million tokens, for the cost line (0 for a local model)
+        "price_out_per_mtok": 20.0,
+    },
 }
 
 

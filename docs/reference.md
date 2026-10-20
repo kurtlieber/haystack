@@ -54,6 +54,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |
 | `scheduler.py` | `haystack serve`'s job schedule (`[schedule]`), in place of the systemd timers |
 | `alert.py` | optional alerts: a webhook POST or a file in an outbox (`haystack:` prefix) |
+| `llm.py` | the optional language model (ADR 0019): a taste profile and the judged songs' metadata, sent blind; the model's chance measured against your Verdicts, and a dry run of its suggestions; providers `anthropic` (the SDK, an optional extra) and `openai_compatible`; nothing is imported or sent while `llm.enabled` is false |
 
 
 ### Key rules
@@ -151,6 +152,11 @@ haystack metadata backfill [--limit N]   Deezer's facts about each track: judged
 haystack traits measure|show TRACK   Readings for one Spotify track (measure: on demand)
 haystack baseline                    your Baseline per Trait (mean, usual range)
 haystack api                         needle's API alone (the haystack-api unit runs it)
+haystack llm judge [--dry-run] [--tracks] [--json] [--debug]
+                                              the language model's chance for each judged song, against your
+                                              Verdicts (ADR 0019); --dry-run prints the first request, sends nothing
+haystack llm suggest --dry-run [--n 100] [--tracks] [--json] [--debug]
+                                              the model names n songs, each looked up on Deezer; nothing offered
 ```
 `feedback yes|no` still works: yes is a 3-star Rating, no a Pass (`--strength strong`: a Dislike).
 
@@ -424,6 +430,46 @@ soft_pass_weight = 0.5
 label_prior_n = 5      # a label's kept rate is shrunk toward your overall rate by this many labels (ADR 0017)
 ```
 
+**A language model** (`[llm]`, ADR 0019; off by default). A text model can't hear, but it knows what the audio
+and Deezer's facts can't carry: which acts are mainstream and which belong to a scene, which labels and scenes sit
+next to each other. Before haystack uses one to choose songs, `haystack llm judge` measures, by hand, whether it
+helps. It takes the re-ranker's labels (the soft ones too, since the re-ranker trains on them), shuffled with a
+fixed seed, 40 to a request, and sends for each its artist, title, album, year, record label, top three styles
+with their scores and the source that found it, numbered 1 to 40 within the request (no Spotify or Deezer id).
+With them goes a taste profile: the 30 artists with the most stars and likes (songs, mean stars), up to 50 artists
+of Passes and Dislikes, the 15 top styles by share of the liked songs, and the Traits' usual ranges. The profile
+sent with a request is computed without that request's songs and their other copies (leave-one-out), and the
+Verdicts never leave the host. The model answers against a JSON schema: a `chance` (0 to 1) that the listener
+keeps each song, and a one-line `reason`. haystack prints the AUC of the chance alone over the hard labels, and
+the re-ranker's leave-one-out AUC on the same labels without and with the chance's logit (clipped to 0.01-0.99,
+standardised) as one more feature, stage 1's AUC alongside, and the tokens and cost at `llm.price_in_per_mtok` and
+`price_out_per_mtok`. The decision rule, fixed before the first run: a rerank job is built only if the chance
+alone reaches AUC 0.70 or adds 0.05 to the leave-one-out AUC. A request the model refuses, or cuts off at the
+16,000-token reply limit, leaves its songs without a chance: they are counted, and left out of both AUCs.
+
+`haystack llm suggest --dry-run [--n 100]` sends the whole profile, asks for n songs the listener probably hasn't
+heard, looks each one up on Deezer (one search each, through the shared throttle) and counts how many resolve,
+have a preview and are new to haystack. It offers and stores nothing. A seeds job is built if the rerank bar is
+met, or on its own if more than 60 % resolve. `judge --dry-run` prints the system prompt and the first request
+and sends nothing, whether or not `llm.enabled` is on. Both commands open the database read-only and need no
+Spotify sign-in; `--debug` logs each request (never the key).
+
+Providers (`llm.provider`): `anthropic`, through Anthropic's Python SDK (`pip install "haystack-music[llm]"`; the
+image doesn't include it yet) with the `llm-api-key` secret; and `openai_compatible`, a POST to
+`{base_url}/chat/completions` with a JSON-schema `response_format`, for Ollama, llama.cpp's server, vLLM and other
+local servers (the key is sent only if set).
+
+```toml
+[llm]
+enabled = false
+provider = "anthropic"         # or "openai_compatible"
+model = "claude-opus-5-5"
+base_url = ""                  # openai_compatible only, e.g. "http://127.0.0.1:11434/v1"
+min_profile_tracks = 30        # fewer liked and rated songs than this: nothing is sent
+price_in_per_mtok = 4.0        # US dollars per million tokens, for the cost line
+price_out_per_mtok = 20.0
+```
+
 **Calibrate** (`[calibrate]`, ADR 0015). Discoveries only ever shows the top of the pool, so the re-ranker hears
 about little else and its gate opens slowly. The Calibrate queue in needle asks about the candidates haystack is
 least sure of instead: a Verdict there is a Rating, Pass or Dislike like any other, and a label for the re-ranker
@@ -689,6 +735,7 @@ are the server's local time; a unit drop-in (`systemctl --user edit haystack-bat
 | `alert-webhook-url`, `alert-webhook-key` | optional, see Alerts | `haystack secret set NAME` |
 | `lastfm-api-key` | optional, for `lastfm_similar` | `haystack secret set NAME` |
 | `listenbrainz-token` | optional, for `listenbrainz_radio` | `haystack secret set NAME` |
+| `llm-api-key` | optional, for the language model (`llm.provider = "anthropic"`, or a server that asks for one) | `haystack secret set NAME` |
 | refresh token | Spotify's long-lived login | `haystack auth` |
 
 `haystack secret set` takes the value from a hidden prompt or stdin, never the command line. A systemd

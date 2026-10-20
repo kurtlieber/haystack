@@ -47,10 +47,11 @@ def liked_weights(con, cfg: dict) -> dict[str, float]:
     return out
 
 
-def compute(con, cfg: dict) -> dict:
-    """-> {"tracks": n with Readings, "traits": {trait: {mean, lo, hi, n} | None}}."""
+def compute(con, cfg: dict, exclude=()) -> dict:
+    """-> {"tracks": n with Readings, "traits": {trait: {mean, lo, hi, n} | None}}. exclude: spotify ids left out
+    (`haystack llm judge` leaves out the tracks it asks about, ADR 0019)."""
     from .vectors import track_vectors
-    w = liked_weights(con, cfg)
+    w = {s: x for s, x in liked_weights(con, cfg).items() if s not in exclude}
     tv = track_vectors(con, list(w))
     rd = traits.get(con, [t["deezer_id"] for t in tv.values()])
     per = {t: ([], []) for t in traits.TRAITS}

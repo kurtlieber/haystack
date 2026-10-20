@@ -585,6 +585,36 @@ def explain(beta: np.ndarray, z: np.ndarray, names: list[str], side_row: np.ndar
 
 # ---------------- the second stage ----------------
 
+def design(con, cfg: dict, variant: str, res: dict, labs: list[dict] | None = None) -> dict | None:
+    """The fit's inputs, without fitting: {ctx, s1, Z (standardised features, pool rows first), names, side,
+    lab_rows (the labels' rows in Z), labs, y, w, hard, pool_ok, mu, sd, sources, pca}, or None with no positives
+    or no scored pool. labs: labels(con, cfg) unless given. Read-only; `haystack llm judge` (ADR 0019) adds a
+    column to the same design to compare against the model without it."""
+    rr = cfg["rerank"]
+    ctx = _prepare(con, cfg, variant, res, labels(con, cfg) if labs is None else labs)
+    if ctx is None:
+        return None
+    s1, _, pen = _stage1(ctx)
+    P = ctx["n_pool"]
+    lab_rows = np.arange(P, len(ctx["ids"]))
+    ok = np.isfinite(s1[lab_rows])                     # a genre variant can't score a track with no style vector
+    lab_rows = lab_rows[ok]
+    labs = [x for x, o in zip(ctx["labs"], ok) if o]
+    y = np.array([x["y"] for x in labs], np.int8)
+    w = np.array([x["w"] for x in labs], np.float64)
+    hard = np.array([not x["soft"] for x in labs], bool)
+    usual = baseline.compute(con, cfg)["traits"]
+    sources = sorted({ctx["meta"][ctx["ids"][r]]["source"] for r in lab_rows})
+    pca = _fit_pca(ctx, int(rr["pca_components"])) if len(labs) >= rr["min_labels_embed"] else None
+    F, names, side = _features(ctx, s1, pen, usual, pca, sources)
+    pool_ok = np.isfinite(s1[:P])
+    mu = F[:P][pool_ok].mean(0)
+    sd = F[:P][pool_ok].std(0)
+    sd[sd == 0] = 1.0
+    return dict(ctx=ctx, s1=s1, Z=(F - mu) / sd, names=names, side=side, lab_rows=lab_rows, labs=labs, y=y, w=w,
+                hard=hard, pool_ok=pool_ok, mu=mu, sd=sd, sources=sources, pca=pca)
+
+
 def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict:
     """Fit the re-ranker on the current labels and, when it passes the gate, order the top of the pool.
     res: vectors.compute_scores(con, cfg, variant). -> {used, reason, variant, n_labels, n_pos, n_neg (hard
@@ -598,31 +628,14 @@ def run(con, cfg: dict, variant: str, res: dict, trigger: str = "batch") -> dict
            "n_features": 0, "chance": None, "ranks": None, "top": None, "model": None, "at": db.now()}
     if not rr["enabled"]:
         return {**out, "reason": "rerank.enabled is false"}
-    labs = labels(con, cfg)
-    ctx = _prepare(con, cfg, variant, res, labs)
-    if ctx is None:
+    d = design(con, cfg, variant, res)
+    if d is None:
         return {**out, "reason": "no positives or no scored pool"}
-    s1, _, pen = _stage1(ctx)
-    P = ctx["n_pool"]
-    lab_rows = np.arange(P, len(ctx["ids"]))
-    ok = np.isfinite(s1[lab_rows])                     # a genre variant can't score a track with no style vector
-    lab_rows = lab_rows[ok]
-    labs = [x for x, o in zip(ctx["labs"], ok) if o]
-    y = np.array([x["y"] for x in labs], np.int8)
-    w = np.array([x["w"] for x in labs], np.float64)
-    hard = np.array([not x["soft"] for x in labs], bool)
+    ctx, s1, Z, names, side = d["ctx"], d["s1"], d["Z"], d["names"], d["side"]
+    lab_rows, y, w, hard, pool_ok, mu, sd = d["lab_rows"], d["y"], d["w"], d["hard"], d["pool_ok"], d["mu"], d["sd"]
+    sources, pca = d["sources"], d["pca"]
     out.update(n_labels=int(hard.sum()), n_pos=int(y[hard].sum()), n_neg=int(hard.sum() - y[hard].sum()),
-               n_soft=int((~hard).sum()))
-    usual = baseline.compute(con, cfg)["traits"]
-    sources = sorted({ctx["meta"][ctx["ids"][r]]["source"] for r in lab_rows})
-    pca = _fit_pca(ctx, int(rr["pca_components"])) if len(labs) >= rr["min_labels_embed"] else None
-    F, names, side = _features(ctx, s1, pen, usual, pca, sources)
-    pool_ok = np.isfinite(s1[:P])
-    mu = F[:P][pool_ok].mean(0)
-    sd = F[:P][pool_ok].std(0)
-    sd[sd == 0] = 1.0
-    Z = (F - mu) / sd
-    out["n_features"] = len(names)
+               n_soft=int((~hard).sum()), n_features=len(names))
     if out["n_pos"] < 2 or out["n_neg"] < 2:
         return {**out, "reason": f"{out['n_pos']} yes and {out['n_neg']} no labels: too few to fit"}
     Zl = Z[lab_rows]

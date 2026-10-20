@@ -97,3 +97,7 @@ _Avoid_: skip, Pass, implicit verdict
 **Confidence**:
 The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). A top pick of a re-ranked batch has one, and so does a Calibrate track whenever the re-ranker has a fitted model; a client may show it as a percentage.
 _Avoid_: score (the similarity the picks start from), match, certainty
+
+**Taste profile**:
+What a request to the optional language model says about the listener: the artists they rate and like most with their mean stars, the artists of songs they turned down, their top styles and their Usual ranges. It is built without the songs the request asks about, and never carries a Verdict on them.
+_Avoid_: Baseline (the typical Reading per Trait), history, model of the listener

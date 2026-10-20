@@ -128,6 +128,12 @@ that don't work for you. `haystack report` gives the bigger picture: how
 many offers you kept, week by week, how you've rated things, and what the next batch is drawing on. It shows
 numbers only, never song names, so it's safe to share when asking for help.
 
+**A second opinion, if you want one.** A language model can't hear, but it has read about a great many artists,
+labels and scenes. If you turn one on, `haystack llm judge` shows it the details of the songs you've judged (never
+your verdicts) with a summary of your taste, asks how likely you are to keep each one, and checks the answers
+against what you actually said. That measures whether the model's knowledge would help you before it gets any say
+in a batch; for now it gets none. The [README](../README.md#optional-a-language-model) lists exactly what is sent.
+
 ## The seven Traits
 
 needle shows seven numbers for every song, called **Traits**. Tempo is the big BPM number at the top of the song
@@ -229,4 +235,6 @@ says "quieter" or "louder".
 - **It doesn't read lyrics or genre tags** to choose. The fingerprint is all sound.
 - **It doesn't share your taste with anyone.** Your ratings and fingerprints stay in haystack's database on your
   server. The optional places to look are told only names: of songs, artists, styles or labels, never your
-  ratings.
+  ratings. The optional language model, if you turn it on, gets a summary of your taste (your favourite artists
+  with their mean stars, the artists you turned down, your top styles and Trait ranges), never a verdict on the
+  songs it's asked about.

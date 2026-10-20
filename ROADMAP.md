@@ -85,6 +85,9 @@ and drops the ones it can't find. The add-on is off unless you turn it on. It ne
 your accounts. You choose the provider and set a weekly spending cap, or point it at a model running on your own
 computer, so nothing leaves your network.
 
+haystack 0.7.1 has the test, and you run it by hand. Once you turn the model on, it asks about the songs you've
+already judged, then shows how often the model was right and what that cost. It doesn't touch your batches.
+
 ## Smaller changes
 
 - **A Dislike will reach the artist.** Disliking a song will also count a little against the same artist's other
