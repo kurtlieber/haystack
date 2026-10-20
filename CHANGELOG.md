@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/kurtlieber/haystack/compare/v0.6.0...v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **harvest:** four more sources, idle until set up: Last.fm's similar songs and artists (`lastfm-api-key`), your own ListenBrainz recommendations (`harvest.listenbrainz_user`), ListenBrainz's LB Radio (`listenbrainz-token`) and the newest albums of the labels you keep most; `harvest.preview_fallback = "itunes"` (off by default) listens to Apple's preview of a song Deezer has none for (ADR 0020) ([11fb947](https://github.com/kurtlieber/haystack/commit/11fb94727cb636c2c29be3d27325ab414d8778cd))
+
 ## [0.6.0](https://github.com/kurtlieber/haystack/compare/v0.5.0...v0.6.0) (2026-10-20)
 
 

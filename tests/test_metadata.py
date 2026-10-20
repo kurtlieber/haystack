@@ -142,7 +142,7 @@ def test_lookups_for_the_re_ranker(con):
     cand(con, 2, album_id=0)
     cand(con, 3)
     metadata.backfill(con, FakeDeezer(), 0)
-    metadata._store_album(con, 501, FakeDeezer().album(501))
+    metadata.store_album(con, 501, FakeDeezer().album(501))
     metadata._store_artist(con, 701, {"nb_fan": 1000})
     now = datetime(2010, 6, 30, tzinfo=timezone.utc)
     md = metadata.for_candidates(con, [1, 2, 3], now=now)

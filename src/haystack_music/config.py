@@ -66,6 +66,10 @@ DEFAULTS: dict = {
         "alert_item": "",
         "alert_url_field": "url",
         "alert_key_field": "key",
+        "lastfm_item": "",         # lastfm-api-key (ADR 0020)
+        "lastfm_field": "credential",
+        "listenbrainz_item": "",   # listenbrainz-token (ADR 0020)
+        "listenbrainz_field": "credential",
     },
     "spotify": {
         # must be listed in the Spotify app's Redirect URIs; Spotify only accepts 127.0.0.1 for loopback
@@ -215,8 +219,12 @@ DEFAULTS: dict = {
     },
     "matching": {"duration_tolerance": 3.0, "confident_dt": 2.0},
     "harvest": {
+        # The last four do nothing until they are configured (ADR 0020): lastfm_similar needs the lastfm-api-key
+        # secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the listenbrainz-token secret, and
+        # deezer_label the album rows of Deezer's metadata (ADR 0017).
         "sources": ["deezer_chart", "deezer_editorial", "deezer_new_releases",
-                    "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar"],
+                    "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar",
+                    "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label"],
         "retired_sources": [],
         "max_new_per_source": 60,
         "caps": {},                    # per-source base caps instead of max_new_per_source, e.g. {deezer_chart = 20}
@@ -238,6 +246,15 @@ DEFAULTS: dict = {
         "listenbrainz_min_interval": 1.2,
         "listenbrainz_contact": "",    # an email or URL for the User-Agent, as MetaBrainz asks of API users
         "listenbrainz_algorithm": "session_based_days_7500_session_300_contribution_5_threshold_15_limit_50_skip_30",
+        "listenbrainz_user": "",       # listenbrainz_recs: your ListenBrainz name; ListenBrainz must record your
+                                       # Spotify listens (its Settings, Music services)
+        "lb_radio_prompts": 6,         # listenbrainz_radio: LB Radio prompts a run, from your top styles and artists
+        "lastfm_min_interval": 1.0,
+        "label_count": 10,             # deezer_label: the labels with the most kept mass (stars and likes)
+        "label_albums": 5,             # and the newest albums of each, two tracks per album
+        "preview_fallback": "off",     # a Deezer track without a preview: "itunes" embeds Apple's 30 s clip of it
+                                       # instead (sends its artist and title to Apple), or "off"
+        "itunes_min_interval": 3.0,    # Apple allows about 20 requests a minute
         "chart_sources": ["deezer_chart", "deezer_editorial"],
         "chart_max_share": 0.2,        # chart + editorial-chart candidates: at most this share of the pool, and
                                        # of each batch

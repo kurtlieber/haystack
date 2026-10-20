@@ -47,13 +47,24 @@ Every day haystack collects new songs to consider from:
   you like, and playlists named after the styles you like most.
 - **ListenBrainz**: an open music database that knows which recordings people tend to listen to together.
 
-Artist radio, related artists and ListenBrainz start from **seeds**: the songs you rated 4 or 5 stars and the
+Four more places wait until you set them up (the README's "More places to look" says how, and what each one
+is told):
+
+- **Last.fm**: songs similar to yours, and the best-known songs of artists similar to yours.
+- **Your ListenBrainz recommendations**: if ListenBrainz records your listening, it works out songs for you every
+  week, and haystack considers them.
+- **LB Radio**: ListenBrainz's radio playlists for the styles and artists you like most.
+- **Your record labels**: the newest albums from the labels whose songs you keep most. This one needs nothing
+  from you, only a few kept songs.
+
+Artist radio, related artists, ListenBrainz and Last.fm start from **seeds**: the songs you rated 4 or 5 stars and the
 discoveries you kept lately come first, then your other liked songs, then your music folder. An artist is a seed
 at most once a week per source, so the harvest keeps moving. Once a week a wider harvest draws artists from
 across all the styles you like.
 
 These sources only *suggest*. They never decide whether a song is good for you. Each candidate gets
-fingerprinted from its 30-second preview, exactly like your own songs. Sources that find songs you keep get to
+fingerprinted from its 30-second preview, exactly like your own songs. The preview comes from Deezer, or, for the
+few songs Deezer has none for, from Apple if you turn that on. Sources that find songs you keep get to
 bring more each day, and those that don't get to bring fewer. At most a fifth of each batch comes from the charts.
 
 ## 3. Picking the week's songs
@@ -132,7 +143,7 @@ Two things to know first:
   you usually like. Once haystack learns from your verdicts (see "Picking the week's songs"), it also notices if
   you tend to keep songs that are, say, darker or calmer than usual, and may give that as a reason for a pick.
 - **They're estimates.** An AI model makes an educated guess from a 30-second clip. A song that changes a lot
-  after its first minute may not match its numbers. Songs with no Deezer preview have no Traits.
+  after its first minute may not match its numbers. Songs with no preview have no Traits.
 
 needle compares each song with your **Baseline** (the typical value across the songs you like, weighted by your
 ratings) and your **usual range** (the middle half of your songs). When a song falls outside your usual range,
@@ -211,10 +222,11 @@ says "quieter" or "louder".
 
 ## What haystack doesn't do
 
-- **It doesn't use Spotify's audio**, or Spotify's recommendations. Only your own files and the Deezer previews are
-  analysed, on your own machine.
+- **It doesn't use Spotify's audio**, or Spotify's recommendations. Only your own files and the previews (Deezer's,
+  or Apple's if you turn that on) are analysed, on your own machine.
 - **It doesn't rank by popularity.** An obscure B-side and a chart hit get the same chance if they sound right.
   Chart songs fill at most a fifth of a batch, and if you keep passing on them, haystack learns that too.
 - **It doesn't read lyrics or genre tags** to choose. The fingerprint is all sound.
 - **It doesn't share your taste with anyone.** Your ratings and fingerprints stay in haystack's database on your
-  server.
+  server. The optional places to look are told only names: of songs, artists, styles or labels, never your
+  ratings.

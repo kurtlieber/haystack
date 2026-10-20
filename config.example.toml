@@ -25,6 +25,8 @@ op_binary = "op"
 # token_item = "spotify-refresh-token"                 # field "refresh token"; haystack adds the dates
 # api_token_item = "haystack-api-token"                # field "password"
 # alert_item = "haystack-alert-webhook"                # fields "url", "key"
+# lastfm_item = "haystack-lastfm"                      # field "credential": the Last.fm API key
+# listenbrainz_item = "haystack-listenbrainz"          # field "credential": your ListenBrainz user token
 
 [spotify]
 # Add this exact URI to your Spotify app's Redirect URIs. Spotify accepts only 127.0.0.1 for loopback.
@@ -56,8 +58,12 @@ per_week = 30                  # new songs a week
 outstanding = 30               # at most this many waiting for a verdict
 
 [harvest]
+# The last four do nothing until they are set up (README, "Optional"): lastfm_similar needs the lastfm-api-key
+# secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the listenbrainz-token secret, deezer_label a
+# few kept songs whose album Deezer has described.
 sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
-           "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar"]
+           "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar",
+           "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label"]
 retired_sources = []
 # Where artist radio, related artists and ListenBrainz start: "verdicts" (your 4-5 star Ratings and kept
 # discoveries first, then liked songs, then the library) or "recent" (recent liked songs, then the library).
@@ -65,6 +71,14 @@ seed_policy = "verdicts"
 # An email or URL for the ListenBrainz User-Agent, as MetaBrainz asks of API users.
 listenbrainz_contact = ""
 # listenbrainz_contact = "you@example.com"
+# Your ListenBrainz name, for your own weekly recommendations (listenbrainz_recs). ListenBrainz must be recording
+# your listens: its Settings, Music services, Spotify.
+listenbrainz_user = ""
+# listenbrainz_user = "your-name"
+# A Deezer track without a preview: "itunes" embeds Apple's 30 s preview of the same song instead (its artist and
+# title go to Apple's iTunes Search API), or "off".
+preview_fallback = "off"
+# preview_fallback = "itunes"
 
 [schedule]
 # When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",

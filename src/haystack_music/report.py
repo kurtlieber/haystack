@@ -106,10 +106,17 @@ def pool(con, cfg: dict) -> dict:
         active = vectors.active_variant(con, cfg)
     except ValueError as e:
         active = f"invalid ({e})"
+    # a database no 0.7.0 job has opened yet (the report opens it read-only) has no provider column
+    cols = {r[1] for r in con.execute("PRAGMA table_info(deezer_vectors)")}
+    prov = "v.provider" if "provider" in cols else "'deezer'"
+    providers = dict(con.execute(f"""SELECT {prov} p, COUNT(*) FROM candidates c JOIN deezer_vectors v
+                                     ON v.deezer_id=c.deezer_id WHERE c.state='pool' AND c.vector_status='ok'
+                                     GROUP BY p ORDER BY p""").fetchall())
     kinds = Counter((r["nearest"] or "none:").split(":", 1)[0] for r in _ranked(con, TOP))
     top = sum(kinds.values())
     preview = top - kinds.get(LIBRARY, 0) - kinds.get("none", 0)
-    return {"pool": n, "embedded": embedded, "scored": scored, "scored_by_source": dict(sorted(by_source.items())),
+    return {"pool": n, "embedded": embedded, "embedded_by_provider": providers, "scored": scored,
+            "scored_by_source": dict(sorted(by_source.items())),
             "active_variant": active, "scored_variant": db.kv_get(con, "scored_variant"),
             "scored_at": con.execute("SELECT MAX(scored_at) FROM candidates WHERE state='pool'").fetchone()[0],
             "top": top, "top_library": kinds.get(LIBRARY, 0), "top_preview": preview,
@@ -315,8 +322,10 @@ def text(r: dict) -> str:
             f"{v['liked_songs'] - v['liked_songs_judged']} with no verdict"]
     srcs = ", ".join(f"{s} {n}" for s, n in p["scored_by_source"].items()) or "-"
     kinds = ", ".join(f"{k} {n}" for k, n in p["top_preview_by_kind"].items()) or "-"
+    prov = ", ".join(f"{k} {n}" for k, n in p["embedded_by_provider"].items())
     out += ["", "Pool",
-            f"  {p['pool']} candidates, {p['embedded']} embedded, {p['scored']} scored ({srcs})",
+            f"  {p['pool']} candidates, {p['embedded']} embedded{f' (previews: {prov})' if prov else ''}, "
+            f"{p['scored']} scored ({srcs})",
             f"  active variant {p['active_variant']}; stored scores from {p['scored_variant'] or '-'} "
             f"at {p['scored_at'] or '-'}",
             f"  nearest positive of the top {p['top']}: library window {p['top_library']}, preview "

@@ -1,7 +1,10 @@
 """Candidate harvesting (token-free): Deezer (charts, editorial charts, new releases, artist radio, related
-artists, playlists named after the listener's styles) and ListenBrainz similar-recordings. Sources only REACH
-candidates; they never contribute to the score. Every candidate records its source(s), and the seed it was found
-from (ADR 0013). Already-in-library, already-liked and already-known/offered are excluded."""
+artists, playlists named after the listener's styles) and ListenBrainz similar-recordings; and, once configured
+(ADR 0020), Last.fm's similar tracks and artists, the listener's own ListenBrainz recommendations and LB Radio, and
+the newest albums of the labels they keep most. Sources only REACH candidates; they never contribute to the score.
+Every candidate records its source(s), and the seed it was found from (ADR 0013). Already-in-library, already-liked
+and already-known/offered are excluded. A Deezer track without a preview is looked up on iTunes
+(harvest.preview_fallback)."""
 from __future__ import annotations
 
 import json
@@ -12,9 +15,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from . import db, library, metadata, sources as source_stats, traits, vectors
+from . import db, library, metadata, secrets, sources as source_stats, traits, vectors
 from . import embed
 from .deezer import Deezer, DeezerError
+from .itunes import Itunes
+from .lastfm import Lastfm
 from .listenbrainz import ListenBrainz
 from .matching import Index, TrackRef, compare
 from .textnorm import key, song_key, split_title
@@ -28,6 +33,11 @@ SEED_KEEP_DAYS = 90         # harvest_seeds rows older than this are dropped
 SEEDED_SOURCES = ("deezer_artist_radio", "deezer_related", "listenbrainz_similar")
 PLAYLISTS_CONSIDERED = 6    # deezer_style_search: search results read for their fan count (one request each)
 PLAYLIST_TRACKS = 25        # deezer_style_search: new tracks taken from one playlist at most
+PREVIEW_FALLBACKS = ("itunes", "off")
+FALLBACK_PER_RUN = 50       # pool candidates without a preview looked up on iTunes per harvest
+FALLBACK_RECHECK_DAYS = 30  # one iTunes didn't have is asked again after this long
+LABEL_SEARCH = 50           # deezer_label: albums read from one label search
+STAR_MASS = {5: 3, 4: 2, 3: 1}
 
 
 @dataclass(frozen=True)
@@ -223,6 +233,38 @@ def stratified_seeds(con, n: int, rng: random.Random) -> list[dict]:
     return out[:n]
 
 
+def label_mass(con) -> list[tuple[str, float]]:
+    """[(label as Deezer writes it, kept mass)], most first: the labels of the albums (WP8's album rows) of the
+    tracks the listener keeps. A Rating counts 3 for 5 stars, 2 for 4 and 1 for 3; a liked song without a verdict
+    counts 1; a Pass, a Dislike or a Rating under 3 stars counts nothing."""
+    from . import verdicts
+    cur = verdicts.current(con)
+    liked = {r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
+    mass: dict[str, float] = {}
+    names: dict[str, dict[str, int]] = {}
+    seen: set[str] = set()
+    for sid, label in con.execute("""SELECT x.spotify_id, a.label FROM (
+                                       SELECT spotify_id, album_id FROM candidates WHERE spotify_id IS NOT NULL
+                                       UNION ALL SELECT spotify_id, album_id FROM liked_map) x
+                                     JOIN deezer_albums a ON a.album_id=x.album_id WHERE a.label IS NOT NULL"""):
+        k = key(label)
+        if not k or sid in seen:
+            continue
+        seen.add(sid)
+        v = cur.get(sid)
+        w = (STAR_MASS.get(v.stars or 0, 0) if v.kind == "rating" else 0) if v else (1 if sid in liked else 0)
+        if w:
+            mass[k] = mass.get(k, 0) + w
+            names.setdefault(k, {})[label] = names.setdefault(k, {}).get(label, 0) + 1
+    best = {k: max(v, key=lambda n: (v[n], n)) for k, v in names.items()}
+    return [(best[k], m) for k, m in sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def _prompt_safe(name: str) -> str:
+    """A name inside an LB Radio prompt's parentheses: no parentheses or colons of its own."""
+    return " ".join(name.replace("(", " ").replace(")", " ").replace(":", " ").split())
+
+
 class Harvester:
     def __init__(self, con, cfg: dict, rng: random.Random | None = None, seeds: list[dict] | None = None,
                  liked_seeds: list[tuple[str, str]] | None = None):
@@ -243,7 +285,36 @@ class Harvester:
         self.policy = h.get("seed_policy", "verdicts")
         if self.policy not in SEED_POLICIES:
             raise ValueError(f"harvest.seed_policy {self.policy!r} is not one of {', '.join(SEED_POLICIES)}")
+        self.fallback = h.get("preview_fallback", "off")
+        if self.fallback not in PREVIEW_FALLBACKS:
+            raise ValueError(f"harvest.preview_fallback {self.fallback!r} is not one of {', '.join(PREVIEW_FALLBACKS)}")
         self._buckets: dict[str, list[Seed]] | None = None
+        self._itunes: Itunes | None = None
+        self._lastfm: Lastfm | None = None
+
+    # ---- the optional providers (ADR 0020), made on first use ----
+    def secret(self, name: str) -> str | None:
+        try:
+            return secrets.store(self.cfg).find(name)
+        except secrets.SecretError as e:
+            log.warning("%s is unreadable: %s", name, e)
+            return None
+
+    @property
+    def itunes(self) -> Itunes | None:
+        if self.fallback == "itunes" and self._itunes is None:
+            self._itunes = Itunes(self.cfg["harvest"]["itunes_min_interval"])
+        return self._itunes
+
+    def lastfm(self) -> Lastfm | None:
+        if self._lastfm is None:
+            k = self.secret("lastfm-api-key")
+            self._lastfm = Lastfm(k, self.cfg["harvest"]["lastfm_min_interval"]) if k else None
+        return self._lastfm
+
+    def skip(self, source: str, why: str) -> None:
+        """A source that isn't configured: one line in the run's log (its stats) and nothing else."""
+        self._st(source)["skipped"] = why
 
     # ---- seeds: by Verdicts (ADR 0013), or recent likes first, then the library ----
     def seed_tracks(self, n: int, source: str | None = None) -> list[Seed]:
@@ -304,7 +375,7 @@ class Harvester:
     # ---- intake ----
     def _st(self, source):
         return self.stats.setdefault(source, dict(seen=0, new=0, dupe=0, in_library=0, liked=0, embedded=0,
-                                                  no_preview=0, errors=0))
+                                                  via_itunes=0, no_preview=0, errors=0))
 
     def offer(self, source: str, detail: str, t: dict, mbid: str | None = None) -> bool:
         """Consider one Deezer track object. Returns True if it became a new candidate."""
@@ -350,6 +421,9 @@ class Harvester:
         st["new"] += 1
         url = t.get("preview")
         if not url:
+            if self.preview_elsewhere(cid, did, artist, title, dur):
+                st["embedded"] += 1; st["via_itunes"] += 1
+                return True
             st["no_preview"] += 1
             self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,))
             return True
@@ -362,6 +436,39 @@ class Harvester:
             log.warning("preview embed failed for deezer %s: %r", did, e)
             self.con.execute("UPDATE candidates SET vector_status='error' WHERE id=?", (cid,))
         return True
+
+    def preview_elsewhere(self, cid: int, did: int, artist: str, title: str, duration) -> bool:
+        """A Deezer track without a preview: embed Apple's preview of the same song instead, if iTunes has one
+        (harvest.preview_fallback). The vectors stay under the Deezer id, with provider 'itunes'."""
+        it = self.itunes
+        if it is None:
+            return False
+        try:
+            x = it.find(artist, title, duration, self.tol)
+            if x:
+                traits.store(self.con, did, traits.analyse_preview(it, x["previewUrl"]), provider="itunes")
+                self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
+        except Exception as e:  # noqa: BLE001 - the candidate stays without a preview, and is asked again later
+            log.warning("itunes preview for deezer %s failed: %r", did, e)
+            return False
+        self.con.execute("""INSERT INTO preview_fallback(deezer_id, provider, found, checked_at) VALUES(?,?,?,?)
+                            ON CONFLICT(deezer_id) DO UPDATE SET provider=excluded.provider, found=excluded.found,
+                            checked_at=excluded.checked_at""", (did, "itunes", int(bool(x)), db.now()))
+        return bool(x)
+
+    def fallback_backfill(self, limit: int = FALLBACK_PER_RUN) -> dict:
+        """Pool candidates without a preview, looked up on iTunes: never asked first, then those it didn't have a
+        month ago."""
+        if self.itunes is None:
+            return {"skipped": "harvest.preview_fallback is off"}
+        rows = self.con.execute("""SELECT c.id, c.deezer_id, c.artist, c.title, c.duration FROM candidates c
+                                   LEFT JOIN preview_fallback f ON f.deezer_id=c.deezer_id
+                                   WHERE c.state='pool' AND c.vector_status='no_preview'
+                                     AND (f.deezer_id IS NULL OR (f.found=0 AND f.checked_at < ?))
+                                   ORDER BY f.checked_at IS NOT NULL, f.checked_at, c.id LIMIT ?""",
+                                (_since(FALLBACK_RECHECK_DAYS), limit)).fetchall()
+        found = sum(self.preview_elsewhere(*r) for r in rows)
+        return {"todo": len(rows), "embedded": found}
 
     def _feed(self, source, detail, tracks, cap, per_feed=None):
         added = 0
@@ -489,6 +596,135 @@ class Harvester:
                     got += self.offer(src, with_seed(f"similar-to {mbid} ({sd.artist} - {sd.title})", sd), dz,
                                       mbid=s.get("recording_mbid"))
 
+    def lastfm_similar(self, cap):
+        """Last.fm (ADR 0020): track.getSimilar for the seed tracks, then, for the seed artists, the top tracks of
+        their three most similar artists; half the cap each, the names resolved on Deezer."""
+        src = "lastfm_similar"
+        lf = self.lastfm()
+        if lf is None:
+            return self.skip(src, "no lastfm-api-key secret")
+        h = self.cfg["harvest"]
+        half = cap - cap // 2
+        seeds = self.seed_tracks(h["seed_recordings"], src)
+        per = max(2, half // max(1, len(seeds)))
+        for sd in seeds:
+            if self._st(src)["new"] >= half:
+                break
+            sims = lf.similar_tracks(sd.artist, sd.title, per * 3)
+            self.seeded(src, sd)
+            got = 0
+            for s in sims:
+                if got >= per or self._st(src)["new"] >= half:
+                    break
+                dz = self._deezer_lookup(s["artist"], s["title"])
+                if dz:
+                    got += self.offer(src, with_seed(f"lastfm/track/{sd.artist} - {sd.title}", sd), dz)
+        artists = self.seed_artists(h["seed_artists"], src)
+        per = max(2, (cap - self._st(src)["new"]) // max(1, len(artists)))
+        for sd in artists:
+            if self._st(src)["new"] >= cap:
+                break
+            self.seeded(src, sd)
+            got = 0
+            for name in lf.similar_artists(sd.artist, 3):
+                for x in lf.top_tracks(name, 2):
+                    if got >= per or self._st(src)["new"] >= cap:
+                        break
+                    dz = self._deezer_lookup(x["artist"], x["title"])
+                    if dz:
+                        got += self.offer(src, with_seed(f"lastfm/artist/{sd.artist} -> {name}", sd), dz)
+
+    def listenbrainz_recs(self, cap):
+        """The listener's own weekly recommendations from ListenBrainz (ADR 0020), best first. A recommendation
+        tried before (its MBID is in a detail) is not resolved again."""
+        src = "listenbrainz_recs"
+        user = (self.cfg["harvest"].get("listenbrainz_user") or "").strip()
+        if not user:
+            return self.skip(src, "harvest.listenbrainz_user is not set")
+        done = {d.rsplit("/", 1)[-1] for (d,) in self.con.execute(
+            "SELECT detail FROM candidate_sources WHERE source=?", (src,))}
+        todo = [m for m in self.lb.recommendations(user, 100) if m not in done][:cap * 2]
+        names = self.lb.recordings(todo)
+        for m in todo:
+            if self._st(src)["new"] >= cap:
+                break
+            r = names.get(m)
+            dz = r and self._resolve(r["artist"], r["title"], r["isrc"])
+            if dz:
+                self.offer(src, f"lb-recs/{user}/{m}", dz, mbid=m)
+
+    def listenbrainz_radio(self, cap):
+        """LB Radio (ADR 0020): harvest.lb_radio_prompts prompts a run, a top style and a seed artist in turn
+        (tag:(<style>), artist:(<name>)::nosim), each playlist's songs resolved on Deezer."""
+        src = "listenbrainz_radio"
+        token = self.secret("listenbrainz-token")
+        if not token:
+            return self.skip(src, "no listenbrainz-token secret")
+        self.lb.token = token
+        n = self.cfg["harvest"]["lb_radio_prompts"]
+        styles = [(f"tag:({_prompt_safe(s).lower()})", None) for s in top_style_names(self.con, self.cfg, n)]
+        artists = [(f"artist:({_prompt_safe(sd.artist)})::nosim", sd) for sd in self.seed_artists(n, src)]
+        prompts = [p for pair in zip(styles, artists) for p in pair]
+        prompts = (prompts + styles[len(prompts) // 2:] + artists[len(prompts) // 2:])[:n]
+        per = max(2, cap // max(1, len(prompts)))
+        for prompt, sd in prompts:
+            if self._st(src)["new"] >= cap:
+                break
+            if sd:
+                self.seeded(src, sd)
+            songs = self.lb.radio(prompt, "easy")
+            self.rng.shuffle(songs)
+            got = 0
+            for x in songs[:per * 3]:
+                if got >= per or self._st(src)["new"] >= cap:
+                    break
+                dz = self._deezer_lookup(x["artist"], x["title"])
+                if dz:
+                    got += self.offer(src, with_seed(f"lb-radio {prompt}", sd) if sd else f"lb-radio {prompt}", dz,
+                                      mbid=x["mbid"])
+
+    def deezer_label(self, cap):
+        """The newest albums of the labels the listener keeps most (ADR 0020): harvest.label_count labels by
+        label_mass, harvest.label_albums albums each, two tracks per album (Deezer's most played first). Deezer's
+        search can't sort by date, so the newest are the highest album ids; an album already in the candidates
+        is skipped without a request."""
+        src = "deezer_label"
+        h = self.cfg["harvest"]
+        labels = label_mass(self.con)[:h["label_count"]]
+        if not labels:
+            return self.skip(src, "no label yet (no kept track has an album row from Deezer's metadata)")
+        per = max(2, -(-cap // len(labels)))
+        have = {r[0] for r in self.con.execute("SELECT DISTINCT album_id FROM candidates WHERE album_id > 0")}
+        for name, _ in labels:
+            if self._st(src)["new"] >= cap:
+                break
+            found = [a for a in self.dz.search_album(f'label:"{name}"', LABEL_SEARCH)
+                     if a.get("id") and a["id"] not in have]
+            got = albums = 0
+            for a in sorted(found, key=lambda a: -a["id"]):
+                if albums >= h["label_albums"] or got >= per or self._st(src)["new"] >= cap:
+                    break
+                full = self.dz.album(a["id"]) or {}
+                metadata.store_album(self.con, a["id"], full)
+                have.add(a["id"])
+                if key(full.get("label")) != key(name):        # the search matches loosely
+                    continue
+                albums += 1
+                tracks = sorted((full.get("tracks") or {}).get("data") or [], key=lambda x: -(x.get("rank") or 0))
+                for x in tracks:
+                    x.setdefault("artist", full.get("artist") or {})
+                    x.setdefault("album", {"id": a["id"]})
+                got += self._feed(src, f"label/{name}/album/{a['id']}", tracks, cap, min(2, per - got))
+
+    def _resolve(self, artist: str, title: str, isrc: str | None = None) -> dict | None:
+        """A song named elsewhere, on Deezer: by its ISRC when it has one and the names agree, else by search."""
+        if isrc:
+            t = self.dz.track_by_isrc(isrc)
+            if t and t.get("id") and compare(TrackRef(None, artist, title, None), TrackRef(
+                    None, (t.get("artist") or {}).get("name", ""), t.get("title", ""), None), self.tol):
+                return t
+        return self._deezer_lookup(artist, title)
+
     def _deezer_lookup(self, artist: str, title: str) -> dict | None:
         if not artist or not title:
             return None
@@ -505,14 +741,18 @@ class Harvester:
     def retry_errors(self, limit: int = 100) -> dict:
         """Re-embed pool candidates whose preview failed or was interrupted earlier (fresh URL from /track/{id})."""
         c = dict(retried=0, embedded=0)
-        rows = self.con.execute("SELECT id, deezer_id FROM candidates WHERE state='pool' AND (vector_status='error' OR vector_status IS NULL) "
-                                "LIMIT ?", (limit,)).fetchall()
-        for cid, did in rows:
+        rows = self.con.execute("SELECT id, deezer_id, artist, title, duration FROM candidates WHERE state='pool' "
+                                "AND (vector_status='error' OR vector_status IS NULL) LIMIT ?", (limit,)).fetchall()
+        for cid, did, artist, title, dur in rows:
             c["retried"] += 1
             try:
                 t = self.dz.track(did) or {}
                 if not t.get("preview"):
-                    self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,)); continue
+                    if self.preview_elsewhere(cid, did, artist, title, dur):
+                        c["embedded"] += 1
+                    else:
+                        self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,))
+                    continue
                 traits.store(self.con, did, traits.analyse_preview(self.dz, t["preview"], bpm_hint=t.get("bpm")))
                 self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
                 c["embedded"] += 1
@@ -571,9 +811,12 @@ class Harvester:
                 log.exception("source %s failed: %r", s, e)
             log.info("source %s: %s", s, self.stats[s])
         meta = metadata.backfill(self.con, self.dz, h["metadata_per_run"]) if retry else {"skipped": True}
+        elsewhere = self.fallback_backfill() if retry else {"skipped": True}
         return {"per_source": self.stats, "caps": caps, "retry_previous_errors": retried, "style_backfill": styles,
-                "readings_backfill": readings, "metadata_backfill": meta, "deezer_requests": self.dz.requests,
-                "listenbrainz_requests": self.lb.requests}
+                "readings_backfill": readings, "metadata_backfill": meta, "preview_fallback": elsewhere,
+                "deezer_requests": self.dz.requests, "listenbrainz_requests": self.lb.requests,
+                "lastfm_requests": self._lastfm.requests if self._lastfm else 0,
+                "itunes_requests": self._itunes.requests if self._itunes else 0}
 
     def caps(self, sources: list[str], cap: int | None = None) -> dict[str, dict]:
         """This run's cap per source: `--limit-per-source` as given; otherwise each source's own, scaled by its kept

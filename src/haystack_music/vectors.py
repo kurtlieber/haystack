@@ -15,14 +15,16 @@ from .scoring import (VARIANTS, Space, is_centred, is_csls, l2norm, nearest_posi
 log = logging.getLogger("haystack_music.vectors")
 
 
-def put_deezer_vector(con, deezer_id: int, e512, e1280, n: int, secs: float, style=None) -> None:
+def put_deezer_vector(con, deezer_id: int, e512, e1280, n: int, secs: float, style=None,
+                      provider: str = "deezer") -> None:
+    """A Deezer track's preview vectors; provider: whose preview they were measured on (ADR 0020)."""
     st = None if style is None else np.asarray(style, np.float16).tobytes()
-    con.execute("""INSERT INTO deezer_vectors(deezer_id, e512, e1280, n_patches, seconds, created_at, style400)
-                   VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(deezer_id) DO UPDATE SET e512=excluded.e512,
+    con.execute("""INSERT INTO deezer_vectors(deezer_id, e512, e1280, n_patches, seconds, created_at, style400,
+                   provider) VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(deezer_id) DO UPDATE SET e512=excluded.e512,
                    e1280=excluded.e1280, n_patches=excluded.n_patches, seconds=excluded.seconds,
-                   style400=COALESCE(excluded.style400, deezer_vectors.style400)""",
+                   style400=COALESCE(excluded.style400, deezer_vectors.style400), provider=excluded.provider""",
                 (int(deezer_id), np.asarray(e512, np.float32).tobytes(), np.asarray(e1280, np.float16).tobytes(),
-                 int(n), float(secs), db.now(), st))
+                 int(n), float(secs), db.now(), st, provider))
 
 
 def put_style(con, deezer_id: int, style) -> None:
