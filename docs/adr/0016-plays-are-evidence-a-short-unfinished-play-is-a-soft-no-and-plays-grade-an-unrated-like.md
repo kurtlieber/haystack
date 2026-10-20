@@ -23,7 +23,8 @@ not on what haystack inferred. A long play without a Verdict says little either 
 
 **Why only needle plays carry length.** Spotify's recently played has no length and no completion, and a play there
 may be a radio station, a shuffle, or someone else at the speaker. needle knows when it started a track and when it
-stopped. So only a needle play can be a soft no. For grading an Unrated like, plays from any context count: there a
+stopped, and reports a play once it has run 5 s or reached the end, so moving quickly through the queue is no play.
+So only a needle play can be a soft no. For grading an Unrated like, plays from any context count: there a
 play means the listener chose to hear a song they had already hearted.
 
 **Why a star per doubling, and at most 5★.** Repeat plays of a liked song say a lot at first and little later: the

@@ -528,7 +528,8 @@ verdicts or to Spotify.
 - **Soft no**: an offer or Calibrate pick with no Verdict and no decided outcome whose latest needle play stopped
   before `rerank.soft_pass_ms` (30 s) without finishing is a no of weight `rerank.soft_pass_weight` (0.5) for the
   re-ranker's fit. A Verdict, a like, or a later full play takes it back. It counts toward neither the gate nor
-  the eval.
+  the eval. needle reports a play only once it has run 5 s or reached the end, so a skip in the first 5 s (often
+  just moving through the queue) is no play and no soft no.
 - **Unrated likes graded by plays** (`scoring.verdicts.unrated_like_plays`): an Unrated like gains a star per
   doubling of its plays (any context) in the last `unrated_like_days` (90) days, at most two:
   `3 + min(2, floor(log2(1 + plays)))`, so 1 play is 4★ and 3 are 5★. A Rating always stands. This grades the

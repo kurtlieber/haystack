@@ -237,7 +237,7 @@ paste the address back, as in step 5.
 hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song still in
 Discoveries when the next batch comes is a no, played or not, because the playlist is meant to be listened
 through. Songs added less than a day before are let off. Ratings in needle (1 to 5 stars, Pass, Dislike) count
-too, and say more than a like. A discovery you skip in needle within 30 seconds counts as a gentle no.
+too, and say more than a like. A discovery you skip in needle after 5 seconds but within 30 counts as a gentle no.
 
 Without Docker, haystack runs as systemd user services on any Linux machine with Python 3.14 and ffmpeg. See
 [docs/reference.md](docs/reference.md#running-it), which also covers every command, how the scoring works and

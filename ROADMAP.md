@@ -27,10 +27,10 @@ teaches haystack much more. Rating songs you already like tells haystack how muc
 them is already a yes. Calibrate asks about songs that could go either way, so haystack learns where your yes
 ends and your no begins.
 
-**How you listen counts a little.** If you skip a discovery in needle within 30 seconds without rating it,
-haystack takes that as a quiet "probably not". It weighs far less than a real verdict and never changes anything
-in your Spotify account. And a liked song you haven't rated but play often counts for more than one you liked
-once and forgot.
+**How you listen counts a little.** If you skip a discovery in needle after the first few seconds but within 30
+seconds, without rating it, haystack takes that as a quiet "probably not". It weighs far less than a real verdict
+and never changes anything in your Spotify account. And a liked song you haven't rated but play often counts for
+more than one you liked once and forgot.
 
 **You can see the progress.** `haystack report` shows which of the learning parts have switched on, and how many
 more verdicts each one still needs.
