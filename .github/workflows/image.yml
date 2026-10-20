@@ -1,6 +1,7 @@
 # The server image. On a pull request that touches it: build it and check that it starts and loads Essentia.
 # On a version tag (git tag v0.2.0 && git push origin v0.2.0): the same, then publish it to GitHub's container
-# registry as ghcr.io/kurtlieber/haystack:0.2.0, :0.2 and :latest. linux/amd64 only (see Dockerfile).
+# registry as ghcr.io/kurtlieber/haystack:0.2.0, :0.2 and :latest, and start lieber.org's deploy so its haystack page
+# shows the new version. linux/amd64 only (see Dockerfile).
 name: image
 
 on:
@@ -72,3 +73,21 @@ jobs:
           for t in $(echo "${{ steps.meta.outputs.tags }}" | grep -v ':ci$'); do
             docker push "$t"
           done
+
+  # lieber.org shows haystack's newest tag. Once the image is out, starting its deploy saves waiting up to three hours
+  # for its own check. LIEBER_ORG_DEPLOY_TOKEN can only start lieber.org's workflows; without it, the site catches up
+  # on its own.
+  site:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.LIEBER_ORG_DEPLOY_TOKEN }}
+    steps:
+      - name: Start lieber.org's deploy
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::secret LIEBER_ORG_DEPLOY_TOKEN is not set; lieber.org shows $GITHUB_REF_NAME within three hours"; exit 0; fi
+          gh api -X POST repos/kurtlieber/lieber.org/actions/workflows/deploy.yml/dispatches -f ref=main
+          echo "::notice::Started lieber.org's deploy"

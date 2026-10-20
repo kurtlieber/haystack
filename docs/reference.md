@@ -704,7 +704,10 @@ One process: needle's API in a thread, and a scheduler that starts each job as a
 The image (`Dockerfile`) is `python:3.14-slim` with ffmpeg and tini, linux/amd64 only: the pinned
 essentia-tensorflow has no ARM wheel. It runs as uid 1000. The Essentia models are not in it (see License in the
 README); `haystack models fetch` puts them in `/data/models`. A version tag (`v0.2.0`) makes the `image` workflow
-publish `ghcr.io/kurtlieber/haystack:0.2.0`, `:0.2` and `:latest`.
+publish `ghcr.io/kurtlieber/haystack:0.2.0`, `:0.2` and `:latest`. Then it starts lieber.org's deploy, so
+https://lieber.org/haystack/ shows the new version within minutes. That uses the repository secret
+`LIEBER_ORG_DEPLOY_TOKEN`, which can only start lieber.org's workflows; without it, lieber.org catches up within
+three hours.
 
 ### systemd user units (no container)
 
