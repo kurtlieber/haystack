@@ -214,3 +214,13 @@ auth` run in an SSH session to the server.
   Decisions: [docs/adr/](docs/adr/). needle's API: [docs/api.md](docs/api.md).
 - `spotify.py` is the only module that talks to Spotify. Keep it that way.
 - Never commit secrets, a `config.toml`, or Deezer audio or cover art.
+- **The docs change with the code, in the same PR.** A change to what haystack does, a command, a setting or the
+  API updates every doc that describes it: [README.md](README.md) (its settings table) and
+  [config.example.toml](config.example.toml), [docs/how-it-works.md](docs/how-it-works.md) (plain language, no
+  jargon), [docs/reference.md](docs/reference.md), [docs/api.md](docs/api.md) (a dated line in "Changes" for
+  every `/v1` addition), [GLOSSARY.md](GLOSSARY.md) for a new term, and an ADR for a decision. ADR numbers are
+  shared with needle: take the next number that is free in both repositories.
+- **Every release checks the docs.** A PR that bumps `version` in `pyproject.toml` is a release. In it, add the
+  version's section to [CHANGELOG.md](CHANGELOG.md) and read the docs above against every change since the last
+  tag (`git log --oneline v<last>..`). Fix in that PR any line the release makes untrue, including older text
+  that the new behaviour contradicts. After the merge, tag `v<version>` on `main`.
