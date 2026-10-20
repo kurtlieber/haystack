@@ -31,7 +31,7 @@ def _has_album(col: str) -> str:
             f"WHERE label IS NOT NULL OR release_date IS NOT NULL)")
 
 
-def _store_album(con, album_id: int, a: dict | None) -> None:
+def store_album(con, album_id: int, a: dict | None) -> None:
     a = a or {}
     genres = [g.get("name") for g in ((a.get("genres") or {}).get("data") or []) if g.get("name")]
     date = a.get("release_date")
@@ -92,7 +92,7 @@ def backfill(con, dz, limit: int = 150) -> dict:
                 else:
                     con.execute("UPDATE liked_map SET album_id=? WHERE spotify_id=?", (album_id, ref))
             if album_id and album_id not in albums_seen:
-                _store_album(con, album_id, dz.album(album_id))
+                store_album(con, album_id, dz.album(album_id))
                 albums_seen.add(album_id); c["albums"] += 1
             if artist_id and artist_id not in artists_seen:
                 _store_artist(con, artist_id, dz.artist(artist_id))

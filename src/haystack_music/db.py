@@ -157,6 +157,12 @@ CREATE TABLE IF NOT EXISTS spotify_deezer (
     method TEXT, checked_at TEXT
 );
 
+-- A Deezer track without a preview, looked up at a second provider (ADR 0020). found=0: not there when asked
+-- (asked again after a month); found=1: its preview was embedded (deezer_vectors.provider says which).
+CREATE TABLE IF NOT EXISTS preview_fallback (
+    deezer_id INTEGER PRIMARY KEY, provider TEXT NOT NULL, found INTEGER NOT NULL, checked_at TEXT NOT NULL
+);
+
 -- the seeds each harvest source started from (ADR 0013): an artist is seeded at most once a week per source
 CREATE TABLE IF NOT EXISTS harvest_seeds (
     at TEXT NOT NULL, source TEXT NOT NULL, artist_key TEXT NOT NULL,
@@ -269,6 +275,7 @@ def _migrate(con) -> None:
     _add_column(con, "candidates", "deezer_rank", "INTEGER")       # the track's Deezer rank (popularity)
     _add_column(con, "liked_map", "album_id", "INTEGER")           # deezer_id's album, as on candidates
     _add_column(con, "rerank_runs", "loo_auc_no_meta", "REAL")     # the model's AUC without Deezer's metadata
+    _add_column(con, "deezer_vectors", "provider", "TEXT NOT NULL DEFAULT 'deezer'")   # whose preview (0.7.0)
 
 
 def kv_get(con, k: str, default=None):

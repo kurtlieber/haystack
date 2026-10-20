@@ -101,6 +101,10 @@ class Deezer:
     def artist_top(self, artist_id: int, limit: int = 3) -> list[dict]:
         return self._data(f"artist/{int(artist_id)}/top", {"limit": limit})
 
+    def search_album(self, q: str, limit: int = 50) -> list[dict]:
+        """Albums; Deezer's advanced search takes label:"<name>" here (checked 2026-10), but can't sort by date."""
+        return self._data("search/album", {"q": q, "limit": limit})
+
     def search_playlist(self, q: str, limit: int = 6) -> list[dict]:
         return self._data("search/playlist", {"q": q, "limit": limit})
 

@@ -230,10 +230,10 @@ def get(con, deezer_ids) -> dict[int, dict]:
     return out
 
 
-def store(con, deezer_id: int, a: Analysis) -> None:
+def store(con, deezer_id: int, a: Analysis, provider: str = "deezer") -> None:
     """Keep a preview's vectors, styles and Readings."""
     from . import vectors
-    vectors.put_deezer_vector(con, deezer_id, a.e512, a.e1280, a.n_patches, a.seconds, a.style)
+    vectors.put_deezer_vector(con, deezer_id, a.e512, a.e1280, a.n_patches, a.seconds, a.style, provider)
     if a.readings:
         put(con, deezer_id, a.readings)
 

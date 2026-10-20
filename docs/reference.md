@@ -23,7 +23,8 @@ decisions behind the design are in [adr/](adr/).
 ```
 library.root (read-only) --scan--> SQLite: local_tracks --embed (9x30 s windows)--> embeddings/local/*.npz
 Spotify (likes, plays) --sync--> likes / plays / liked_map (ID tag -> ISRC -> fuzzy) --> positives
-Deezer + ListenBrainz --harvest--> candidates (+ source) --preview, in memory only--> deezer_vectors (512/1280-d)
+Deezer + ListenBrainz + Last.fm --harvest--> candidates (+ source) --Deezer preview (else iTunes, opt-in),
+  in memory only--> deezer_vectors (512/1280-d)
 score = max cosine(candidate preview, aligned to the library, any positive window; variant chosen by the eval)
   -> top 400 re-ranked by a model of your Verdicts, once it beats the score -> weekly batch (spread, exploration)
   -> Discoveries -> outcomes and Verdicts -> kept rate
@@ -36,7 +37,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `spotify.py` | **the only code that talks to Spotify**: token refresh + rotation write-back, 429/Retry-After, saved tracks, recently-played, `/me/playlists`, `/playlists/{id}/items` (add/remove with `snapshot_id`), `/me/library/contains`, search (limit 10) |
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
-| `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), 1 req / 1.1 s cross-process throttle |
+| `deezer.py`, `listenbrainz.py`, `lastfm.py`, `itunes.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), the optional sources and the iTunes preview fallback (ADR 0020); a cross-process throttle per service: Deezer 1.1 s, ListenBrainz 1.2 s, Last.fm 1 s, iTunes 3 s |
 | `metadata.py` | what Deezer publishes about a track (ADR 0017): its album's label, release date and record type, its rank and its artist's fans, fetched once per album and artist, for the re-ranker and the track card |
 | `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013) |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
@@ -67,7 +68,8 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 * **Deezer previews** (see the README's Deezer notice): at most 1 request per 1.1 s across all
   processes; preview audio is held only in memory and piped into ffmpeg, never written to disk (not even a temp
   file); only vectors and a few public facts about each track (label, release date, popularity: ADR 0017) are
-  kept, locally.
+  kept, locally. With `harvest.preview_fallback = "itunes"` a track Deezer has no preview for gets Apple's,
+  under the same rules (at most 1 request per 3 s, 3 MB at most, memory only).
 * **Playlists.** Exactly one private "Discoveries" and one private "To Rip" (found by name or created once; ids
   cached). Every bot addition is recorded in `playlist_adds`. The hourly sync only removes tracks the bot added,
   so a hand edit during the week is not overwritten. A track you remove from Discoveries yourself counts as a
@@ -160,8 +162,11 @@ Spotify jobs exit with code **3** and `status.json` -> `auth.ok=false` when no r
 
 Sources: `deezer_chart`, `deezer_editorial` (genre charts), `deezer_new_releases` (editorial releases),
 `deezer_artist_radio`, `deezer_related` (related artists' top tracks), `deezer_style_search` (Deezer playlists
-named after your top styles) and `listenbrainz_similar` (labs `recording-search` + `similar-recordings`; the
-keyless `api.listenbrainz.org` lookup/radio endpoints now need a token).
+named after your top styles), `listenbrainz_similar` (labs `recording-search` + `similar-recordings`), and four
+that wait for setup (ADR 0020, below): `lastfm_similar`, `listenbrainz_recs`, `listenbrainz_radio` and
+`deezer_label`. A source that isn't set up logs one line and finds nothing. Every candidate is a Deezer track:
+the sources outside Deezer name a song, and haystack finds it on Deezer by ISRC (when the source gives one), then
+by an artist and title search with the same version check as the Spotify matching.
 
 **Seeds** (ADR 0013). Artist radio, related artists and ListenBrainz start from seed tracks. With
 `harvest.seed_policy = "verdicts"` (default) they come from three buckets, by `harvest.seed_quotas` (40 / 30 / 30
@@ -184,6 +189,36 @@ style vectors.
 `sources.min_offers_before_retire` (30) decided offers has that cap scaled by its kept rate over the kept rate of
 all sources, clipped to 0.25-2x; `haystack sources` shows the rates and the caps. `--limit-per-source` sets a
 fixed cap for one run.
+
+**`lastfm_similar`** (the `lastfm-api-key` secret). Half the source's cap comes from Last.fm's
+`track.getSimilar` on seed tracks (detail `lastfm/track/<artist> - <title>`), the other half from
+`artist.getSimilar` on seed artists: the top 2 tracks (`artist.getTopTracks`) of each seed's 3 most similar
+artists (detail `lastfm/artist/<seed> -> <artist>`). Seeds are the same buckets and history as the other seeded
+sources. A refused key logs once and stops the source for the run.
+
+**`listenbrainz_recs`** (`harvest.listenbrainz_user`). Your weekly collaborative-filtering recommendations
+(`/1/cf/recommendation/user/<name>/recording`, no token) for a ListenBrainz account that records your listening.
+Up to twice the cap of recordings not yet tried are named through `/1/metadata/recording` (ISRC, artist, title)
+and found on Deezer; detail `lb-recs/<name>/<mbid>`. One that can't be found is tried again next run.
+
+**`listenbrainz_radio`** (the `listenbrainz-token` secret). `harvest.lb_radio_prompts` (6) LB Radio prompts a
+run, alternating your top styles (`tag:(<style>)`) and seed artists (`artist:(<name>)::nosim`); each playlist's
+recordings are found on Deezer like the recommendations. Detail `lb-radio <prompt>`. ListenBrainz asks for a user
+token before it answers `/1/explore/lb-radio`.
+
+**`deezer_label`**. The `harvest.label_count` (10) record labels with the most kept mass: Deezer's label for the
+album of each song you Rated or liked, weighted 3 for 5 stars, 2 for 4 stars and 1 for 3 stars or a liked song
+with no Rating. For each label it searches Deezer's albums (`/search/album?q=label:"<name>"`; Deezer can't sort
+these by date, so the highest album id, the newest added, comes first), keeps albums whose label matches, and
+takes the top 2 tracks by rank from each of the `harvest.label_albums` (5) newest it hasn't seen. Detail
+`label/<name>/album/<id>`. It waits until Deezer's metadata (below) knows the labels.
+
+**Preview fallback** (`harvest.preview_fallback`, ADR 0020). `"off"` (default): a candidate whose Deezer track
+has no preview stays `no_preview`, with no vector and no Traits. `"itunes"`: such a candidate is looked up on
+Apple's iTunes Search API by artist and title (Apple's ISRC lookup returns nothing), matched with the same
+version check, and Apple's 30-second preview is embedded instead (`deezer_vectors.provider = 'itunes'`). The
+daily harvest's retry step also looks up 50 older `no_preview` pool candidates a run: those never asked first, then
+those Apple didn't have 30 days ago. `haystack report` counts the pool's vectors by provider.
 
 **Deezer's metadata** (ADR 0017). A new candidate keeps its Deezer album id and rank from the track object the
 harvest already has. After the sources, each daily harvest fetches what is still missing for up to
@@ -586,7 +621,9 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |
 
-Heavy jobs run at nice 19.
+Heavy jobs run at nice 19. Each outside service's request rate is kept across processes by a throttle file in
+the state dir (`deezer.throttle`, `listenbrainz.throttle`, `lastfm.throttle`, `itunes.throttle`), so a manual run
+next to a scheduled one shares it.
 
 ### `haystack serve` (the container)
 
@@ -650,6 +687,8 @@ are the server's local time; a unit drop-in (`systemctl --user edit haystack-bat
 | `spotify-client-id`, `spotify-client-secret` | your Spotify app's credentials | `haystack secret set NAME` |
 | `api-token` | needle's bearer token | `haystack token new` |
 | `alert-webhook-url`, `alert-webhook-key` | optional, see Alerts | `haystack secret set NAME` |
+| `lastfm-api-key` | optional, for `lastfm_similar` | `haystack secret set NAME` |
+| `listenbrainz-token` | optional, for `listenbrainz_radio` | `haystack secret set NAME` |
 | refresh token | Spotify's long-lived login | `haystack auth` |
 
 `haystack secret set` takes the value from a hidden prompt or stdin, never the command line. A systemd

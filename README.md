@@ -4,7 +4,7 @@
 
 haystack finds new music for your Spotify account by **how it sounds**. It listens to the songs you already love
 (your Liked Songs, your ratings and, if you have one, your own music folder), then looks through thousands of
-candidates from Deezer and ListenBrainz. Once a week it puts the closest matches into a private **Discoveries**
+candidates from Deezer, ListenBrainz and [more places](#more-places-to-look-optional). Once a week it puts the closest matches into a private **Discoveries**
 playlist in your Spotify account.
 
 You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Let one sit
@@ -22,6 +22,7 @@ your Spotify likes alone.  needle is when you want to get far more granular with
 - [What you need](#what-you-need)
 - [Install with Docker](#install-with-docker)
 - [Your music folder (optional)](#your-music-folder-optional)
+- [More places to look (optional)](#more-places-to-look-optional)
 - [Settings: config.toml](#settings-configtoml)
 - [Day to day](#day-to-day)
 - [needle](#needle)
@@ -175,6 +176,68 @@ forgetting your songs.
 Spotify by ISRC, then by artist, title and length. A Spotify track ID in a file's `MusicBrainz Track Id` tag (some
 rippers put it there) wins over both.
 
+## More places to look (optional)
+
+haystack finds its candidates in several places, called sources. Most need no setup. Four more stay idle until
+you set them up, and each one sends a little to a service, named below. `haystack sources` shows how well each
+source does for you, and `harvest.retired_sources` stops one.
+
+| Source | Where it looks | Setup |
+|---|---|---|
+| `deezer_chart`, `deezer_editorial`, `deezer_new_releases` | Deezer's charts, genre charts and editors' new releases | none |
+| `deezer_artist_radio`, `deezer_related` | Deezer's artist radio and related artists, from artists you like | none |
+| `deezer_style_search` | Deezer playlists named after the styles you like most | none |
+| `listenbrainz_similar` | Recordings people play next to the songs you like, from ListenBrainz | none |
+| `deezer_label` | The newest albums of the record labels whose songs you keep most | none: it starts once haystack knows your kept songs' labels |
+| `lastfm_similar` | Songs Last.fm finds similar to yours, and the top songs of artists similar to yours | a Last.fm API key |
+| `listenbrainz_recs` | Your own weekly recommendations from ListenBrainz, made from your listening | your ListenBrainz name |
+| `listenbrainz_radio` | ListenBrainz's LB Radio playlists for your top styles and artists | your ListenBrainz token |
+
+**Last.fm.** Create a free API account at <https://www.last.fm/api/account/create> (only the API key is needed),
+then store the key:
+
+```sh
+docker compose run --rm haystack secret set lastfm-api-key
+```
+
+Sent to Last.fm, with the key: the artist and title of the songs the harvest starts from (your best-rated and kept
+songs first, then other liked songs and your music folder) and those artists' names.
+
+**Your ListenBrainz recommendations.** [ListenBrainz](https://listenbrainz.org) is an open, non-profit listening
+service. Sign in, connect Spotify under Settings, Music services, and let it record your listening history. Once it
+has a week or two of your listening, it works out recommendations for you every week. Then tell haystack your name:
+
+```toml
+[harvest]
+listenbrainz_user = "your-name"
+```
+
+Sent to ListenBrainz: your user name. ListenBrainz shows your listens and recommendations publicly anyway.
+
+**LB Radio.** ListenBrainz asks for your user token before it makes radio playlists. Copy it from
+<https://listenbrainz.org/settings/> and store it:
+
+```sh
+docker compose run --rm haystack secret set listenbrainz-token
+```
+
+Sent to ListenBrainz, with the token: the names of your top styles and of the artists the harvest starts from.
+
+**Record labels.** `deezer_label` uses the labels Deezer lists for the albums of the songs you keep (a rating of 3
+stars or more, or a like). Sent to Deezer: those label names, in its album search.
+
+**A second source of previews.** A few songs on Deezer have no 30-second preview, so haystack can't listen to
+them. With this setting it looks such a song up on Apple's iTunes Search API (no key needed) and listens to Apple's
+preview instead, held in memory only, like Deezer's:
+
+```toml
+[harvest]
+preview_fallback = "itunes"
+```
+
+Sent to Apple: the artist and title of each candidate that has no Deezer preview, at most one request every 3
+seconds.
+
 ## Settings: config.toml
 
 Everything haystack does is set in `config/config.toml`. The file you downloaded lists the common settings with
@@ -196,6 +259,8 @@ The ones people change most:
 | `calibrate.enabled`, `calibrate.per_week` | `true`, `30` | needle's **Calibrate** list: up to this many songs a week that haystack is least sure about, for you to rate. `false` stops new ones. |
 | `spotify.to_rip` | `false` | Also keep a **To Rip** playlist of songs you rate 3 stars or more that aren't in your music folder, to buy later. |
 | `harvest.listenbrainz_contact` | `""` | Your email or website. ListenBrainz asks API users for one. |
+| `harvest.listenbrainz_user` | `""` | Your ListenBrainz name, for your own recommendations. See [More places to look](#more-places-to-look-optional). |
+| `harvest.preview_fallback` | `"off"` | `"itunes"`: listen to Apple's preview of a song Deezer has none for. See [More places to look](#more-places-to-look-optional). |
 | `harvest.retired_sources` | `[]` | Candidate sources to stop using. `haystack sources` shows how well each one does for you, and by the seed it started from. |
 | `harvest.seed_policy` | `"verdicts"` | Where the harvest starts looking: your 4-5 star Ratings and kept discoveries first, then your liked songs, then your music folder. `"recent"` starts from your most recent liked songs. |
 | `api.allow_networks` | private ranges | Which networks may reach needle's API. Narrow it to your home network and VPN. In Docker, keep `172.16.0.0/12` if needle runs on the same machine. |
@@ -271,21 +336,23 @@ Keep the API on your home network or a VPN such as Tailscale. It isn't meant to 
 
 ## Deezer notice
 
-Every candidate's audio is its 30-second Deezer preview, and most candidates come from Deezer's charts, editorial
-picks, artist radio, related artists and playlists, through Deezer's public API (no key). Deezer's terms may not
+Every candidate's audio is its 30-second Deezer preview (or Apple's, with `harvest.preview_fallback = "itunes"`,
+for the few Deezer has none for), and most candidates come from Deezer's charts, editorial picks, artist radio,
+related artists, playlists and label searches, through Deezer's public API (no key). Deezer's terms may not
 allow this kind of automated use, so decide for yourself before you run haystack. haystack keeps it gentle: at most
 one request per 1.1 seconds, preview audio held only in memory (never written to disk), and only the derived
 numbers and a few public facts about each track (its label, release date and popularity) kept, on your own
-machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz candidates still
+machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz and Last.fm candidates still
 need their Deezer previews.
 
-Your taste never comes from Spotify's audio: only your own files and the Deezer previews are analysed.
+Your taste never comes from Spotify's audio: only your own files and the previews are analysed.
 
 ## Roadmap
 
 What's coming next, and why, is described in more detail in [ROADMAP.md](ROADMAP.md). The short version:
 
-- **More places to find music.** Deezer and ListenBrainz are the first candidate sources. More will be added.
+- **More places to find music.** Deezer and ListenBrainz, and if you set them up Last.fm, your own ListenBrainz
+  recommendations and the labels you like, are the candidate sources so far. More may be added.
 - **needle and haystack stay two programs.** This is a deliberate design choice. haystack runs headless on one
   server (a VPS or a machine at home) and is the single source of truth for your ratings. needle runs on as many
   computers as you like, and they all share that one store. Merging them would mean one copy of your taste per

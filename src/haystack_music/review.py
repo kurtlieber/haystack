@@ -19,7 +19,12 @@ SOURCE_LABELS = {
     "deezer_new_releases": "Deezer's new releases",
     "deezer_artist_radio": "Deezer artist radio",
     "deezer_related": "Deezer's related artists",
+    "deezer_style_search": "Deezer playlists of your styles",
+    "deezer_label": "a label you keep",
     "listenbrainz_similar": "ListenBrainz similar recordings",
+    "listenbrainz_recs": "your ListenBrainz recommendations",
+    "listenbrainz_radio": "ListenBrainz's LB Radio",
+    "lastfm_similar": "Last.fm similar songs",
 }
 STYLES_SHOWN = 3
 
