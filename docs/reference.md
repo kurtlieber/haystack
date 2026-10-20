@@ -587,6 +587,9 @@ python3.14 -m venv .venv && .venv/bin/pip install -e ".[embed,test]"
 .venv/bin/python -m pytest -q
 docker build -t haystack:local .     # the image; compose.yaml with image: haystack:local runs it
 ```
+The tests never touch an installation: `tests/conftest.py` points the data, state and config directories at
+empty temporary ones for every test, whatever `HAYSTACK_DATA` and the others say, so `pytest` is safe to run on
+the machine that runs haystack.
 A release bumps `version` in `pyproject.toml`, adds its section at the top of [CHANGELOG.md](../CHANGELOG.md)
 (the API's additions also go in [api.md](api.md)'s "Changes"), and is tagged `v<version>` on `main`, which
 publishes the image. Before the release is merged, the docs are checked against every change since the last
