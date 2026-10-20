@@ -17,8 +17,9 @@ log = logging.getLogger("haystack_music")
 EXIT_NEEDS_AUTH = 3
 
 
-def _logging(log_file: str | None = None) -> None:
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+def _logging(log_file: str | None = None, json_out: bool = False) -> None:
+    """The log goes to stdout, or to stderr under --json, so that stdout holds the JSON alone."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr if json_out else sys.stdout)]
     if log_file:
         handlers.append(logging.FileHandler(log_file))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -1091,7 +1092,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     config.ensure_dirs()
-    _logging(getattr(a, "log_file", None))
+    _logging(getattr(a, "log_file", None), json_out=getattr(a, "json", False))
     cfg = config.load()
     return a.fn(cfg, a) or 0
 
