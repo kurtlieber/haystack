@@ -269,11 +269,11 @@ Keep the API on your home network or a VPN such as Tailscale. It isn't meant to 
 ## Deezer notice
 
 Every candidate's audio is its 30-second Deezer preview, and most candidates come from Deezer's charts, editorial
-picks, artist radio and related artists, through Deezer's public API (no key). Deezer's terms may not allow this
-kind of automated use, so decide for yourself before you run haystack. haystack keeps it gentle: at most one
-request per 1.1 seconds, preview audio held only in memory (never written to disk), and only the derived numbers
-kept, on your own machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz candidates still need
-their Deezer previews.
+picks, artist radio, related artists and playlists, through Deezer's public API (no key). Deezer's terms may not
+allow this kind of automated use, so decide for yourself before you run haystack. haystack keeps it gentle: at most
+one request per 1.1 seconds, preview audio held only in memory (never written to disk), and only the derived
+numbers kept, on your own machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz candidates still
+need their Deezer previews.
 
 Your taste never comes from Spotify's audio: only your own files and the Deezer previews are analysed.
 

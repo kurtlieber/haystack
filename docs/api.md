@@ -204,7 +204,7 @@ Playlist summary:
 One line per addition to `/v1`: the date, the haystack release that has it, and its feature name, if any.
 `tests/fixtures/v1-contract.json` lists every documented key and type; a change may add to it, never remove.
 
-- 2026-10-19, haystack 0.1.0: the `server` object on `GET /v1/health` and `GET /v1/state`; `features` is empty.
+- 2026-10-19, haystack 0.2.0: the `server` object on `GET /v1/health` and `GET /v1/state`, with its `features`.
 - 2026-10-19, haystack 0.2.0, `why.band`: `band` (`kind`, `percentile`) in a track card's `why`.
 - 2026-10-19, haystack 0.3.0, `rerank`: `model` and `confidence` in a track card's `why`.
 - 2026-10-19, haystack 0.3.0, `why.reasons`: `reasons` in a track card's `why`.
