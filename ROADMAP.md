@@ -45,7 +45,9 @@ any of that matters to you. If you love obscure releases on a few small labels, 
 care, those facts carry little weight. Popularity still doesn't rank songs on its own: it counts only as far as
 your verdicts say it should.
 
-## Next: more places to look
+## Now: more places to look
+
+haystack 0.7.0 brings this. Each new source is optional and stays off until you set it up.
 
 - **Songs that other listeners pair with yours**, from Last.fm, which knows what a very large number of people
   listen to together.
@@ -54,13 +56,13 @@ your verdicts say it should.
 - **New releases from the labels you like most.** In a lot of music, electronic music above all, the label is one
   of the best guides to taste there is.
 
-As today, these sources only suggest. Every candidate is still judged by how it sounds, and a source that finds
-songs you keep gets to bring more. Each new source is optional and stays off until you set it up. Using one sends
-artist and song names to that service, and the README will say exactly what.
+As before, these sources only suggest. Every candidate is still judged by how it sounds, and a source that finds
+songs you keep gets to bring more. Using one sends artist and song names to that service, and the README says
+exactly what.
 
-**A backup for previews.** Every candidate is fingerprinted from its 30-second Deezer preview, so today haystack
-depends on Deezer. When Deezer has no preview of a song, haystack will try Apple's preview instead. That recovers
-the songs Deezer can't play, and it's a first step towards haystack not depending on Deezer alone.
+**A backup for previews.** Every candidate is fingerprinted from its 30-second Deezer preview, so haystack
+depends on Deezer. If you turn it on, haystack tries Apple's preview when Deezer has none. That recovers the songs
+Deezer can't play, and it's a first step towards haystack not depending on Deezer alone.
 
 ## Experiments: only if they help
 
