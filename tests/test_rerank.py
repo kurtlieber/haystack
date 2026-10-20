@@ -298,6 +298,112 @@ def test_too_few_labels_of_one_kind_fit_nothing(tmp_path, monkeypatch):
     assert not r["used"] and r["reason"] == "2 yes and 1 no labels: too few to fit" and r["model"] is None
 
 
+# ---------------- Deezer's metadata (ADR 0017) ----------------
+
+def test_meta_features_fill_gaps_shrink_the_label_rate_and_leave_the_track_itself_out():
+    ids = [10, 1, 2, 3, 4, 5]                    # one pool row, then five labelled tracks
+    md = {10: {"rank": 999, "fans": None, "age": 4.0, "compilation": True, "label": "x"},
+          1: {"rank": None, "fans": 99, "age": None, "compilation": False, "label": "x"},
+          2: {"rank": 9, "fans": 9, "age": 1.0, "compilation": None, "label": "x"},
+          3: {"label": "y"}, 4: {}, 5: {"label": "x"}}
+    labs = [{"y": 1, "soft": False}, {"y": 1, "soft": False}, {"y": 0, "soft": False}, {"y": 0, "soft": False},
+            {"y": 0, "soft": True}]             # a soft no: not counted in a label's rate
+    mask = np.zeros((6, 1), bool)
+    mask[1, 0] = True                            # row 1 is the positive that brings label x
+    ctx = dict(n_pool=1, ids=ids, md=md, labs=labs, mask=mask, by_label={"x": [0]},
+               cfg={"rerank": {"label_prior_n": 5}})
+    f = rerank._meta_features(ctx)
+    assert list(f["log_rank"]) == pytest.approx([3.0, 3.0, 1.0, 3.0, 3.0, 3.0])   # missing: the pool's median
+    assert list(f["rank_missing"]) == [0, 1, 0, 1, 1, 1]
+    assert f["log_fans"][1] == pytest.approx(2.0) and f["age_years"][1] == 4.0
+    assert list(f["compilation"]) == [1, 0, 0, 0, 0, 0]
+    assert list(f["label_known"]) == [1, 0, 1, 0, 0, 1]                    # row 1 doesn't count itself
+    mean = 0.5                                   # two kept of four hard labels
+    assert f["label_kept_rate"][0] == pytest.approx((2 + 5 * mean) / (2 + 5))
+    assert f["label_kept_rate"][1] == pytest.approx((1 + 5 * mean) / (1 + 5))  # its own label left out
+    assert f["label_kept_rate"][3] == pytest.approx(mean)                     # alone on its label: the mean
+    assert f["label_kept_rate"][4] == pytest.approx(mean)                     # no label: the mean
+    assert f["label_kept_rate"][5] == pytest.approx((2 + 5 * mean) / (2 + 5))  # a soft label isn't in the rate
+
+
+
+def test_each_leave_one_out_fold_works_the_label_rate_out_without_the_held_out_verdict():
+    ids = [10, 1, 2, 3, 4]                       # one pool row, then four labelled tracks
+    md = {10: {"label": "x"}, 1: {"label": "x"}, 2: {"label": "x"}, 3: {"label": "y"}, 4: {"label": "x"}}
+    labs = [{"y": y, "soft": False} for y in (1, 0, 1, 1)]
+    ctx = dict(n_pool=1, ids=ids, md=md, labs=labs, cfg={"rerank": {"label_prior_n": 5}})
+    rows = np.arange(1, 5)
+    mean = 2 / 3                                 # rows 2-4 only: row 1 is held out
+    assert list(rerank._label_rate(ctx, rows, drop=1)) == pytest.approx(
+        [(1 + 5 * mean) / (2 + 5), (1 + 5 * mean) / (1 + 5), mean, (0 + 5 * mean) / (1 + 5)])
+    for i, r in enumerate(rows):
+        flipped = [dict(x, y=1 - x["y"]) if j == i else x for j, x in enumerate(labs)]
+        before = rerank._label_rate(ctx, rows, drop=r)
+        assert list(rerank._label_rate({**ctx, "labs": flipped}, rows, drop=r)) == pytest.approx(list(before))
+        # without the fold, the other tracks on its label would carry its verdict
+        if md[ids[r]]["label"] == "x":
+            assert list(rerank._label_rate({**ctx, "labs": flipped}, rows)) != pytest.approx(
+                list(rerank._label_rate(ctx, rows)))
+    names = ["log_rank", "label_kept_rate"]
+    Zl = np.ones((4, 2))
+    mu, sd = np.array([0.0, 0.5]), np.array([1.0, 0.25])
+    Zi = rerank._loo_refresh(ctx, Zl, names, mu, sd, rows)(0)
+    assert list(Zi[:, 0]) == [1.0] * 4 and Zl[0, 1] == 1.0              # the rest as it was, Zl untouched
+    assert list(Zi[:, 1]) == pytest.approx(list((rerank._label_rate(ctx, rows, drop=1) - 0.5) / 0.25))
+
+
+def test_loo_logits_fits_each_fold_on_its_own_features():
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(8, 2))
+    y = np.array([1, 0] * 4)
+    w = np.ones(8)
+    asked = []
+
+    def refresh(i):
+        asked.append(i)
+        return Z + i
+    out = rerank.loo_logits(Z, y, w, 1.0, [0, 3], refresh)
+    assert asked == [0, 3] and np.isnan(out[[1, 2, 4, 5, 6, 7]]).all()
+    keep = np.arange(8) != 3
+    b = rerank.fit((Z + 3)[keep], y[keep], w[keep], 1.0)
+    assert out[3] == pytest.approx(b[0] + (Z + 3)[3] @ b[1:])
+
+
+def _label_world(tmp_path, monkeypatch):
+    """_world with the judged offers' valence shuffled, so only the record label tells a yes from a no: the kept
+    offers sit on two labels, the turned-down ones on two others, and the liked songs on the first kept label."""
+    con, cfg, path = _world(tmp_path, monkeypatch)
+    rng = np.random.default_rng(5)
+    for aid, label in ((1, "Kept One"), (2, "Kept Two"), (3, "Dropped One"), (4, "Dropped Two")):
+        con.execute("INSERT INTO deezer_albums(album_id, label, release_date, record_type, fetched_at) "
+                    "VALUES(?, ?, '2015-01-01', 'album', 'x')", (aid, label))
+    for i in range(60):
+        con.execute("UPDATE candidates SET album_id=? WHERE id=?", ((1 if i % 2 == 0 else 3) + (i // 2) % 2, i + 1))
+        con.execute("UPDATE readings SET valence=? WHERE deezer_id=(SELECT deezer_id FROM candidates WHERE id=?)",
+                    (rng.random(), i + 1))
+    con.execute("UPDATE liked_map SET album_id=1")
+    for j in range(150):
+        con.execute("UPDATE candidates SET album_id=? WHERE id=?", (1 + j % 4, 1000 + j))
+    return con, cfg, path
+
+
+def test_the_model_learns_a_label_and_reports_its_auc_without_the_metadata(tmp_path, monkeypatch):
+    con, cfg, _ = _label_world(tmp_path, monkeypatch)
+    r = _run(con, cfg)
+    assert r["used"], r["reason"]
+    assert r["loo_auc_model"] > 0.9 and r["loo_auc_no_meta"] < 0.75
+    weights = dict(zip(r["model"]["features"], r["model"]["beta"][1:]))
+    assert set(rerank.META_FEATURES) <= set(weights) and weights["label_kept_rate"] > 0
+    kept = {c for (c,) in con.execute("SELECT id FROM candidates WHERE state='pool' AND album_id IN (1, 2)")}
+    top = sorted(r["ranks"], key=lambda c: -r["ranks"][c])[:30]
+    assert sum(c in kept for c in top) >= 27                              # stage 1 still has a say
+    assert sum("on a label you like" in r["top"][c]["reasons"] for c in top) >= 20
+    # no metadata anywhere: the same features, constant, and the same AUC either way
+    con2, cfg2, _ = _world(tmp_path / "plain", monkeypatch)
+    r2 = _run(con2, cfg2)
+    assert r2["loo_auc_no_meta"] == r2["loo_auc_model"]
+
+
 def test_record_write_pool_and_the_cli(tmp_path, monkeypatch, capsys):
     con, cfg, path = _world(tmp_path, monkeypatch)
     r = _run(con, cfg)
@@ -323,6 +429,7 @@ def test_record_write_pool_and_the_cli(tmp_path, monkeypatch, capsys):
     assert cli.cmd_rerank(cfg, a) == 0
     out = capsys.readouterr().out
     assert "re-ranker (raw): used, 60 labels (30 yes, 30 no); leave-one-out AUC" in out
+    assert "without Deezer's metadata) vs stage 1" in out
     assert "weights (per pool sd, largest first): trait:valence +" in out
     # a database from before the re-ranker: no table, no crash
     old = tmp_path / "old.db"

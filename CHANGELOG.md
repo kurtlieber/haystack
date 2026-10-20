@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/kurtlieber/haystack/compare/v0.5.0...v0.6.0) (2026-10-20)
+
+
+### Features
+
+* **metadata:** what Deezer publishes about a track (rank, album label, release date, record type, fans) joins the re-ranker's features; `haystack metadata backfill` fills it in for tracks harvested before (ADR 0017; API feature `card.label`) ([b265975](https://github.com/kurtlieber/haystack/commit/b265975cd02ca490415b940038976f35ea820a66))
+
 ## [0.5.0](https://github.com/kurtlieber/haystack/compare/v0.4.0...v0.5.0) (2026-10-20)
 
 

@@ -27,8 +27,8 @@ clients have moved.
 `GET /v1/health` and `GET /v1/state` both carry a `server` object:
 
 ```json
-{"version": "0.5.0", "api": "1",
- "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played"]}
+{"version": "0.6.0", "api": "1",
+ "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -48,6 +48,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   carries `calibrate` and no `band` (Track card).
 - `plays.ms_played`: the server stores a play's `ms_played` and `completed` and learns from them (ADR 0016): a
   short, unfinished play of an offered or Calibrate track with no Verdict counts a little against it.
+- `card.label`: a track card carries `label`, the record label Deezer gives for the track's album (ADR 0017).
 
 ## Endpoints
 
@@ -72,8 +73,8 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
    "likes": {"total": 140, "items": [<track card>, …]}},
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
- "server": {"version": "0.5.0", "api": "1", "features": ["why.band", "rerank", "why.reasons", "queue.calibrate",
-            "plays.ms_played"]}}
+ "server": {"version": "0.6.0", "api": "1", "features": ["why.band", "rerank", "why.reasons", "queue.calibrate",
+            "plays.ms_played", "card.label"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
@@ -103,7 +104,7 @@ Readings, and refreshes the playlists at most every 10 minutes.
 
 ```json
 {"id": "4MbtaySL1453JwADvGryCL", "title": "…", "artists": ["…"], "album": "…", "album_type": "single",
- "year": 2018, "duration_ms": 179000, "cover": "https://…", "cover_small": "https://…",
+ "year": 2018, "label": "…", "duration_ms": 179000, "cover": "https://…", "cover_small": "https://…",
  "verdict": {"kind": "rating", "stars": 4, "given_at": "…Z"},
  "why": {"sounds_like": {"title": "…", "artist": "…"}, "similarity": 0.96, "source": "deezer_artist_radio",
          "source_label": "Deezer artist radio", "exploration": false,
@@ -117,6 +118,9 @@ Readings, and refreshes the playlists at most every 10 minutes.
 
 - Any of `title`, `album`, `album_type`, `year`, `duration_ms`, `cover`, `cover_small` may be `null`; `artists`
   may be empty.
+- `label` (feature `card.label`): the record label Deezer gives for the track's album, as Deezer writes it.
+  `null` when the server doesn't know it: the track has no Deezer match, Deezer gives no label, or the album
+  hasn't been fetched yet (`haystack metadata backfill`, and each daily harvest).
 - `verdict` is the track's current Verdict, or `null`.
 - `why` is set only for a Discoveries offer or a Calibrate pick: the liked track it sounded most like, the raw
   similarity, and where the candidate came from. `null` otherwise.
@@ -237,3 +241,4 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 - 2026-10-20, haystack 0.5.0, `queue.calibrate`: `queues.calibrate` in `GET /v1/state`, `calibrate` as a
   Verdict's `queue`, and `calibrate` in a Calibrate card's `why`.
 - 2026-10-20, haystack 0.5.0, `plays.ms_played`: the server stores a play's `ms_played` and `completed`.
+- 2026-10-20, haystack 0.6.0, `card.label`: `label` in a track card.

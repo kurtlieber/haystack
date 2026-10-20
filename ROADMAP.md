@@ -35,13 +35,15 @@ more than one you liked once and forgot.
 **You can see the progress.** `haystack report` shows which of the learning parts have switched on, and how many
 more verdicts each one still needs.
 
-## Next: knowing more about each song
+## Now: knowing more about each song
 
-The fingerprint captures how a song sounds, but not where it comes from. haystack will also note a song's record
-label, how old it is, how popular it is and whether it's from a compilation, and learn from your verdicts whether
+haystack 0.6.0 brings this.
+
+The fingerprint captures how a song sounds, but not where it comes from. haystack now also notes a song's record
+label, how old it is, how popular it is and whether it's from a compilation, and learns from your verdicts whether
 any of that matters to you. If you love obscure releases on a few small labels, it will notice. If you don't
-care, those facts will carry little weight. Popularity still won't rank songs on its own: it counts only as far
-as your verdicts say it should.
+care, those facts carry little weight. Popularity still doesn't rank songs on its own: it counts only as far as
+your verdicts say it should.
 
 ## Next: more places to look
 

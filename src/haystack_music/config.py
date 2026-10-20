@@ -201,6 +201,8 @@ DEFAULTS: dict = {
         "soft_labels": True,
         "soft_pass_ms": 30000,
         "soft_pass_weight": 0.5,
+        # ADR 0017: a label's kept rate is shrunk toward the mean kept rate by this many pseudo-labels
+        "label_prior_n": 5,
     },
     # The Calibrate queue (ADR 0015): needle asks about the pool candidates haystack is least sure of, across the
     # stage-1 score bands below (shares of each top-up). The hourly sync keeps up to `outstanding` unjudged picks
@@ -247,6 +249,8 @@ DEFAULTS: dict = {
         "broad_lb_per_seed": 3,
         "style_backfill_per_run": 150, # daily harvest: style vectors for older previews
         "traits_backfill_per_run": 150, # daily harvest: Readings for stored previews (Discoveries, likes first)
+        "metadata_per_run": 150,       # daily harvest: Deezer's facts (album, rank, artist fans) for this many
+                                       # tracks, judged ones and liked songs first, then the pool oldest first
     },
     "sources": {"min_offers_before_retire": 30},
     # needle's private API (ADR 0004). The bearer token is the api-token secret (`haystack token new`).

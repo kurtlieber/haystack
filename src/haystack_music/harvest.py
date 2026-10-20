@@ -12,7 +12,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from . import db, library, sources as source_stats, traits, vectors
+from . import db, library, metadata, sources as source_stats, traits, vectors
 from . import embed
 from .deezer import Deezer, DeezerError
 from .listenbrainz import ListenBrainz
@@ -333,10 +333,11 @@ class Harvester:
         try:
             cur = self.con.execute(
             """INSERT INTO candidates(deezer_id, artist, artist_key, title, title_key, version_suffix, song_key, duration,
-               mbid, deezer_artist_id, source, harvested_at, state, exclude_reason)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               mbid, deezer_artist_id, source, harvested_at, state, exclude_reason, album_id, deezer_rank)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (did, artist, key(artist), title, key(base), suffix, sk, dur, mbid, (t.get("artist") or {}).get("id"),
-             source, db.now(), "excluded" if reason else "pool", reason))
+             source, db.now(), "excluded" if reason else "pool", reason, (t.get("album") or {}).get("id"),
+             t.get("rank")))
         except sqlite3.IntegrityError:      # a parallel harvester took this Deezer track first
             st["dupe"] += 1
             return False
@@ -408,6 +409,7 @@ class Harvester:
             tracks = self.dz.album_tracks(a["id"], 2)
             for t in tracks:
                 t.setdefault("artist", a.get("artist") or {})
+                t.setdefault("album", {"id": a["id"]})
             self._feed("deezer_new_releases", f"editorial/{eid}/album/{a['id']}", tracks[:1], cap, 1)
 
     def deezer_artist_radio(self, cap):
@@ -568,8 +570,9 @@ class Harvester:
                 self._st(s)["errors"] += 1
                 log.exception("source %s failed: %r", s, e)
             log.info("source %s: %s", s, self.stats[s])
+        meta = metadata.backfill(self.con, self.dz, h["metadata_per_run"]) if retry else {"skipped": True}
         return {"per_source": self.stats, "caps": caps, "retry_previous_errors": retried, "style_backfill": styles,
-                "readings_backfill": readings, "deezer_requests": self.dz.requests,
+                "readings_backfill": readings, "metadata_backfill": meta, "deezer_requests": self.dz.requests,
                 "listenbrainz_requests": self.lb.requests}
 
     def caps(self, sources: list[str], cap: int | None = None) -> dict[str, dict]:

@@ -137,6 +137,19 @@ CREATE TABLE IF NOT EXISTS deezer_artists (
     name_key TEXT PRIMARY KEY, deezer_artist_id INTEGER, name TEXT, checked_at TEXT
 );
 
+-- What Deezer publishes about a track's album and artist (ADR 0017): re-ranker features and the card's label.
+-- A row with fetched_at but no data: Deezer had no such album or artist when asked.
+CREATE TABLE IF NOT EXISTS deezer_albums (
+    album_id INTEGER PRIMARY KEY,
+    label TEXT, release_date TEXT,       -- release_date: YYYY-MM-DD
+    record_type TEXT,                    -- album | single | ep | compile
+    genres_json TEXT, fans INTEGER, nb_tracks INTEGER, fetched_at TEXT
+);
+-- fan counts by Deezer artist id (deezer_artists above is a name -> id cache: a name holds one id)
+CREATE TABLE IF NOT EXISTS deezer_artist_fans (
+    artist_id INTEGER PRIMARY KEY, nb_fan INTEGER, fetched_at TEXT
+);
+
 -- Spotify track -> Deezer track whose preview stands in for it (on-demand Readings for tracks the server hadn't seen)
 CREATE TABLE IF NOT EXISTS spotify_deezer (
     spotify_id TEXT PRIMARY KEY, deezer_id INTEGER,
@@ -252,6 +265,10 @@ def _migrate(con) -> None:
     _add_column(con, "plays", "completed", "INTEGER")              # and whether it reached the end
     for col in ("album_type", "release_date", "image_url", "image_url_small"):   # needle's track cards
         _add_column(con, "spotify_tracks", col, "TEXT")
+    _add_column(con, "candidates", "album_id", "INTEGER")          # its Deezer album; 0: Deezer has none (0.6.0)
+    _add_column(con, "candidates", "deezer_rank", "INTEGER")       # the track's Deezer rank (popularity)
+    _add_column(con, "liked_map", "album_id", "INTEGER")           # deezer_id's album, as on candidates
+    _add_column(con, "rerank_runs", "loo_auc_no_meta", "REAL")     # the model's AUC without Deezer's metadata
 
 
 def kv_get(con, k: str, default=None):

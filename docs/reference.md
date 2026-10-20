@@ -37,6 +37,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), 1 req / 1.1 s cross-process throttle |
+| `metadata.py` | what Deezer publishes about a track (ADR 0017): its album's label, release date and record type, its rank and its artist's fans, fetched once per album and artist, for the re-ranker and the track card |
 | `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013) |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
@@ -65,7 +66,8 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   (see **Preview alignment**).
 * **Deezer previews** (see the README's Deezer notice): at most 1 request per 1.1 s across all
   processes; preview audio is held only in memory and piped into ffmpeg, never written to disk (not even a temp
-  file); only vectors are kept, locally.
+  file); only vectors and a few public facts about each track (label, release date, popularity: ADR 0017) are
+  kept, locally.
 * **Playlists.** Exactly one private "Discoveries" and one private "To Rip" (found by name or created once; ids
   cached). Every bot addition is recorded in `playlist_adds`. The hourly sync only removes tracks the bot added,
   so a hand edit during the week is not overwritten. A track you remove from Discoveries yourself counts as a
@@ -143,6 +145,7 @@ haystack verdict export FILE         every verdict, with title and artists, to a
 haystack verdict import FILE [--pending]   add a file's verdicts (by id: importing it again adds nothing)
 haystack models fetch|check          the Essentia models: download the missing ones (into models/)
 haystack traits backfill [--limit N] Readings for stored previews (Discoveries and likes first)
+haystack metadata backfill [--limit N]   Deezer's facts about each track: judged ones, liked songs, then the pool
 haystack traits measure|show TRACK   Readings for one Spotify track (measure: on demand)
 haystack baseline                    your Baseline per Trait (mean, usual range)
 haystack api                         needle's API alone (the haystack-api unit runs it)
@@ -181,6 +184,16 @@ style vectors.
 `sources.min_offers_before_retire` (30) decided offers has that cap scaled by its kept rate over the kept rate of
 all sources, clipped to 0.25-2x; `haystack sources` shows the rates and the caps. `--limit-per-source` sets a
 fixed cap for one run.
+
+**Deezer's metadata** (ADR 0017). A new candidate keeps its Deezer album id and rank from the track object the
+harvest already has. After the sources, each daily harvest fetches what is still missing for up to
+`harvest.metadata_per_run` (150) tracks: the judged candidates first, then the liked songs mapped to Deezer, then
+the pool, oldest first. That is `/album/{id}` once per album (label, release date, record type, genres, fans),
+`/artist/{id}` once per artist (fans), and `/track/{id}` first for a track whose album isn't known yet. They go
+through the same 1.1 s throttle; a failed request is tried again next time. `haystack metadata backfill --limit
+N` does the same at once (1000 by default; `--limit 0` only prints how much of the pool, the judged tracks and the
+liked songs have their album known). A large pool takes hours, so run it outside the harvest's hours: both share
+the throttle. `--no-retry` skips it with the other backfills.
 
 ## Scoring and batches
 
@@ -225,8 +238,8 @@ genre buckets (sqrt-weighted, liked songs first) and ListenBrainz similar-record
 `seed_policy = "verdicts"`, 5-star ones first and Passed ones left out). It runs weekly (`harvest_broad`, Sundays);
 the seed sample follows `harvest.broad_seed_rng` and the ISO week, so each week draws different artists and every
 shard of one week draws the same. `--shard i/N` splits the seeds across parallel processes (the 1.1 s Deezer
-throttle is shared). Chart + editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the
-pool, and of each batch (3 of 15).
+throttle is shared); only shard 0 retries errors and runs the backfills. Chart + editorial-chart candidates
+are capped at `harvest.chart_max_share` (20 %) of the pool, and of each batch (3 of 15).
 
 **Eval** (`haystack eval`, ADR 0009): each variant scores the past offers and judged Calibrate picks like
 candidates, and the eval asks how well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a
@@ -328,8 +341,14 @@ rest of the pool keeps its stage-1 order below them, and exploration picks are s
   positive, the similarity-weighted mean stars of the `rerank.neighbours` (10) nearest, the share of them at
   4-5★ and the share that are library files (a positive with no Rating counts as `rerank.prior_stars`, 3); per
   Trait, how far the track lies outside your usual range, in widths of the range; the source and whether it is a
-  chart; whether the artist is among your positives or has a Dislike. From `rerank.min_labels_embed` (300)
-  labels, 32 principal components of the preview vector join them. Each is standardised over the pool.
+  chart; whether the artist is among your positives or has a Dislike. Then what Deezer publishes about the track
+  (ADR 0017, see **Deezer's metadata**): the log of its Deezer rank (and a flag when it has none), the log of its
+  artist's fans, its album's age in years, whether the album is a compilation, whether its label is that of one of
+  your positives, and the share of the judged tracks on its label that you kept (the track itself left out,
+  shrunk toward your overall kept rate by `rerank.label_prior_n` (5) pseudo-labels; each leave-one-out fold works
+  it out again without the held-out verdict). A missing number takes the pool's median. From
+  `rerank.min_labels_embed` (300) labels, 32 principal components of the preview vector join them. Each is
+  standardised over the pool.
 - **Fit**: L2-regularised logistic regression by Newton steps (numpy only), refitted at every batch in
   milliseconds. `rerank.l2` (1.0) is the penalty on the weighted mean log-loss, per unit of label weight.
 - **Gate**: the model is used only with at least `rerank.min_labels` (40) labels and when its leave-one-out AUC
@@ -342,14 +361,19 @@ rest of the pool keeps its stage-1 order below them, and exploration picks are s
   feature's own direction over the labels and with the direction it should have (being close to your 4-5★
   tracks is never a reason to hold a track back); such a weight still orders the batch. A Trait is quoted only
   when the track lies outside your usual range on the side the phrase names, or as `<trait> in your usual range`.
+  Deezer's facts read `on the label of a song you like`, `on a label you like`, `a very popular track` or `an
+  obscure track`, `by a very popular artist` or `by a little-known artist`, `an older release` and `from a
+  compilation`.
 
-Each fit is a row in `rerank_runs` (with `n_soft`, the soft nos it used), and the last model is kept in the `kv`
+Each fit is a row in `rerank_runs` (with `n_soft`, the soft nos it used, and `loo_auc_no_meta`, the model's
+leave-one-out AUC without Deezer's metadata), and the last model is kept in the `kv`
 table (`rerank_model`). Whenever the model can be fitted (two yes and two no labels), a batch writes its chance and
 reasons for every scored pool candidate to `candidates` (`rerank_p`, `rerank_reason`), used or not, and when it is
 used the blend of the top 400 goes to `rerank_score`, which marks a re-ranked pick. The batch summary carries
-`rerank` (used, why, the labels, the soft nos, both AUCs). The API returns them
+`rerank` (used, why, the labels, the soft nos, the AUCs). The API returns them
 in a Discoveries card's `why` (features `rerank` and `why.reasons`). `haystack rerank fit` fits and records
-without touching the pool; `rerank show` prints the last fit, its largest weights and the recent fits; `batch
+without touching the pool; `rerank show` prints the last fit (its leave-one-out AUC with and without Deezer's
+metadata, against stage 1's), its largest weights and the recent fits; `batch
 --plan --stage1` shows what stage 1 alone would pick.
 
 ```toml
@@ -362,6 +386,7 @@ alpha = 0.7
 soft_labels = true     # short, unfinished needle plays as soft nos (ADR 0016)
 soft_pass_ms = 30000
 soft_pass_weight = 0.5
+label_prior_n = 5      # a label's kept rate is shrunk toward your overall rate by this many labels (ADR 0017)
 ```
 
 **Calibrate** (`[calibrate]`, ADR 0015). Discoveries only ever shows the top of the pool, so the re-ranker hears

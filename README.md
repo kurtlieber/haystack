@@ -275,7 +275,8 @@ Every candidate's audio is its 30-second Deezer preview, and most candidates com
 picks, artist radio, related artists and playlists, through Deezer's public API (no key). Deezer's terms may not
 allow this kind of automated use, so decide for yourself before you run haystack. haystack keeps it gentle: at most
 one request per 1.1 seconds, preview audio held only in memory (never written to disk), and only the derived
-numbers kept, on your own machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz candidates still
+numbers and a few public facts about each track (its label, release date and popularity) kept, on your own
+machine. `harvest.sources` can drop the Deezer sources, but ListenBrainz candidates still
 need their Deezer previews.
 
 Your taste never comes from Spotify's audio: only your own files and the Deezer previews are analysed.

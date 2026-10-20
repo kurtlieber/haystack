@@ -1,10 +1,11 @@
-"""Deezer public API (no key). Used ONLY to reach candidate tracks and their 30 s previews, never as a score.
+"""Deezer public API (no key). Used to reach candidate tracks and their 30 s previews, and the facts Deezer publishes
+about a track (its album's label and date, its rank and its artist's fans: ADR 0017). Never a score on its own.
 
 Safeguards against the terms risk (README, Deezer notice):
   * at most one HTTP request per 1.1 s across ALL processes (API and preview CDN share one throttle),
   * preview audio is held in memory only, decoded through an ffmpeg pipe, embedded and dropped
     (it is never written to disk, not even to a temp file),
-  * only the resulting vectors are kept, locally, never shared."""
+  * only the resulting vectors and those facts are kept, locally, never shared."""
 from __future__ import annotations
 
 import logging
@@ -76,6 +77,14 @@ class Deezer:
         2026-10, so /editorial/{id}/selection (the editorial new-release selection) is used first."""
         return self._data(f"editorial/{int(editorial_id)}/selection", {"limit": limit}) or \
             self._data(f"editorial/{int(editorial_id)}/releases", {"limit": limit})
+
+    def album(self, album_id: int) -> dict | None:
+        """An album with its label, release date, record type, genres and fans (None: Deezer has no such album)."""
+        return self.api(f"album/{int(album_id)}")
+
+    def artist(self, artist_id: int) -> dict | None:
+        """An artist with its fan count (nb_fan)."""
+        return self.api(f"artist/{int(artist_id)}")
 
     def album_tracks(self, album_id: int, limit: int = 3) -> list[dict]:
         return self._data(f"album/{int(album_id)}/tracks", {"limit": limit})

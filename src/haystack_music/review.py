@@ -1,8 +1,8 @@
 """What needle shows for a Review: track cards and the Review queues (the `/v1/state` payload).
 
 A track card carries everything the Concept A screen needs for one track, so needle can prefetch every queue and
-Review offline: metadata and cover, the current verdict, why the server picked it, its top Discogs styles and its
-Readings. Read-only: nothing here writes."""
+Review offline: metadata (with the record label Deezer gives) and cover, the current verdict, why the server picked
+it, its top Discogs styles and its Readings. Read-only: nothing here writes."""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from . import baseline, calibrate, db, playlists, traits, verdicts
+from . import baseline, calibrate, db, metadata, playlists, traits, verdicts
 
 SOURCE_LABELS = {
     "deezer_chart": "the Deezer chart",
@@ -81,6 +81,7 @@ class Cards:
         tv = self._track_vectors(con, sids)
         dids = [t["deezer_id"] for t in tv.values()]
         rd = traits.get(con, dids)
+        labels = metadata.labels_for_cards(con, dids)
         st = self._get_styles(con, dids) if self.names else {}
         meta = {}
         for i in range(0, len(sids), 500):
@@ -112,6 +113,7 @@ class Cards:
                 "album": m["album"] if m else None,
                 "album_type": m["album_type"] if m else None,
                 "year": _year(m["release_date"]) if m else None,
+                "label": labels.get(did),
                 "duration_ms": int(round(m["duration"] * 1000)) if m and m["duration"] else None,
                 "cover": m["image_url"] if m else None,
                 "cover_small": m["image_url_small"] if m else None,
