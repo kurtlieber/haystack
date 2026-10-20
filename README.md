@@ -279,6 +279,8 @@ Your taste never comes from Spotify's audio: only your own files and the Deezer 
 
 ## Roadmap
 
+What's coming next, and why, is described in more detail in [ROADMAP.md](ROADMAP.md). The short version:
+
 - **More places to find music.** Deezer and ListenBrainz are the first candidate sources. More will be added.
 - **needle and haystack stay two programs.** This is a deliberate design choice. haystack runs headless on one
   server (a VPS or a machine at home) and is the single source of truth for your ratings. needle runs on as many
