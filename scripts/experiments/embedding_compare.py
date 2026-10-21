@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -173,6 +174,9 @@ class Store:
         os.replace(tmp, self.path)
 
 
+PAUSE = re.compile(r"([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d")
+
+
 def _in_pause(pause, now=None) -> float:
     """Seconds until the pause window (UTC 'HH:MM-HH:MM') ends, 0 outside it."""
     if not pause:
@@ -196,6 +200,17 @@ class Previews(threading.Thread):
         self.cv = threading.Condition()
 
     def run(self) -> None:
+        """Whatever stops the fetch, every preview not fetched counts as missing, so get() never waits forever."""
+        try:
+            self._fetch()
+        except Exception:  # noqa: BLE001
+            log.exception("preview fetch stopped; the previews not fetched count as missing")
+        finally:
+            with self.cv:
+                self.missing.update(d for d in self.dids if d not in self.data)
+                self.cv.notify_all()
+
+    def _fetch(self) -> None:
         from haystack_music.deezer import Deezer
         dz = Deezer(min_interval=DEEZER_INTERVAL)
         for did in self.dids:
@@ -259,7 +274,8 @@ def load_model(name: str):
         p = ClapProcessor.from_pretrained(repo, revision=rev)
 
         def run(a):
-            return {name: m.get_audio_features(**p(audio=[a], sampling_rate=sr, return_tensors="pt"))[0].numpy()}
+            return {name: m.get_audio_features(**p.feature_extractor([a], sampling_rate=sr,
+                                                                     return_tensors="pt"))[0].numpy()}
 
     def timed(a):
         with torch.inference_mode():
@@ -273,6 +289,9 @@ def embed_cmd(args) -> int:
     import torch
     if args.threads:
         torch.set_num_threads(args.threads)
+    if args.pause and not PAUSE.fullmatch(args.pause):
+        print(f"--pause {args.pause!r}: expected a UTC window as HH:MM-HH:MM, e.g. 04:30-07:30", file=sys.stderr)
+        return 2
     out = Path(args.out).expanduser()
     doc = _tracks(out)
     names = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -468,7 +487,8 @@ def report(args) -> int:
         top1 = "—" if r["top1"] is None else f"{r['top1']:.2f}"
         print(f"| {v} | {r['dim']} | {r['auc']['raw']:.3f} | {r['auc']['topk_mean']:.3f} | {d_raw} | {d_top} | "
               f"{r['recall']:.3f} | {top1} | {'stored' if spc is None else f'{spc:.2f}'} | {bar} |")
-    print(f"\nThe bar: at least +{BAR} AUC on both raw and topk_mean, recall@{K} not below {BASELINE}'s, at most "
+    print(f"\nThe bar: at least +{BAR} AUC on both raw and topk_mean, recall@{K} (ranked by raw) not below "
+          f"{BASELINE}'s, at most "
           f"{MAX_SECS:.0f} s per 30 s clip. A result counts only if it holds again on a later run with more labels. "
           f"With {n['labels']} labels an AUC's standard error is about "
           f"{np.sqrt(1 / (12 * n['yes']) + 1 / (12 * (n['labels'] - n['yes']))):.2f}.")

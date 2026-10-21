@@ -21,7 +21,8 @@ from the publisher into your Hugging Face cache, as haystack's Essentia models d
 code from the Hub (`trust_remote_code`), so the script pins every model to a fixed revision.
 
 MERT and MuQ give one vector per layer. Each clip yields two: the last layer averaged over time (`mert-95m`) and the
-mean of the middle third of the layers (`mert-95m-mid`).
+mean of the middle third of the layers (`mert-95m-mid`). CLAP's feature extractor picks parts of a long clip at random
+(its "fusion" mode), so its vectors differ very slightly from one run to the next.
 
 ## The tracks
 
@@ -70,7 +71,8 @@ $py scripts/experiments/embedding_compare.py --out ~/haystack-experiments report
 ## Deezer and your files
 
 - The previews download from Deezer into memory, are embedded, and are dropped when the run ends. No audio is
-  written to disk.
+  written to disk. Every model uses them, so they stay in memory for the whole run: about half a megabyte each,
+  roughly 0.5 GB per thousand previews, on top of the model.
 - At most one Deezer request every 1.2 s. The script uses haystack's own throttle file, so together with a running
   haystack it never goes faster than haystack's limit. That throttle file, in haystack's state folder, is the one
   file it touches outside `--out` (and the Hugging Face cache).
@@ -87,8 +89,8 @@ this run and again on a later run with about 200 labels:
 
 - its AUC beats `effnet512`'s by at least 0.05 on both `raw` (the best cosine to any positive) and `topk_mean`
   (the mean of the best few);
-- its recall@15 (the share of held-out liked songs that rank in the pool sample's top 15) is not below
-  `effnet512`'s;
+- its recall@15 (the share of held-out liked songs that rank in the pool sample's top 15, ranked by `raw`) is
+  not below `effnet512`'s;
 - it costs at most 5 s per 30 s clip.
 
 `report` prints a 90 % interval for each AUC gain (a paired bootstrap over the labels) and the AUC's standard
