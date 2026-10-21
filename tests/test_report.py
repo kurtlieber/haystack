@@ -1,5 +1,6 @@
 """haystack report: read-only counts and shares over a synthetic world."""
 import json
+import logging
 
 import numpy as np
 import pytest
@@ -200,3 +201,26 @@ def test_cli_report_is_read_only(tmp_path, monkeypatch, capsys):
     assert path.read_bytes() == before
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "missing.db")
     assert cli.cmd_report(cfg, p.parse_args(["report"])) == 1
+
+
+def test_json_output_has_the_log_on_stderr(monkeypatch, capsys):
+    root = logging.getLogger()
+    saved = root.handlers[:], root.level
+    try:
+        cli._logging(json_out=True)
+        logging.getLogger("haystack_music.test").info("a log line")
+        print(json.dumps({"pool": 1}))
+        out, err = capsys.readouterr()
+        assert json.loads(out) == {"pool": 1} and "a log line" in err
+        cli._logging()
+        logging.getLogger("haystack_music.test").info("a log line")
+        assert "a log line" in capsys.readouterr().out
+    finally:
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+    seen = {}
+    monkeypatch.setattr(cli, "_logging", lambda log_file=None, json_out=False: seen.update(json_out=json_out))
+    monkeypatch.setattr(cli, "cmd_report", lambda cfg, a: 0)
+    monkeypatch.setattr(cli, "cmd_llm", lambda cfg, a: 0)
+    for argv, want in ((["report", "--json"], True), (["llm", "judge", "--json"], True), (["report"], False)):
+        assert cli.main(argv) == 0 and seen["json_out"] is want

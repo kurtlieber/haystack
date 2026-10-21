@@ -159,7 +159,8 @@ haystack llm judge [--dry-run] [--tracks] [--json] [--debug]
 haystack llm suggest --dry-run [--n 100] [--tracks] [--json] [--debug]
                                               the model names n songs, each looked up on Deezer; nothing offered
 ```
-`feedback yes|no` still works: yes is a 3-star Rating, no a Pass (`--strength strong`: a Dislike).
+`feedback yes|no` still works: yes is a 3-star Rating, no a Pass (`--strength strong`: a Dislike). Under
+`--json` the log goes to stderr, so stdout holds the JSON alone and can be piped.
 
 **Moving verdicts.** `verdict export` writes every Verdict (history included) with the track's title, artists,
 album, ISRC and duration, so the file is readable and can be re-matched if a Spotify id changes. `verdict import`
