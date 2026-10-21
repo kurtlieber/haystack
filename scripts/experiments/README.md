@@ -62,7 +62,8 @@ $py scripts/experiments/embedding_compare.py --out ~/haystack-experiments report
 
 - `embed` runs the models one after the other and saves each model's vectors as `<name>.npz` every 50 clips. Stop
   it any time; it carries on where it left off. Run `report` whenever you like: it compares every model embedded
-  so far on the tracks they all have.
+  so far on the tracks they all have. If a model has stopped too early for that to leave anything to compare, it
+  says so and lists what each model has.
 - On a CPU, plan for roughly 3 to 4.5 s per 30 s clip for MERT-95M and MuQ, 5 to 8 s for MERT-330M and well
   under a second for CLAP (measured at nice 19 on 8 threads), times a few thousand clips (one per preview, about
   nine per liked file). Batching does not help on a

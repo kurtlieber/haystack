@@ -35,7 +35,7 @@ from haystack_music.textnorm import song_key
 
 log = logging.getLogger("embedding_compare")
 WIN = 30.0                 # seconds per clip, as haystack's windows and Deezer's previews
-MIN_CLIP = 5.0             # a shorter preview is skipped
+MIN_CLIP = 5.0             # a shorter preview or window is skipped
 DEEZER_INTERVAL = 1.2      # seconds between Deezer requests (haystack's own minimum is 1.1)
 BASELINE = "effnet512"
 BAR = 0.05                 # the AUC margin a model must win by, on raw and on topk_mean
@@ -336,7 +336,9 @@ def embed_cmd(args) -> int:
                 log.warning("cannot decode local track %s: %r", f["local_id"], e)
                 continue
             for w, st in enumerate(f["starts"]):
-                put(f"local:{f['local_id']}:{w}", a[int(st * sr): int((st + WIN) * sr)])
+                clip = a[int(st * sr): int((st + WIN) * sr)]
+                if len(clip) >= MIN_CLIP * sr:           # report then leaves the file out
+                    put(f"local:{f['local_id']}:{w}", clip)
         for d in todo_dz:
             data = prev.get(d)
             if data is None:
@@ -454,6 +456,16 @@ def report(args) -> int:
         keep_dids &= {int(k[3:]) for k in vec if k.startswith("dz:")}
         keep_files = {f["local_id"] for f in doc["liked_files"] if f["local_id"] in keep_files
                       and all(f"local:{f['local_id']}:{w}" in vec for w in range(len(f["starts"])))}
+    pos = [x for x in doc["liked_previews"] if x["did"] in keep_dids]
+    ys = {x["y"] for x in doc["labels"] if x["did"] in keep_dids}
+    if len(pos) < 2 or ys != {0, 1} or not any(x["did"] in keep_dids for x in doc["pool"]):
+        print("too few tracks have a vector from every model to compare them (a run still going, or one that "
+              "stopped early?). Tracks each model has:", file=sys.stderr)
+        for v, (vec, _) in found.items():
+            print(f"  {v}: {sum(k.startswith('dz:') for k in vec)} previews, "
+                  f"{sum(k.startswith('local:') for k in vec)} windows", file=sys.stderr)
+        print("Finish the short embed run, or move its .npz out of the folder.", file=sys.stderr)
+        return 2
     m = {v: _measure(doc, vec, cfg, keep_files, keep_dids) for v, (vec, _) in found.items()}
     b = m[BASELINE]
     n = b["n"]
