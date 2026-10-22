@@ -9,7 +9,9 @@ description = "Personal Spotify music discovery driven by local-audio taste vect
 requires-python = ">=3.12"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "NOTICE"]
-dependencies = ["numpy>=2", "requests>=2.31", "mutagen>=1.47"]
+# certifi comes in through requests, unpinned. The floor is the first bundle without the
+# compromised eMudhra CA (kurtlieber/dotfiles#338), so an existing venv upgrades on install.
+dependencies = ["numpy>=2", "requests>=2.31", "mutagen>=1.47", "certifi>=2026.10.19"]
 
 [project.optional-dependencies]
 embed = ["essentia-tensorflow==2.1b6.dev1438"]
