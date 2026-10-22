@@ -151,11 +151,14 @@ def retract_playlist_no(con, spotify_id: str) -> bool:
                        (spotify_id, SOURCE_PLAYLIST)).rowcount > 0
 
 
+# each track's current verdict, with the order it won by: the latest given_at, then the one the server received last
+_CURRENT = """SELECT v.spotify_id, v.kind, v.stars, v.given_at, v.received_at, v.rowid FROM verdicts v
+              WHERE v.id = (SELECT w.id FROM verdicts w WHERE w.spotify_id = v.spotify_id
+                            ORDER BY w.given_at DESC, w.received_at DESC, w.rowid DESC LIMIT 1)"""
+
+
 def current(con, ids=None) -> dict[str, Verdict]:
-    q = """SELECT v.spotify_id, v.kind, v.stars, v.given_at FROM verdicts v
-           WHERE v.id = (SELECT w.id FROM verdicts w WHERE w.spotify_id = v.spotify_id
-                         ORDER BY w.given_at DESC, w.received_at DESC, w.rowid DESC LIMIT 1)"""
-    out = {r[0]: Verdict(r[0], r[1], r[2], r[3]) for r in con.execute(q)}
+    out = {r[0]: Verdict(r[0], r[1], r[2], r[3]) for r in con.execute(_CURRENT)}
     return out if ids is None else {i: out[i] for i in ids if i in out}
 
 
@@ -172,15 +175,17 @@ def song_of(song: dict[str, str], sid: str) -> str:
 
 def current_by_song(con, ids=None) -> dict[str, Verdict]:
     """Each track's Song verdict (ADR 0021): the latest by given_at of the current verdicts of every track of its
-    Song, so a rating on one release of a song counts for all of them. Its spotify_id is the track judged."""
-    cur, song = current(con), songs(con)
-    best: dict[str, Verdict] = {}
-    for v in cur.values():
-        k = song_of(song, v.spotify_id)
-        if k not in best or (v.given_at, v.spotify_id) > (best[k].given_at, best[k].spotify_id):
-            best[k] = v
-    ids = list(cur) + [s for s in song if s not in cur] if ids is None else ids
-    return {i: best[song_of(song, i)] for i in ids if song_of(song, i) in best}
+    Song (on a tie, the one the server received last), so a rating on one release of a song counts for all of them.
+    Its spotify_id is the track judged."""
+    rows, song = con.execute(_CURRENT).fetchall(), songs(con)
+    best: dict[str, tuple] = {}
+    for r in rows:
+        k, order = song_of(song, r[0]), (r[3], r[4], r[5])
+        if k not in best or order > best[k][0]:
+            best[k] = (order, Verdict(r[0], r[1], r[2], r[3]))
+    judged = {r[0] for r in rows}
+    ids = [r[0] for r in rows] + [s for s in song if s not in judged] if ids is None else ids
+    return {i: best[song_of(song, i)][1] for i in ids if song_of(song, i) in best}
 
 
 def history(con, spotify_id: str) -> list[dict]:

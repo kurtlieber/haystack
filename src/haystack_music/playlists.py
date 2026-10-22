@@ -288,8 +288,9 @@ def _in_library(con, sids: list[str]) -> set[str]:
 
 def cards(con, cards_builder, pid: str) -> dict | None:
     """One playlist with a full track card for each of its songs, in its order (/v1/playlists/{id}). Each card also
-    says which of the listener's playlists the song is on, whether it is in Liked Songs and whether it is in the music
-    library already, by its Song: any release of it counts (ADR 0021). None for a playlist the server doesn't know."""
+    says which of the listener's playlists the song is on and whether it is in Liked Songs, both by its Song: any
+    release of it counts (ADR 0021), and whether the track is in the music library already (its own: a file with its
+    Spotify id or its ISRC, or matched to its like). None for a playlist the server doesn't know."""
     r = con.execute("SELECT * FROM playlists WHERE id=? AND removed_at IS NULL", (pid,)).fetchone()
     if r is None:
         return None

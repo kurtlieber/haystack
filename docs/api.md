@@ -160,15 +160,16 @@ Readings, and refreshes the playlists at most every 10 minutes.
   (not measured yet).
 
 Cards from `GET /v1/playlists/{id}` add `playlists` (the ids of the listener's playlists the song is on, in
-library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already). All three
-go by the Song: a playlist, a like or a file of another release of it counts. A playlist with two releases of a song
-has a card for each; a client that lists each song once merges them by `song`.
+library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already). The first
+two go by the Song: a playlist or a like of another release of it counts. `in_library` is the track's own: a file
+tagged with its Spotify id or its ISRC, or matched to its like. A playlist with two releases of a song has a card for
+each; a client that lists each song once merges them by `song`.
 
 ### Verdict
 
 `{"kind": "rating" | "pass" | "dislike", "stars": 1..5 | null, "given_at": "…Z"}`. A track's current Verdict is
 its Verdict with the latest `given_at` (on a tie, the one the server received last). A Song's current Verdict is
-the latest of the current Verdicts of its tracks (ADR 0021).
+the latest of the current Verdicts of its tracks, on a tie again the one received last (ADR 0021).
 
 ### `POST /v1/verdicts`
 
