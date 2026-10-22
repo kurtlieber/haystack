@@ -53,6 +53,17 @@ def test_a_songs_verdict_is_the_newest_on_any_release_of_it(tmp_path):
     assert verdicts.current_by_song(con, [sid("unknown")]) == {}
 
 
+def test_a_tie_between_two_releases_goes_to_the_verdict_received_last(tmp_path):
+    """The Song rule breaks a tie on given_at as the track rule does, not by which track id sorts last."""
+    con = _con(tmp_path)
+    first, last = sid("zz"), sid("aa")
+    for t in (first, last):
+        con.execute("INSERT INTO spotify_tracks(spotify_id, name, isrc) VALUES(?, 'Song', 'USAAA1900001')", (t,))
+    verdicts.record(con, first, "rating", 2, given_at="2026-10-11T10:00:00Z")
+    verdicts.record(con, last, "rating", 5, given_at="2026-10-11T10:00:00Z")
+    assert {v.stars for v in verdicts.current_by_song(con).values()} == {5}
+
+
 def test_record_is_idempotent_by_id(tmp_path):
     con = _con(tmp_path)
     assert verdicts.record(con, T1, "rating", 5, id="same")["status"] == "accepted"

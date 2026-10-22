@@ -379,7 +379,8 @@ where the files live.
 Discoveries and lets you rate each song in a keystroke. haystack doesn't need it, but ratings teach haystack much
 faster than likes alone. Besides Discoveries, needle has a **Calibrate** list, the songs haystack is least sure
 about (rating a few of those teaches it the most), and your liked songs that have no rating yet. A song you rate
-once counts on every album it's on (the original, a remaster, a best-of), so needle doesn't ask about it again.
+once counts on every album it's on (the original, a remaster, a best-of), so needle doesn't ask about it again
+among your liked songs or in a review of one of your playlists.
 
 needle talks to haystack over your network, on port 8517. To connect a needle:
 
