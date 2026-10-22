@@ -120,7 +120,7 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 def server(tmp_path):
     """Two offers (one rated and re-ranked, one exploration with Readings), a rated Calibrate pick with Readings
     and the re-ranker's chance, an Unrated like, a rated like with Readings (the Baseline), a playlist holding both
-    offers, a Spotify write that failed, and Deezer's label for every track with a Deezer id."""
+    offers, a Spotify write that failed, Deezer's label for every track with a Deezer id, and an ISRC for each."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
@@ -128,9 +128,9 @@ def server(tmp_path):
                 "VALUES(5, '/m/a.m4a', 1, 'h', 'Library Title', '[\"Library Artist\"]')")
     for n, name in enumerate(("disc1", "disc2", "like1", "like2", "cal1"), start=1):
         con.execute("INSERT INTO spotify_tracks(spotify_id, name, artists_json, album, album_type, release_date, duration, "
-                    "image_url, image_url_small) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "image_url, image_url_small, isrc) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (sid(name), f"Track {n}", json.dumps([f"Artist {n}"]), f"Album {n}", "single", "2020-01-02",
-                     200.0, "https://example.invalid/c.jpg", "https://example.invalid/s.jpg"))
+                     200.0, "https://example.invalid/c.jpg", "https://example.invalid/s.jpg", f"XXSYN26{n:05d}"))
     for cid, name, explore in ((1, "disc1", 1), (2, "disc2", 0)):
         con.execute("INSERT INTO candidates(id, deezer_id, artist, title, source, state, vector_status, spotify_id, "
                     "nearest, raw_cos) VALUES(?,?,?,?,?,?,?,?,?,?)",

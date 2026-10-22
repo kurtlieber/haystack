@@ -257,11 +257,12 @@ def _summary(r, ids: list[str] | None, artists: dict[str, str]) -> dict:
 
 def summaries(con) -> dict:
     """The picker's data, for /v1/state: every playlist with its songs' ids (no cards) and the current verdict of
-    each of those songs that has one, so needle can count progress for any selection, offline."""
+    each of those songs that has one, so needle can count progress for any selection, offline. A verdict is the
+    Song's: one on another release of a song counts (ADR 0021)."""
     tracks = _tracks(con)
     every = set().union(*tracks.values()) if tracks else set()
     artists = _first_artists(con, every)
-    cur = verdicts.current(con)
+    cur = verdicts.current_by_song(con, every)
     rows = con.execute("SELECT * FROM playlists WHERE removed_at IS NULL ORDER BY position").fetchall()
     return {"synced_at": db.kv_get(con, "playlists_synced_at"),
             "items": [_summary(r, tracks.get(r["id"], []), artists) for r in rows],
@@ -288,22 +289,24 @@ def _in_library(con, sids: list[str]) -> set[str]:
 def cards(con, cards_builder, pid: str) -> dict | None:
     """One playlist with a full track card for each of its songs, in its order (/v1/playlists/{id}). Each card also
     says which of the listener's playlists the song is on, whether it is in Liked Songs and whether it is in the music
-    library already. None for a playlist the server doesn't know."""
+    library already, by its Song: any release of it counts (ADR 0021). None for a playlist the server doesn't know."""
     r = con.execute("SELECT * FROM playlists WHERE id=? AND removed_at IS NULL", (pid,)).fetchone()
     if r is None:
         return None
     tracks = _tracks(con)
     sids = tracks.get(pid, [])
     order = [x[0] for x in con.execute("SELECT id FROM playlists WHERE removed_at IS NULL ORDER BY position")]
+    song = verdicts.songs(con)
     on: dict[str, list[str]] = {}
     for p in order:
-        for s in tracks.get(p, []):
-            on.setdefault(s, []).append(p)
-    liked = {x[0] for x in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
+        for k in dict.fromkeys(verdicts.song_of(song, s) for s in tracks.get(p, [])):
+            on.setdefault(k, []).append(p)
+    liked = {verdicts.song_of(song, x[0]) for x in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL")}
     lib = _in_library(con, sids)
     built = cards_builder.build(sids)
     for c in built:
-        c["playlists"] = on.get(c["id"], [pid])
-        c["liked"] = c["id"] in liked
+        k = verdicts.song_of(song, c["id"])
+        c["playlists"] = on.get(k, [pid])
+        c["liked"] = k in liked
         c["in_library"] = c["id"] in lib
     return {**_summary(r, sids, _first_artists(con, sids)), "items": built}

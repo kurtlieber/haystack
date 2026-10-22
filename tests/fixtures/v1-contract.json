@@ -25,7 +25,8 @@
   "album_type": ["string", "null"], "year": ["integer", "null"], "duration_ms": ["integer", "null"],
   "cover": ["string", "null"], "cover_small": ["string", "null"], "verdict": ["null", {"$ref": "verdict"}],
   "why": ["null", {"$ref": "why"}], "styles": {"$array": {"$array": ["string", "number"]}},
-  "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"]
+  "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"],
+  "song": ["string", "null"]
  },
  "why": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
          "similarity": ["number", "null"], "source": "string", "source_label": "string", "exploration": "boolean",
@@ -36,7 +37,8 @@
   "album_type": ["string", "null"], "year": ["integer", "null"], "duration_ms": ["integer", "null"],
   "cover": ["string", "null"], "cover_small": ["string", "null"], "verdict": ["null", {"$ref": "verdict"}],
   "why": ["null", {"$ref": "why_calibrate"}], "styles": {"$array": {"$array": ["string", "number"]}},
-  "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"]
+  "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"],
+  "song": ["string", "null"]
  },
  "why_calibrate": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
                    "similarity": ["number", "null"], "source": "string", "source_label": "string",

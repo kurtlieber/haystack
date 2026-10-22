@@ -1,8 +1,8 @@
 """What needle shows for a Review: track cards and the Review queues (the `/v1/state` payload).
 
 A track card carries everything the Concept A screen needs for one track, so needle can prefetch every queue and
-Review offline: metadata (with the record label Deezer gives) and cover, the current verdict, why the server picked
-it, its top Discogs styles and its Readings. Read-only: nothing here writes."""
+Review offline: metadata (with the record label Deezer gives) and cover, its Song, the current verdict, why the server
+picked it, its top Discogs styles and its Readings. Read-only: nothing here writes."""
 from __future__ import annotations
 
 import json
@@ -79,10 +79,12 @@ class Cards:
 
     def build(self, sids: list[str], offers: dict | None = None, picks: dict | None = None) -> list[dict]:
         """Cards for these tracks; offers (track id: offers row) and picks (track id: calibrations row) give the
-        why of a Discoveries offer and of a Calibrate pick."""
+        why of a Discoveries offer and of a Calibrate pick. An offer's or a pick's verdict is its track's own, since
+        the offer or the pick closes on that track; any other card's is its Song's (ADR 0021)."""
         con = self.con
         offers, picks = offers or {}, picks or {}
         cur = verdicts.current(con, sids)
+        by_song = verdicts.current_by_song(con, [s for s in sids if s not in offers and s not in picks])
         tv = self._track_vectors(con, sids)
         dids = [t["deezer_id"] for t in tv.values()]
         rd = traits.get(con, dids)
@@ -110,9 +112,10 @@ class Cards:
                 measure = "no_preview"
             else:
                 measure = "unknown"
-            v = cur.get(sid)
+            v = cur.get(sid) if sid in offers or sid in picks else by_song.get(sid)
             card = {
                 "id": sid,
+                "song": m["isrc"] if m else None,
                 "title": m["name"] if m else None,
                 "artists": json.loads(m["artists_json"] or "[]") if m else [],
                 "album": m["album"] if m else None,
@@ -208,7 +211,8 @@ def calibrate_picks(con, ts: str | None = None) -> tuple[list[str], dict]:
 
 
 def unrated_likes(con) -> list[str]:
-    cur = verdicts.current(con)
+    """Liked songs with no verdict: none on the track and none on another release of its Song (ADR 0021)."""
+    cur = verdicts.current_by_song(con)
     return [r[0] for r in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL ORDER BY added_at DESC, spotify_id")
             if r[0] not in cur]
 

@@ -14,6 +14,10 @@ These are the server's terms, and the HTTP API's (`docs/api.md`). needle, the de
 The listener's current judgment of a track: a Rating, a Pass or a Dislike. A track has at most one; a newer one replaces the older.
 _Avoid_: feedback, opinion
 
+**Song**:
+One recording, on however many releases: the album track, its remaster, the deluxe edition and the best-of are one Song, known by its ISRC. Each release is a track of its own on Spotify. A Song's verdict is the newest verdict on any of its tracks, and outside Discoveries and Calibrate it is the one that counts (ADR 0021).
+_Avoid_: recording (fine in prose), release (one of its tracks)
+
 **Rating**:
 The listener's 1–5 star measure of how much they like a track. Every star count is a degree of liking: 1★ means they like it a little, 5★ means they love it.
 _Avoid_: score (that is the recommender's number), thumbs-up, like (Spotify's heart)
