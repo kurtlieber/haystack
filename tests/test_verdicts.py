@@ -35,6 +35,24 @@ def test_latest_given_verdict_is_current_and_history_is_kept(tmp_path):
     assert [h["id"] for h in verdicts.history(con, T1)] == ["c", "a", "b"]
 
 
+def test_a_songs_verdict_is_the_newest_on_any_release_of_it(tmp_path):
+    """ADR 0021: an album track, its remaster and a best-of share an ISRC; a track with none is a Song of its own."""
+    con = _con(tmp_path)
+    album, remaster, best_of, alone = sid("album"), sid("remaster"), sid("bestof"), sid("alone")
+    for t, isrc in ((album, "USAAA1900001"), (remaster, "USAAA1900001"), (best_of, "USAAA1900001"), (alone, None)):
+        con.execute("INSERT INTO spotify_tracks(spotify_id, name, isrc) VALUES(?, 'Song', ?)", (t, isrc))
+    verdicts.record(con, album, "rating", 4, given_at="2026-10-11T10:00:00Z")
+    verdicts.record(con, alone, "pass", given_at="2026-10-11T09:00:00Z")
+    by_song = verdicts.current_by_song(con)
+    assert set(by_song) == {album, remaster, best_of, alone}
+    assert by_song[remaster] == by_song[best_of] == Verdict(album, "rating", 4, "2026-10-11T10:00:00Z")
+    assert by_song[alone].kind == "pass"
+    verdicts.record(con, remaster, "pass", given_at="2026-10-12T10:00:00Z")        # the newer one wins for all
+    assert {v.kind for v in verdicts.current_by_song(con, [album, best_of]).values()} == {"pass"}
+    assert verdicts.current(con)[album].stars == 4                                  # each track keeps its own
+    assert verdicts.current_by_song(con, [sid("unknown")]) == {}
+
+
 def test_record_is_idempotent_by_id(tmp_path):
     con = _con(tmp_path)
     assert verdicts.record(con, T1, "rating", 5, id="same")["status"] == "accepted"

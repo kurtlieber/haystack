@@ -28,7 +28,8 @@ clients have moved.
 
 ```json
 {"version": "0.6.0", "api": "1",
- "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label"]}
+ "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label",
+              "card.song"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -49,6 +50,9 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - `plays.ms_played`: the server stores a play's `ms_played` and `completed` and learns from them (ADR 0016): a
   short, unfinished play of an offered or Calibrate track with no Verdict counts a little against it.
 - `card.label`: a track card carries `label`, the record label Deezer gives for the track's album (ADR 0017).
+- `card.song`: a track card carries `song`, which tells the releases of one recording apart from other songs (ADR
+  0021). A Verdict on one release counts for all of them: a playlist card's `verdict`, `playlists` and `liked`,
+  `playlists.verdicts` in `GET /v1/state` and `queues.likes` go by the Song (Track card).
 
 ## Endpoints
 
@@ -74,7 +78,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
  "server": {"version": "0.6.0", "api": "1", "features": ["why.band", "rerank", "why.reasons", "queue.calibrate",
-            "plays.ms_played", "card.label"]}}
+            "plays.ms_played", "card.label", "card.song"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
@@ -89,10 +93,12 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   Verdict this ISO week, with their Verdict. `done` counts those with a Verdict. The server keeps up to 30 open
   and adds at most 30 a week (`calibrate.outstanding`, `calibrate.per_week`). A pick is never also a Discoveries
   offer. A pick the listener hearts in Spotify with no Verdict leaves this queue for `queues.likes`.
-- **`queues.likes`**: Liked Songs with no Verdict, newest like first.
+- **`queues.likes`**: Liked Songs with no Verdict, on the track or on another release of its Song (ADR 0021),
+  newest like first.
 - **`playlists`**: every playlist in the listener's library (minus the server's own Discoveries and To Rip), with
   its songs' ids but no cards, plus the current Verdict of every one of those songs that has one, so a client can
-  count progress for any pick offline.
+  count progress for any pick offline. A song's Verdict there is its Song's: one given to another release of it
+  counts (ADR 0021).
 - **`spotify`**: how many tracks still have Spotify writes waiting, and the latest error, if any. Writes are made
   in the background after a Verdict is accepted, so a Spotify problem shows up here, not as a failed request.
 - **`server`**: as in `GET /v1/health` (Server and features).
@@ -103,7 +109,7 @@ Readings, and refreshes the playlists at most every 10 minutes.
 ### Track card
 
 ```json
-{"id": "4MbtaySL1453JwADvGryCL", "title": "…", "artists": ["…"], "album": "…", "album_type": "single",
+{"id": "4MbtaySL1453JwADvGryCL", "song": "…", "title": "…", "artists": ["…"], "album": "…", "album_type": "single",
  "year": 2018, "label": "…", "duration_ms": 179000, "cover": "https://…", "cover_small": "https://…",
  "verdict": {"kind": "rating", "stars": 4, "given_at": "…Z"},
  "why": {"sounds_like": {"title": "…", "artist": "…"}, "similarity": 0.96, "source": "deezer_artist_radio",
@@ -121,7 +127,13 @@ Readings, and refreshes the playlists at most every 10 minutes.
 - `label` (feature `card.label`): the record label Deezer gives for the track's album, as Deezer writes it.
   `null` when the server doesn't know it: the track has no Deezer match, Deezer gives no label, or the album
   hasn't been fetched yet (`haystack metadata backfill`, and each daily harvest).
-- `verdict` is the track's current Verdict, or `null`.
+- `song` (feature `card.song`): the track's Song, the ISRC of its recording. Every release of a recording (the
+  album track, a remaster, a deluxe edition, a best-of) has its own track id but the same `song`, so two cards
+  with the same `song` are one song to the listener. `null` when the server knows no ISRC for the track: it is a
+  Song of its own. A client compares it and never parses it.
+- `verdict` is the current Verdict, or `null`. On a Discoveries or Calibrate card it is the track's own, since an
+  offer or a pick is closed by a Verdict on that track. On any other card it is the Song's: the latest current
+  Verdict of any track with the same `song` (ADR 0021).
 - `why` is set only for a Discoveries offer or a Calibrate pick: the liked track it sounded most like, the raw
   similarity, and where the candidate came from. `null` otherwise.
 - `why.band` (feature `why.band`): which part of the ranking the offer was picked from. `kind` is `top` (the
@@ -148,12 +160,15 @@ Readings, and refreshes the playlists at most every 10 minutes.
   (not measured yet).
 
 Cards from `GET /v1/playlists/{id}` add `playlists` (the ids of the listener's playlists the song is on, in
-library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already).
+library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already). All three
+go by the Song: a playlist, a like or a file of another release of it counts. A playlist with two releases of a song
+has a card for each; a client that lists each song once merges them by `song`.
 
 ### Verdict
 
 `{"kind": "rating" | "pass" | "dislike", "stars": 1..5 | null, "given_at": "…Z"}`. A track's current Verdict is
-its Verdict with the latest `given_at` (on a tie, the one the server received last).
+its Verdict with the latest `given_at` (on a tie, the one the server received last). A Song's current Verdict is
+the latest of the current Verdicts of its tracks (ADR 0021).
 
 ### `POST /v1/verdicts`
 
@@ -242,3 +257,5 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
   Verdict's `queue`, and `calibrate` in a Calibrate card's `why`.
 - 2026-10-20, haystack 0.5.0, `plays.ms_played`: the server stores a play's `ms_played` and `completed`.
 - 2026-10-20, haystack 0.6.0, `card.label`: `label` in a track card.
+- 2026-10-22, haystack 0.8.0, `card.song`: `song` in a track card; a playlist card's `verdict`, `playlists` and
+  `liked`, `playlists.verdicts` and `queues.likes` go by the Song.

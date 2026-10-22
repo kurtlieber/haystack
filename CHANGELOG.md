@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/kurtlieber/haystack/compare/v0.7.1...v0.8.0) (2026-10-22)
+
+
+### Features
+
+* **api:** a verdict counts for every release of a song: a track card carries `song`, its ISRC, and a playlist card's verdict, the playlist snapshot's verdicts and Rate your likes go by the Song, so needle doesn't ask again about a song rated on another album (ADR 0021; API feature `card.song`) ([4a5153f](https://github.com/kurtlieber/haystack/commit/4a5153f8b67f732748f4a262a8c7310857b8660b))
+
+
+### Bug Fixes
+
+* **traits:** drum & bass and jungle tempos are folded by style; Deezer's bpm is fetched where it was missing ([accce07](https://github.com/kurtlieber/haystack/commit/accce07d819e7bad0b8e2b4d6b8e7d4f8ab97ff2))
+* **cli:** under `--json` the log goes to stderr, so stdout holds the JSON alone ([744b542](https://github.com/kurtlieber/haystack/commit/744b542c1d184951057a4cdb4350c654bf774e2b))
+
 ## [0.7.1](https://github.com/kurtlieber/haystack/compare/v0.7.0...v0.7.1) (2026-10-20)
 
 

@@ -159,6 +159,30 @@ def current(con, ids=None) -> dict[str, Verdict]:
     return out if ids is None else {i: out[i] for i in ids if i in out}
 
 
+def songs(con) -> dict[str, str]:
+    """track id -> its Song (ADR 0021): the recording's ISRC, the same on every release of it (the album, its
+    remaster, the deluxe edition, a best-of). A track with no known ISRC is left out: it is a Song of its own."""
+    return {r[0]: r[1] for r in con.execute("SELECT spotify_id, isrc FROM spotify_tracks WHERE isrc IS NOT NULL")}
+
+
+def song_of(song: dict[str, str], sid: str) -> str:
+    """The key a track's Song goes by, from songs(): its ISRC, or its own id when it has none."""
+    return song.get(sid) or sid
+
+
+def current_by_song(con, ids=None) -> dict[str, Verdict]:
+    """Each track's Song verdict (ADR 0021): the latest by given_at of the current verdicts of every track of its
+    Song, so a rating on one release of a song counts for all of them. Its spotify_id is the track judged."""
+    cur, song = current(con), songs(con)
+    best: dict[str, Verdict] = {}
+    for v in cur.values():
+        k = song_of(song, v.spotify_id)
+        if k not in best or (v.given_at, v.spotify_id) > (best[k].given_at, best[k].spotify_id):
+            best[k] = v
+    ids = list(cur) + [s for s in song if s not in cur] if ids is None else ids
+    return {i: best[song_of(song, i)] for i in ids if song_of(song, i) in best}
+
+
 def history(con, spotify_id: str) -> list[dict]:
     return [dict(r) for r in con.execute("SELECT * FROM verdicts WHERE spotify_id=? ORDER BY given_at, received_at",
                                          (spotify_id,))]

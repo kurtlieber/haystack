@@ -193,6 +193,29 @@ def test_cards_say_where_else_a_song_is_and_whether_it_is_in_the_library(con, cf
     assert playlists.cards(con, review.Cards(con, cfg, classes=[]), sid("nope")) is None
 
 
+def test_a_verdict_on_one_release_of_a_song_counts_for_every_release(con, cfg):
+    """ADR 0021: All the Dubstep also has a remaster of Humble, with Humble's ISRC (in lower case, stored upper)."""
+    sp = FakeSpotify()
+    sp.items[sid("dub")].append(track("remaster", "Skrillex", "usum71710562"))
+    playlists.sync(con, sp, cfg)
+    con.execute("INSERT INTO likes(spotify_id, added_at) VALUES(?, '2026-01-01')", (sid("remaster"),))
+    assert review.unrated_likes(con) == [sid("remaster")]
+    verdicts.record(con, sid("humble"), "rating", 4, given_at="2026-10-11T10:00:00Z")
+    assert review.unrated_likes(con) == []                                      # its Song has a verdict
+    assert playlists.summaries(con)["verdicts"][sid("remaster")]["stars"] == 4
+    cards = review.Cards(con, cfg, classes=[])
+    scary, humble, remaster = playlists.cards(con, cards, sid("dub"))["items"]
+    assert humble["song"] == remaster["song"] == "USUM71710562" and scary["song"] is None
+    assert remaster["verdict"] == {"kind": "rating", "stars": 4, "given_at": "2026-10-11T10:00:00Z"}
+    assert remaster["playlists"] == [sid("bass"), sid("dub")]                   # Humble is on both
+    assert humble["liked"] and remaster["liked"]
+    verdicts.record(con, sid("remaster"), "pass", given_at="2026-10-12T10:00:00Z")
+    assert playlists.summaries(con)["verdicts"][sid("humble")]["kind"] == "pass"
+    # an offer is closed by a verdict on its own track, so a Discoveries card keeps the track's own
+    offer = {"candidate_id": 0, "exploration": 0}
+    assert cards.build([sid("humble")], {sid("humble"): offer})[0]["verdict"]["stars"] == 4
+
+
 def test_cover_url_prefers_the_300px_mosaic():
     assert playlists.cover_url(None) is None
     assert playlists.cover_url([{"url": "a", "width": None}]) == "a"

@@ -47,7 +47,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `evaluate.py` | the scoring-variant eval (ADR 0009): how well each variant ranks your kept offers above the turned-down ones, with held-out liked songs as the fallback |
 | `report.py` | `haystack report`: offers, Verdicts, the pool, the latest eval, plays per week and the gates, as counts and shares, read-only |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
-| `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002) |
+| `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002); a Song's verdict, the newest on any release of a recording (by ISRC), for playlist cards and Rate your likes (ADR 0021) |
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
 | `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
