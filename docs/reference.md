@@ -545,6 +545,19 @@ The caps give way when the pool can't fill the batch with them: the rest is fill
 without either. A pick that fails the Spotify lookup is replaced in a later round, and the picks already made
 count toward the caps and the diversity.
 
+A pool candidate that is the same song as a liked song, a library file or a track with a verdict, an offer or a
+Calibrate pick, on any release (a remaster, a deluxe edition, a best-of, a longer cut), is never picked and never
+asked about (ADR 0021, note of 2026-10-23). The batch and the Calibrate top-up match each pool row by ISRC where
+the candidate has one, else by the names (`known.same_song`): the same artist, no hard version marker between the
+titles, a length within 90 s, and the base titles equal once the version markers are stripped, or one the other
+plus a decoration such as `- From "Armageddon" Soundtrack`. The length is looser than the harvest's intake rule
+(3 s) because Deezer's length for the same recording often differs from Spotify's or the file's by 4 to 30 s, and
+a Deezer length of 30 s or less is the preview's and counts as unknown; the titles are stricter because a fuzzy
+title test without the length pairs different songs that share a suffix. A remix, a live take, an acoustic
+version or a cover is a different recording and stays a candidate. `batch --plan` and the batch summary count the
+skipped rows as `known_songs`. The hourly sync also marks pool candidates that have become a liked song or a
+library file `excluded` (`liked`, `in_library`), as the harvest would have.
+
 **Exploration share.** `batch.exploration_fraction` (0.2) is the prior. Each batch takes the judged offers of the
 last `batch.explore_window_batches` (8) batches (decided, minus tracks that went unplayed and have no Verdict, as
 `haystack report` counts them) and the share of each kind that was kept. When both kinds have at least
@@ -678,7 +691,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | library | daily 03:15 | rescan + embed new/changed files (+ To Rip check if signed in) | no |
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
 | harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
-| sync | hourly | plays, likes, outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
+| sync | hourly | plays, likes (songs you now have leave the pool), outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |

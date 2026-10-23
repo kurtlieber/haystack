@@ -15,6 +15,7 @@ import numpy as np
 
 from . import calibrate, db, library, rerank, vectors
 from .deezer import Deezer
+from .known import Known
 from .matching import Index, TrackRef, compare
 from .scoring import Pick, adapt_exploration, l2norm, select_batch
 from .spotify import Spotify
@@ -111,8 +112,9 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
         con.execute("UPDATE candidates SET state='excluded', exclude_reason='known on spotify' WHERE id=?", (c["id"],))
 
     explore = exploration_share(con, cfg)
+    stats: dict = {}
     chosen = select_for_batch(con, cfg, rng, size=size, resolve=resolve, on_known=on_known,
-                              explore_fraction=explore["fraction"], ranks=rr.get("ranks"))
+                              explore_fraction=explore["fraction"], ranks=rr.get("ranks"), stats=stats)
     # final guard: Spotify's own saved-state check
     if chosen:
         saved = sp.library_contains([p.spotify_id for p in chosen])
@@ -123,7 +125,7 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
            "by_source": {}, "dry_run": dry_run, "embedding": prog,
            "variant": variant, "variant_choice": choice, "clear": cleared,
            "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen),
-           "rerank": rerank.summary(rr)}
+           "known_songs": stats.get("known_songs", 0), "rerank": rerank.summary(rr)}
     for p in chosen:
         out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
     if dry_run or not chosen:
@@ -207,7 +209,8 @@ def spread(chosen: list[Pick]) -> dict:
 
 def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: int | None = None,
                      scores: dict | None = None, resolve=None, on_known=None,
-                     explore_fraction: float | None = None, ranks: dict | None = None) -> list[Pick]:
+                     explore_fraction: float | None = None, ranks: dict | None = None,
+                     stats: dict | None = None) -> list[Pick]:
     """The batch's selection over the scored pool, shared by `batch` and `batch --plan`. It only reads; the live
     batch's side effects come in as callbacks.
     scores: {candidate id: (score, nearest owner)} in place of the stored scores (`--plan` scores in memory).
@@ -217,6 +220,8 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     so it is skipped.
     explore_fraction: this batch's exploration share (exploration_share), default batch.exploration_fraction.
     ranks: {candidate id: rank} from the re-ranker (rerank.run); the top picks follow it instead of the score.
+    stats: a dict to count in what the selection skipped (known_songs: pool candidates that are the same song as
+    a liked song, a library file or a judged track, on another release; ADR 0021).
     Each pick carries its top-1 style and its score's percentile in the scored pool; the batch is spread across
     styles and nearest positives (scoring.select_batch, ADR 0010)."""
     b = cfg["batch"]
@@ -225,11 +230,16 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     rng = rng or random.Random()
     retired = set(cfg["harvest"].get("retired_sources", []))
     asked = set(calibrate.picked(con).values())          # in the Calibrate queue: never also a Discoveries offer
+    have = Known(con)                                 # songs the listener has, on any release (ADR 0021)
+    skipped = 0
     rows = {}
     for r in con.execute("SELECT * FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         r = dict(r)
         if r["source"] in retired or r["id"] in asked:
+            continue
+        if have.why(r):                                   # a like, a file or a judged track under another release
+            skipped += 1
             continue
         if scores is not None:
             if r["id"] not in scores:
@@ -255,6 +265,11 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
         "SELECT c.artist_key FROM offers o JOIN candidates c ON c.id=o.candidate_id WHERE o.removed_at IS NULL")}
     chart = frozenset(cfg["harvest"]["chart_sources"])
     max_chart = int(cfg["harvest"]["chart_max_share"] * size + 1e-9)    # chart picks per batch (ADR 0013)
+    if skipped:
+        log.info("%d pool candidates are the same song as a liked song, a library file or a judged track: skipped",
+                 skipped)
+    if stats is not None:
+        stats["known_songs"] = skipped
     chosen: list[Pick] = []
     attempts = 0
     while len(chosen) < size and rows and attempts < size * b["map_attempts_factor"]:
@@ -301,15 +316,16 @@ def plan(con, cfg: dict, size: int | None = None, variant: str | None = None,
     rr = {"used": False, "reason": "--stage1"} if stage1 else _rerank(con, cfg, variant, r, write=False)
     done, msg, prog = embedding_progress(con, cfg)
     explore = exploration_share(con, cfg)
+    stats: dict = {}
     chosen = select_for_batch(con, cfg, rng, size=size, scores=scores, explore_fraction=explore["fraction"],
-                              ranks=rr.get("ranks"))
+                              ranks=rr.get("ranks"), stats=stats)
     out = {"plan": True, "variant": variant, "variant_choice": choice, "positives": r["n_pos"],
            "pool": sum(1 for s, _ in scores.values() if s is not None),
            "picked": len(chosen), "exploration": sum(p.exploration for p in chosen),
            "unmapped": sum(1 for p in chosen if not p.spotify_id), "by_source": {},
            "embedding": prog, "embedding_note": None if done else msg,
            "exploration_fraction_used": explore["fraction"], "exploration_share": explore, "spread": spread(chosen),
-           "rerank": rerank.summary(rr)}
+           "known_songs": stats.get("known_songs", 0), "rerank": rerank.summary(rr)}
     for p in chosen:
         out["by_source"][p.source] = out["by_source"].get(p.source, 0) + 1
     out["tracks"] = _describe(con, chosen, classes, top=rr.get("top"))

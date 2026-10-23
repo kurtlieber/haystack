@@ -247,6 +247,7 @@ def _batch_plan(cfg, a) -> int:
     print(f"plan: variant {out['variant']}{_choice_note(out['variant_choice'])}")
     print(f"plan: {out['positives']} positive rows, {out['pool']} scored in the pool; "
           f"{out['picked']} picks, {out['exploration']} exploration, {out['unmapped']} unmapped")
+    print(f"plan: {out['known_songs']} pool candidates skipped as songs you already have, on another release")
     print(f"plan: exploration share {out['exploration_fraction_used']:.2f} ({out['exploration_share']['why']})")
     rr = out["rerank"]
     print(f"plan: {'re-ranked' if rr['used'] else 'stage 1 only'} ({rr['reason']})")

@@ -23,6 +23,7 @@ from datetime import datetime
 import numpy as np
 
 from . import db, verdicts
+from .known import Known
 
 log = logging.getLogger("haystack_music.calibrate")
 
@@ -202,13 +203,14 @@ def candidates(con, cfg: dict, variant: str | None = None) -> dict:
     skip = known(con) | judged(con)
     asked = set(picked(con).values())
     bad = disliked_artists(con)
+    have = Known(con)                                           # songs the listener has, on any release (ADR 0021)
     out["scored"] = len(pct[variant])
     for r in con.execute("SELECT id, deezer_id, artist, artist_key, title, source, spotify_id, isrc, duration "
                          "FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         cid = r["id"]
         if cid not in pct[variant] or cid in asked or r["source"] in retired or r["artist_key"] in bad \
-                or (r["spotify_id"] and r["spotify_id"] in skip):
+                or (r["spotify_id"] and r["spotify_id"] in skip) or have.why(r):
             continue
         ps = [p[cid] for p in pct.values() if cid in p]
         ch = chance.get(cid)
