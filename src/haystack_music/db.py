@@ -229,10 +229,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
     _migrate(con)
-    from . import playlists, traits, verdicts
+    from . import originals, playlists, traits, verdicts
     verdicts.ensure(con)
     traits.ensure(con)
     playlists.ensure(con)
+    originals.ensure(con)
     return con
 
 

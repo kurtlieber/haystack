@@ -187,11 +187,14 @@ class Spotify:
             if t and t.get("id") and t.get("type", "track") == "track" and not t.get("is_local"):
                 yield it.get("added_at"), t
 
-    def add_items(self, playlist_id: str, track_ids: list[str]) -> str | None:
+    def add_items(self, playlist_id: str, track_ids: list[str], position: int | None = None) -> str | None:
+        """Add tracks at the end, or from `position` (0-based) on."""
         snap = None
         for i in range(0, len(track_ids), 100):
-            j = self.request("POST", f"/playlists/{playlist_id}/items",
-                             json={"uris": [f"spotify:track:{t}" for t in track_ids[i:i + 100]]})
+            body = {"uris": [f"spotify:track:{t}" for t in track_ids[i:i + 100]]}
+            if position is not None:
+                body["position"] = position + i
+            j = self.request("POST", f"/playlists/{playlist_id}/items", json=body)
             snap = j.get("snapshot_id", snap)
         return snap
 

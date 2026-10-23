@@ -34,7 +34,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 |---|---|
 | `library.py` | read-only scan (tags, normalised artists/title, version suffix, duration, Spotify ID tag, audio-content hash); resumable multi-process embedding |
 | `embed.py`, `windows.py` | EffNet wrapper (one forward pass -> 512-d similarity head + 1280-d); ~9 windows of 30 s, one every ~10 % |
-| `spotify.py` | **the only code that talks to Spotify**: token refresh + rotation write-back, 429/Retry-After, saved tracks, recently-played, `/me/playlists`, `/playlists/{id}/items` (add/remove with `snapshot_id`), `/me/library/contains`, search (limit 10) |
+| `spotify.py` | **the only code that talks to Spotify**: token refresh + rotation write-back, 429/Retry-After, saved tracks, recently-played, `/me/playlists`, `/playlists/{id}/items` (add at a position, remove with `snapshot_id`), `/me/library/contains`, search (limit 10) |
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `lastfm.py`, `itunes.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), the optional sources and the iTunes preview fallback (ADR 0020); a cross-process throttle per service: Deezer 1.1 s, ListenBrainz 1.2 s, Last.fm 1 s, iTunes 3 s |
@@ -51,6 +51,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
 | `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
+| `originals.py` | possible covers and live versions (ADR 0022): four signs (the title, a live take, a borrowed ISRC, Deezer popularity) checked once per track by the API's worker, and the Swap: the cover's Verdicts taken back and its Original put in its place in your own playlists and Liked Songs. The only code that edits your own playlists |
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |
 | `scheduler.py` | `haystack serve`'s job schedule (`[schedule]`), in place of the systemd timers |
 | `alert.py` | optional alerts: a webhook POST or a file in an outbox (`haystack:` prefix) |
@@ -74,7 +75,8 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 * **Playlists.** Exactly one private "Discoveries" and one private "To Rip" (found by name or created once; ids
   cached). Every bot addition is recorded in `playlist_adds`. The hourly sync only removes tracks the bot added,
   so a hand edit during the week is not overwritten. A track you remove from Discoveries yourself counts as a
-  dismissal. The exception is the clear step before each batch, which removes every track in Discoveries.
+  dismissal. The exception is the clear step before each batch, which removes every track in Discoveries. Your
+  own playlists are edited only by a Swap you make in needle (ADR 0022).
 * **Outcomes.** Liked discovery -> removed from Discoveries at once, positive (higher weight), added to To Rip
   if not in the library. After 14 days unliked -> removed: played = negative; unplayed = back to the pool with no
   penalty, retired after 2 unplayed expiries.

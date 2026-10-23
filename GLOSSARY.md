@@ -30,6 +30,18 @@ _Avoid_: 0 stars, 1 star, thumbs-down, skip
 The listener's verdict that a track is not for them, though they don't hate it. It is not a rating.
 _Avoid_: meh, no, skip, 0 stars
 
+**Possible cover**:
+A track that may stand in for another recording, its Original: a cover, a karaoke or tribute version, or a live take. The server flags it from its title, a borrowed ISRC or its popularity next to another artist's track of the same title. A hint for the listener, never a verdict (ADR 0022).
+_Avoid_: cover (the card's art), fake, duplicate
+
+**Original**:
+The recording a Possible cover stands in for: the original artist's studio recording, or for a live take the same artist's studio one.
+_Avoid_: real song, master
+
+**Swap**:
+The listener's decision that a Possible cover should give way to its Original: the cover's verdicts are taken back, and in the listener's own playlists and Liked Songs the Original takes its place. The one edit haystack makes to the listener's own playlists.
+_Avoid_: replace, dedupe
+
 ### Liking
 
 **Liked Songs**:

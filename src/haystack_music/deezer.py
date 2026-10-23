@@ -55,9 +55,10 @@ class Deezer:
         j = self.api(path, params)
         return (j or {}).get("data", []) if isinstance(j, dict) else []
 
-    def search(self, q: str, limit: int = 25) -> list[dict]:
-        # NOTE: field syntax artist:"x" track:"y" returns 0 results (2026-10 experiment); plain text only.
-        return self._data("search", {"q": q, "limit": limit})
+    def search(self, q: str, limit: int = 25, order: str | None = None) -> list[dict]:
+        # NOTE: two fields together, artist:"x" track:"y", return 0 results (2026-10 experiment); a lone track:"y"
+        # works (2026-10-23). order: RANKING (most popular first), RATING_DESC, ….
+        return self._data("search", {"q": q, "limit": limit, **({"order": order} if order else {})})
 
     def track(self, track_id: int) -> dict | None:
         return self.api(f"track/{int(track_id)}")

@@ -26,7 +26,7 @@
   "cover": ["string", "null"], "cover_small": ["string", "null"], "verdict": ["null", {"$ref": "verdict"}],
   "why": ["null", {"$ref": "why"}], "styles": {"$array": {"$array": ["string", "number"]}},
   "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"],
-  "song": ["string", "null"]
+  "song": ["string", "null"], "original": ["null", {"$ref": "original"}], "original_check": "string"
  },
  "why": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
          "similarity": ["number", "null"], "source": "string", "source_label": "string", "exploration": "boolean",
@@ -38,7 +38,7 @@
   "cover": ["string", "null"], "cover_small": ["string", "null"], "verdict": ["null", {"$ref": "verdict"}],
   "why": ["null", {"$ref": "why_calibrate"}], "styles": {"$array": {"$array": ["string", "number"]}},
   "readings": ["null", {"$map": "number"}], "measure": "string", "label": ["string", "null"],
-  "song": ["string", "null"]
+  "song": ["string", "null"], "original": ["null", {"$ref": "original"}], "original_check": "string"
  },
  "why_calibrate": {"sounds_like": ["null", {"title": ["string", "null"], "artist": ["string", "null"]}],
                    "similarity": ["number", "null"], "source": "string", "source_label": "string",
@@ -47,6 +47,7 @@
                    "calibrate": {"band": "string", "percentile": "number", "chance": ["number", "null"],
                                  "reason": "string"}},
  "verdict": {"kind": "string", "stars": ["integer", "null"], "given_at": "string"},
+ "original": {"title": "string", "artist": ["string", "null"], "id": ["string", "null"], "reason": "string"},
  "playlist_summary": {"id": "string", "name": "string", "cover": ["string", "null"], "mine": "boolean",
                       "owner": ["string", "null"], "total": ["integer", "null"], "snapshot_id": ["string", "null"],
                       "tracks": ["null", {"$array": "string"}], "current": "boolean", "reader": "string",
@@ -56,6 +57,7 @@
                             {"playlists": {"$array": "string"}, "liked": "boolean", "in_library": "boolean"}]},
  "verdicts_response": {"accepted": {"$array": "string"}, "rejected": {"$array": {"$ref": "rejected"}}},
  "plays_response": {"accepted": {"$array": "string"}, "rejected": {"$array": {"$ref": "rejected"}}},
+ "swaps_response": {"accepted": {"$array": "string"}, "rejected": {"$array": {"$ref": "rejected"}}},
  "rejected": {"id": ["string", "null"], "error": "string"},
  "playlist_put_response": {"stored": "integer", "snapshot_id": ["string", "null"]}
 }
