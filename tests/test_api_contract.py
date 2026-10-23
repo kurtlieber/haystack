@@ -6,6 +6,7 @@ import http.client
 import json
 import re
 import threading
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from haystack_music import __version__, api, config, db, playlists, traits, vect
 TOKEN = "c" * 40
 FIXTURE = Path(__file__).parent / "fixtures" / "v1-contract.json"
 API_DOC = Path(__file__).parent.parent / "docs" / "api.md"
+PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
 SCALARS = {"string": str, "boolean": bool, "null": type(None), "object": dict, "array": list}
 
 
@@ -269,6 +271,7 @@ def test_the_check_catches_a_removed_or_retyped_field(defs):
 def test_server_object_and_features_are_documented(server):
     _, h = call(server, "GET", "/v1/health")
     assert h["server"] == {"version": __version__, "api": api.VERSION, "features": list(api.FEATURES)}
+    assert __version__ == tomllib.loads(PYPROJECT.read_text())["project"]["version"]   # a release bumps both
     assert h["version"] == "1"                     # the old field keeps its meaning: the API version
     doc = API_DOC.read_text()
     for f in api.FEATURES:
