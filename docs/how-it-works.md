@@ -96,6 +96,9 @@ Then it fills the batch (15 songs, unless you changed `batch.size`):
   share a style, and no more than two picks are closest to the same song of yours, so one corner of your taste
   can't fill the week. Among close matches, a song unlike the ones already picked goes first.
 - **One song per artist**, so one band can't take over the week.
+- **Songs you already have never come up.** A song you like, own or have judged is left out on every release it
+  has: the remaster, the deluxe edition, the best-of. A remix or a live version is a different recording and can
+  still be picked.
 - **Songs that sound like ones you turned down rank lower.** A Pass or a Dislike in needle, or a discovery you
   heard and didn't like, pushes down candidates that sound very like it.
 
