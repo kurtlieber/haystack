@@ -101,6 +101,7 @@ def defs():
 
 class Worker:
     measuring: set = set()
+    checking: set = set()
 
     def effects(self):
         pass
@@ -109,6 +110,9 @@ class Worker:
         pass
 
     def measure(self, s):
+        pass
+
+    def original(self, s, soon=False):
         pass
 
 
@@ -120,7 +124,8 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 def server(tmp_path):
     """Two offers (one rated and re-ranked, one exploration with Readings), a rated Calibrate pick with Readings
     and the re-ranker's chance, an Unrated like, a rated like with Readings (the Baseline), a playlist holding both
-    offers, a Spotify write that failed, Deezer's label for every track with a Deezer id, and an ISRC for each."""
+    offers, a Spotify write that failed, Deezer's label for every track with a Deezer id, an ISRC for each, and a
+    possible cover among the offers and the picks."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
@@ -166,6 +171,10 @@ def server(tmp_path):
                 (sid("mix"),))
     playlists.store(con, sid("mix"), "s1", [(sid("disc1"), None), (sid("disc2"), None)], "web")
     db.kv_set(con, "playlists_synced_at", "2026-01-05T00:00:00Z")
+    for name, reason in (("disc1", "marker"), ("cal1", "rank")):
+        con.execute("INSERT INTO original_checks(spotify_id, checked_at, reason, of_title, of_artist, of_spotify_id) "
+                    "VALUES(?, '2026-01-05T00:00:00Z', ?, 'Original Title', 'Original Artist', ?)",
+                    (sid(name), reason, sid("orig")))
     con.execute("INSERT INTO deezer_albums(album_id, label, release_date, record_type, fetched_at) "
                 "VALUES(77, 'Synthetic Records', '2020-01-02', 'single', 'x')")
     con.execute("UPDATE candidates SET album_id=77")
@@ -200,6 +209,9 @@ def payloads(srv) -> dict:
              {"plays": [{"id": "p1", "track": sid("disc1"), "started_at": "2026-01-06T00:00:00Z"}, {"id": "p2"},
                         {"id": "p3", "track": sid("disc2"), "started_at": "2026-01-06T00:05:00Z", "ms_played": 12000,
                          "completed": False}]}),
+            ("swaps_response", "POST", "/v1/swaps",
+             {"swaps": [{"id": "contract-s1", "track": sid("like1"), "original": sid("orig"),
+                         "given_at": "2026-01-07T00:00:00Z"}, {"id": "contract-s2", "track": "short"}]}),
             ("playlist_put_response", "PUT", f"/v1/playlists/{sid('mix')}/tracks",
              {"snapshot_id": "s2", "tracks": [{"id": sid("disc1"), "title": "Track 1", "artists": ["Artist 1"]}]})):
         code, out[name] = call(srv, method, path, body)
@@ -214,7 +226,8 @@ def test_live_payloads_keep_every_documented_key_and_type(server, defs):
         errs += check(value, defs[name], name, defs, seen)
     assert errs == []
     documented = set()
-    for name in ("health", "state", "card", "playlist", "verdicts_response", "plays_response", "playlist_put_response"):
+    for name in ("health", "state", "card", "playlist", "verdicts_response", "plays_response", "swaps_response",
+                 "playlist_put_response"):
         key_paths(defs[name], name, defs, documented)
     assert documented - seen == set(), "give these a non-null value in the test world"
 
@@ -234,7 +247,8 @@ def test_every_fixture_section_is_checked(defs):
                         refs(defs[s])                  # and what the definition refers to
                 else:
                     refs(s)
-    roots = {"health", "state", "card", "playlist", "verdicts_response", "plays_response", "playlist_put_response"}
+    roots = {"health", "state", "card", "playlist", "verdicts_response", "plays_response", "swaps_response",
+             "playlist_put_response"}
     for name in roots:
         refs(defs[name])
     assert set(defs) == roots | used

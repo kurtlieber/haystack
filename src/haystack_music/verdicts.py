@@ -422,7 +422,9 @@ def apply_effects(con, cfg: dict, sp, library=None, limit: int = 200) -> dict:
     for i in range(0, len(sids), 40):
         liked.update(sp.library_contains(sids[i:i + 40]))
     for sid in sids:
-        v = cur[sid]
+        v = cur.get(sid)
+        if v is None:                       # a Swap took the track's verdicts back (originals.record_swap)
+            continue
         error = None
         try:
             _close_offer(con, sid, v)

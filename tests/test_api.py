@@ -18,6 +18,7 @@ def sid(n: str) -> str:
 class FakeWorker:
     def __init__(self):
         self.measuring, self.effects_calls, self.measured, self.playlist_syncs = set(), 0, [], []
+        self.checking, self.checked = set(), []
 
     def effects(self):
         self.effects_calls += 1
@@ -27,6 +28,9 @@ class FakeWorker:
 
     def measure(self, s):
         self.measured.append(s)
+
+    def original(self, s, soon=False):
+        self.checked.append((s, soon))
 
 
 @pytest.fixture
@@ -320,3 +324,77 @@ def test_playlist_syncs_are_rate_limited(tmp_path):
     w._playlists_at = time.monotonic()
     w.playlists(api.PLAYLISTS_EVERY)                       # ran just now
     assert w.q.qsize() == 0
+
+
+def test_cards_say_whether_a_track_may_be_a_cover_and_unchecked_ones_are_queued(world):
+    srv, worker, con = world
+    con.execute("INSERT INTO original_checks(spotify_id, checked_at, reason, of_title, of_artist, of_spotify_id) "
+                "VALUES(?, '2026-10-23T00:00:00Z', 'rank', 'Flying Octopus', 'Somebody Else', ?)",
+                (sid("rezz"), sid("octo")))
+    st = call(srv, "GET", "/v1/state")[1]
+    rezz = st["queues"]["discoveries"]["items"][0]
+    assert rezz["original"] == {"title": "Flying Octopus", "artist": "Somebody Else", "id": sid("octo"),
+                                "reason": "rank"} and rezz["original_check"] == "done"
+    like1 = st["queues"]["likes"]["items"][0]
+    assert like1["original"] is None and like1["original_check"] == "pending"
+    assert (sid("like1"), False) in worker.checked
+    assert all(s != sid("rezz") and s != sid("blind") for s, _ in worker.checked)   # checked, and rated
+    code, card = call(srv, "GET", f"/v1/tracks/{sid('newone')}")
+    assert card["original_check"] == "pending" and worker.checked[-1] == (sid("newone"), True)
+    worker.checking.add(sid("like1"))                     # queued with the snapshot: needle waiting on it moves it up
+    assert call(srv, "GET", f"/v1/tracks/{sid('like1')}")[1]["original_check"] == "pending"
+    assert worker.checked[-1] == (sid("like1"), True)
+    add_playlists(con)
+    worker.checked.clear()
+    pl = call(srv, "GET", f"/v1/playlists/{sid('bass')}")[1]
+    assert [c["original_check"] for c in pl["items"]] == ["done", "pending"] and worker.checked == [(sid("blind"), False)]
+
+
+def test_a_failed_check_is_not_waited_on_or_queued_again(world):
+    srv, worker, con = world
+    con.execute("INSERT INTO original_checks(spotify_id, checked_at, error) VALUES(?, ?, 'ReadTimeout()')",
+                (sid("like1"), db.now()))
+    st = call(srv, "GET", "/v1/state")[1]
+    assert st["queues"]["likes"]["items"][0]["original_check"] == "failed"
+    assert call(srv, "GET", f"/v1/tracks/{sid('like1')}")[1]["original_check"] == "failed"
+    assert all(s != sid("like1") for s, _ in worker.checked)
+
+
+def test_a_playlist_queues_only_its_next_songs_for_a_check(world, monkeypatch):
+    srv, worker, con = world
+    add_playlists(con)
+    monkeypatch.setattr(api, "CHECK_AHEAD", 0)
+    pl = call(srv, "GET", f"/v1/playlists/{sid('bass')}")[1]
+    assert [c["original_check"] for c in pl["items"]] == ["unknown", "unknown"] and worker.checked == []
+
+
+def test_a_swap_is_stored_once_and_takes_the_covers_verdicts_with_it(world):
+    srv, worker, con = world
+    v = {"id": "late-verdict", "track": sid("like1"), "kind": "rating", "stars": 2, "given_at": "2026-10-23T08:00:00Z"}
+    swap = {"id": "swap-0001", "track": sid("like1"), "original": sid("orig"), "given_at": "2026-10-23T09:00:00Z"}
+    calls = worker.effects_calls
+    code, body = call(srv, "POST", "/v1/swaps", {"swaps": [swap, {"id": "swap-0002", "track": sid("like1")}, 7]})
+    assert code == 200 and body["accepted"] == ["swap-0001"] and len(body["rejected"]) == 2
+    assert worker.effects_calls == calls + 1
+    assert call(srv, "POST", "/v1/swaps", {"swaps": [swap]})[1]["accepted"] == ["swap-0001"]    # outbox replay
+    assert con.execute("SELECT COUNT(*) FROM swaps").fetchone()[0] == 1
+    assert call(srv, "POST", "/v1/verdicts", {"verdicts": [v]})[1]["accepted"] == ["late-verdict"]
+    assert con.execute("SELECT COUNT(*) FROM verdicts WHERE spotify_id=?", (sid("like1"),)).fetchone()[0] == 0
+    st = call(srv, "GET", "/v1/state")[1]
+    assert st["queues"]["likes"]["total"] == 0 and st["spotify"]["pending_writes"] == 3   # 2 verdicts, 1 Swap
+    assert call(srv, "POST", "/v1/swaps", {"swap": []})[0] == 400
+
+
+def test_cover_checks_wait_behind_measuring_and_one_needle_waits_on_goes_first(tmp_path):
+    w = api.Worker(config.load(tmp_path / "none.toml"))
+    w.original(sid("c1"))
+    w.original(sid("c1"))                                  # already queued: not twice
+    w.measure(sid("m1"))
+    w.original(sid("c2"), soon=True)
+    w.original(sid("c1"), soon=True)                       # queued, and now needle waits on it
+    w.original(sid("c2"), soon=True)
+    w.effects()
+    assert [w.q.get()[2:] for _ in range(w.q.qsize())] == [
+        ("effects", None), ("measure", sid("m1")), ("original_soon", sid("c2")), ("original_soon", sid("c1")),
+        ("original", sid("c1"))]
+    assert w.checking == {sid("c1"), sid("c2")}

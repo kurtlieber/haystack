@@ -2,7 +2,7 @@
 
 The contract between the server and its clients (needle today). The server owns it: a client depends on this
 document, never on the server's code or database. Why it looks this way: ADR 0004 (a private HTTP API), ADR 0005
-(Verdicts), ADR 0006 (one snapshot plus idempotent writes).
+(Verdicts), ADR 0006 (one snapshot plus idempotent writes), ADR 0022 (possible covers and the Swap).
 
 ## Transport
 
@@ -29,7 +29,7 @@ clients have moved.
 ```json
 {"version": "0.6.0", "api": "1",
  "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label",
-              "card.song"]}
+              "card.song", "card.original", "swaps"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -53,6 +53,10 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - `card.song`: a track card carries `song`, which tells the releases of one recording apart from other songs (ADR
   0021). A Verdict on one release counts for all of them: a playlist card's `verdict`, `playlists` and `liked`,
   `playlists.verdicts` in `GET /v1/state` and `queues.likes` go by the Song (Track card).
+- `card.original`: a track card carries `original` and `original_check`, which say whether the track may stand in
+  for another recording, a cover or a live take, and which one (ADR 0022, Track card).
+- `swaps`: `POST /v1/swaps` replaces a cover with its Original in the listener's own playlists and Liked Songs and
+  takes back the cover's Verdicts (ADR 0022).
 
 ## Endpoints
 
@@ -62,6 +66,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 | GET | `/v1/state` | the snapshot a Review needs, in one call |
 | POST | `/v1/verdicts` | records Verdicts; idempotent by id |
 | POST | `/v1/plays` | records plays; idempotent by track and start time |
+| POST | `/v1/swaps` | records Swaps; idempotent by id |
 | GET | `/v1/tracks/{id}` | one track card; `202` while the track is being measured |
 | GET | `/v1/playlists/{id}` | one playlist with a track card per song |
 | PUT | `/v1/playlists/{id}/tracks` | the songs of a playlist, as the client read them |
@@ -78,7 +83,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
  "playlists": {"synced_at": "…Z", "items": [<playlist summary>, …], "verdicts": {"<track id>": <verdict>, …}},
  "spotify": {"pending_writes": 0, "error": null},
  "server": {"version": "0.6.0", "api": "1", "features": ["why.band", "rerank", "why.reasons", "queue.calibrate",
-            "plays.ms_played", "card.label", "card.song"]}}
+            "plays.ms_played", "card.label", "card.song", "card.original", "swaps"]}}
 ```
 
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
@@ -94,17 +99,19 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   and adds at most 30 a week (`calibrate.outstanding`, `calibrate.per_week`). A pick is never also a Discoveries
   offer. A pick the listener hearts in Spotify with no Verdict leaves this queue for `queues.likes`.
 - **`queues.likes`**: Liked Songs with no Verdict, on the track or on another release of its Song (ADR 0021),
-  newest like first.
+  newest like first. A cover whose Swap is still being made on Spotify is left out.
 - **`playlists`**: every playlist in the listener's library (minus the server's own Discoveries and To Rip), with
   its songs' ids but no cards, plus the current Verdict of every one of those songs that has one, so a client can
   count progress for any pick offline. A song's Verdict there is its Song's: one given to another release of it
   counts (ADR 0021).
-- **`spotify`**: how many tracks still have Spotify writes waiting, and the latest error, if any. Writes are made
-  in the background after a Verdict is accepted, so a Spotify problem shows up here, not as a failed request.
+- **`spotify`**: how many tracks and Swaps still have Spotify writes waiting, and the latest error, if any. Writes
+  are made in the background after a Verdict or a Swap is accepted, so a Spotify problem shows up here, not as a
+  failed request.
 - **`server`**: as in `GET /v1/health` (Server and features).
 
 Reading the snapshot also starts measuring, in the background, the next 20 tracks of each queue that have no
-Readings, and refreshes the playlists at most every 10 minutes.
+Readings, checks the next 20 unreviewed tracks of each queue for a possible cover, and refreshes the playlists at
+most every 10 minutes.
 
 ### Track card
 
@@ -119,7 +126,9 @@ Readings, and refreshes the playlists at most every 10 minutes.
  "styles": [["Dubstep", 0.25], ["Bassline", 0.11], ["Downtempo", 0.10]],
  "readings": {"tempo": 102.0, "valence": 0.14, "energy": 0.83, "danceability": 0.61, "acousticness": 0.02,
               "instrumentalness": 0.77, "loudness": -7.1},
- "measure": "ok"}
+ "measure": "ok",
+ "original": {"title": "Zombie", "artist": "The Cranberries", "id": "7EZC6E7UjZe63f1jRmkWxt", "reason": "marker"},
+ "original_check": "done"}
 ```
 
 - Any of `title`, `album`, `album_type`, `year`, `duration_ms`, `cover`, `cover_small` may be `null`; `artists`
@@ -158,6 +167,17 @@ Readings, and refreshes the playlists at most every 10 minutes.
   the rest 0–1.
 - `measure`: `ok` (has Readings), `pending` (being measured now), `no_preview` (nothing to measure) or `unknown`
   (not measured yet).
+- `original` (feature `card.original`): the recording this track may stand in for, its Original, or `null` when
+  the server found no sign of one. It is a hint for the listener, never a Verdict (ADR 0022). `title` is the
+  Original's title; `artist` its artist, `null` when the server couldn't tell; `id` the Original on Spotify, `null`
+  when a search didn't find it (no Swap is possible then); `reason` the sign that was found: `marker` (the title
+  says cover, karaoke, tribute, "originally performed by" and the like, or the artist is a karaoke or tribute act),
+  `live` (a live, unplugged or BBC recording: the Original is the same artist's studio one), `isrc` (Deezer files
+  the track's ISRC under another artist's track of the same title) or `rank` (another artist's track of the same
+  title is at least three times as popular on Deezer). A client shows `reason` in its own words.
+- `original_check` (feature `card.original`): `done` (checked: `original` is the answer), `pending` (being checked
+  now; fetch the card again later), `failed` (the check failed within the last day; it is tried again after that,
+  don't wait for it) or `unknown` (not checked yet). `original` is `null` unless it is `done`.
 
 Cards from `GET /v1/playlists/{id}` add `playlists` (the ids of the listener's playlists the song is on, in
 library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already). The first
@@ -205,16 +225,43 @@ same track with the same `started_at` is a no-op.
   value rejects that play with a reason. A play that stopped before 30 s without finishing, of an offered or
   Calibrate track with no Verdict, is a soft no for the re-ranker (ADR 0016).
 
+### `POST /v1/swaps`
+
+Feature `swaps`. The listener's decision that a track is a cover (or a live take) and its Original should take its
+place (ADR 0022).
+
+```json
+{"swaps": [{"id": "5d1e…", "track": "<the cover's id>", "original": "<the Original's id>",
+            "given_at": "2026-10-23T09:14:03.120Z"}]}
+```
+
+→ `{"accepted": ["5d1e…"], "rejected": [{"id": "…", "error": "…"}]}`
+
+- At most 500 per request; the body at most 1 MiB. `id` (8–64 characters, made by the client) and `given_at` work
+  as for Verdicts: sending the same id again is a no-op. `track` and `original` are different track ids;
+  `original` is normally the card's `original.id`, but any track is accepted.
+- At once: the cover's Verdicts given up to `given_at` are taken back, so it is unreviewed again, and a Verdict on
+  it given before the Swap that arrives later is accepted and dropped. The server keeps what it took back.
+- In the background, as for Verdicts (`spotify` in the snapshot): in each playlist the listener owns that holds the
+  cover, the Original goes where the cover first was, unless its Song is there already, and every copy of the
+  cover comes out. If the cover is in Liked Songs, its heart moves to the Original, unless the Original's Song has
+  a Verdict below 3★. If the server put the cover on To Rip, it comes off, and the Original goes on in its place
+  on the same terms, unless it is in the library already. Followed playlists, Discoveries and the cover's plays are
+  left alone.
+
 ### `GET /v1/tracks/{id}`
 
 One track card, for any Spotify track. A track the server has never measured is queued for measuring and answered
 `202` with `"measure": "pending"`; ask again later. A track with no preview stays `no_preview`. A Discoveries offer
-or a Calibrate pick comes with its `why`.
+or a Calibrate pick comes with its `why`. A track not yet checked for a possible cover, or waiting for its check, is
+checked ahead of the background checks, with `"original_check": "pending"` (the status stays `200` when only that
+is pending).
 
 ### `GET /v1/playlists/{id}`
 
 A playlist summary plus `items`, a track card per song in playlist order. `404` for a playlist not in the
-listener's library.
+listener's library. The first 20 songs not yet checked for a possible cover are queued for a check; fetch a card
+with `GET /v1/tracks/{id}` to have any other checked ahead of them.
 
 Playlist summary:
 
@@ -243,7 +290,8 @@ Playlist summary:
   naming it, and nothing is stored.
 - `id`, `title` and `artists` are required. `album_type` is `album`, `single` or `compilation`; `release_date` is
   `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; covers are https URLs.
-- `404` for a playlist not in the listener's library. Playlists themselves are never written to Spotify.
+- `404` for a playlist not in the listener's library. This never writes the playlist to Spotify; the only edit
+  haystack makes to the listener's own playlists is a Swap's.
 
 ## Changes
 
@@ -260,3 +308,5 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 - 2026-10-20, haystack 0.6.0, `card.label`: `label` in a track card.
 - 2026-10-22, haystack 0.8.0, `card.song`: `song` in a track card; a playlist card's `verdict`, `playlists` and
   `liked`, `playlists.verdicts` and `queues.likes` go by the Song.
+- 2026-10-23, haystack 0.9.0, `card.original`: `original` and `original_check` in a track card.
+- 2026-10-23, haystack 0.9.0, `swaps`: `POST /v1/swaps`; `spotify.pending_writes` counts Swaps too.

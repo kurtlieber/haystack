@@ -3,8 +3,8 @@
 Stdlib only (ThreadingHTTPServer): `haystack api` runs it as the user unit haystack-api. Every
 request needs `Authorization: Bearer <token>` (the api-token secret, `haystack token new`) and must come from
 loopback or a network in api.allow_networks (a host firewall should say the same). One worker thread makes the
-Spotify writes that follow a verdict, measures tracks on demand and keeps the user's playlists current, so
-requests never wait on Spotify or Essentia."""
+Spotify writes that follow a verdict or a Swap, measures tracks on demand, checks them for a possible cover and keeps
+the user's playlists current, so requests never wait on Spotify, Deezer or Essentia."""
 from __future__ import annotations
 
 import hmac
@@ -17,20 +17,21 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, db, playlists, review, verdicts
+from . import __version__, db, originals, playlists, review, verdicts
 
 log = logging.getLogger("haystack_music.api")
 VERSION = "1"
 # Capabilities beyond /v1 as first shipped (docs/api.md, "Server and features"). A client shows a newer element
 # only when its feature name is listed; a server without the `server` object has none of them.
 FEATURES: tuple[str, ...] = ("why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played",
-                              "card.label", "card.song")
+                              "card.label", "card.song", "card.original", "swaps")
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
 PLAYLIST_TRACKS_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})/tracks$")
 QUEUES = ("discoveries", "likes", "playlists", "calibrate")
 MEASURE_AHEAD = 20      # per queue; the harvest's backfill measures the rest
+CHECK_AHEAD = 20        # per queue or playlist: the next tracks checked for a possible cover (a card asked for: first)
 PLAYLISTS_EVERY = 600   # s: a snapshot read re-lists the playlists at most this often (one call if none changed)
 MAX_PLAYLIST_BODY = 8 << 20      # a 10,000-song playlist read by needle's engine
 
@@ -45,21 +46,41 @@ def allowed(addr: str, networks) -> bool:
     return ip.is_loopback or any(ip in n for n in networks)
 
 
+def _id_and_time(v: dict, what: str) -> tuple[str, str]:
+    """An outbox item's client-made id and given_at. Raises ValueError with a reason."""
+    vid = v.get("id")
+    if not isinstance(vid, str) or not 8 <= len(vid) <= 64:
+        raise ValueError(f"id must be the client's {what} id (8-64 characters)")
+    given = v.get("given_at")
+    if not isinstance(given, str) or not re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$", given):
+        raise ValueError("given_at must be UTC ISO 8601 (…Z)")
+    return vid, given
+
+
 def parse_verdict(v: dict) -> dict:
     """One verdict from the outbox -> kwargs for verdicts.record. Raises ValueError with a reason."""
     if not isinstance(v, dict):
         raise ValueError("a verdict is an object")
-    vid = v.get("id")
-    if not isinstance(vid, str) or not 8 <= len(vid) <= 64:
-        raise ValueError("id must be the client's verdict id (8-64 characters)")
-    given = v.get("given_at")
-    if not isinstance(given, str) or not re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$", given):
-        raise ValueError("given_at must be UTC ISO 8601 (…Z)")
+    vid, given = _id_and_time(v, "verdict")
     q = v.get("queue")
     if q is not None and q not in QUEUES:
         raise ValueError(f"queue must be one of {', '.join(QUEUES)}")
     stars = verdicts.validate(v.get("track"), v.get("kind"), v.get("stars"))
     return {"spotify_id": v["track"], "kind": v["kind"], "stars": stars, "given_at": given, "id": vid, "queue": q}
+
+
+def parse_swap(s) -> dict:
+    """One Swap from the outbox -> kwargs for originals.record_swap. Raises ValueError with a reason."""
+    if not isinstance(s, dict):
+        raise ValueError("a swap is an object")
+    sid, given = _id_and_time(s, "swap")
+    cover, orig = s.get("track"), s.get("original")
+    for name, x in (("track", cover), ("original", orig)):
+        if not isinstance(x, str) or not verdicts.SPOTIFY_ID.match(x):
+            raise ValueError(f"{name} must be a Spotify track id")
+    if cover == orig:
+        raise ValueError("original must be another track")
+    return {"swap_id": sid, "cover": cover, "original": orig, "given_at": given}
 
 
 def parse_play(p) -> tuple:
@@ -82,23 +103,28 @@ def server_info() -> dict:
 
 
 class Worker(threading.Thread):
-    """Spotify writes and on-demand measuring, one at a time, off the request path. The Spotify writes that
-    follow a verdict always go first: a long run of measuring must never hold back a heart or a playlist edit."""
+    """Spotify writes, on-demand measuring and possible-cover checks, one at a time, off the request path. The
+    Spotify writes that follow a verdict or a Swap always go first: a long run of measuring or checking must never hold
+    back a heart or a playlist edit. A check needle waits on (`soon`) goes before the rest."""
 
-    PRIORITY = {"effects": 0, "metadata": 1, "playlists": 1, "measure": 2}
+    PRIORITY = {"effects": 0, "metadata": 1, "playlists": 1, "measure": 2, "original_soon": 2, "original": 3}
 
-    def __init__(self, cfg: dict, spotify_factory=None, retry_every: float = 600.0):
+    def __init__(self, cfg: dict, spotify_factory=None, retry_every: float = 600.0, deezer_factory=None):
         super().__init__(daemon=True, name="api-worker")
         self.cfg = cfg
         self.q: queue.PriorityQueue = queue.PriorityQueue()
         self._seq = 0
         self._lock = threading.Lock()
         self.measuring: set[str] = set()
+        self.checking: set[str] = set()      # queued or running possible-cover checks
+        self._soon: set[str] = set()         # … of them, the ones queued as soon
         self._effects_queued = threading.Event()
         self._playlists_queued = threading.Event()
         self._playlists_at = 0.0
         self._spotify_factory = spotify_factory
         self._sp = None
+        self._deezer_factory = deezer_factory
+        self._dz = None
         self.retry_every = retry_every
 
     def spotify(self):
@@ -109,6 +135,15 @@ class Worker(threading.Thread):
                 from .spotify import Spotify
                 self._sp = Spotify(self.cfg)
         return self._sp
+
+    def deezer(self):
+        if self._dz is None:
+            if self._deezer_factory:
+                self._dz = self._deezer_factory()
+            else:
+                from .deezer import Deezer
+                self._dz = Deezer(self.cfg["harvest"]["deezer_min_interval"])
+        return self._dz
 
     def _put(self, kind: str, arg=None) -> None:
         with self._lock:
@@ -135,6 +170,16 @@ class Worker(threading.Thread):
             self.measuring.add(sid)
         self._put("measure", sid)
 
+    def original(self, sid: str, soon: bool = False) -> None:
+        """Check one track for a possible cover (originals.check); `soon` puts it ahead of the other checks."""
+        with self._lock:
+            if sid in self._soon or (sid in self.checking and not soon):
+                return
+            self.checking.add(sid)
+            if soon:
+                self._soon.add(sid)
+        self._put("original_soon" if soon else "original", sid)
+
     def run(self) -> None:
         con = db.connect()
         self._put("metadata")
@@ -144,7 +189,7 @@ class Worker(threading.Thread):
             try:
                 _pri, _seq, kind, arg = self.q.get(timeout=self.retry_every)
             except queue.Empty:
-                if verdicts.pending(con):
+                if verdicts.pending(con) or originals.pending(con):
                     self.effects()
                 continue
             try:
@@ -156,9 +201,16 @@ class Worker(threading.Thread):
                     out = verdicts.apply_effects(con, self.cfg, self.spotify())
                     if out["tracks"]:
                         log.info("verdict effects: %s", out)
+                    out = originals.apply_swaps(con, self.cfg, self.spotify())
+                    if out["swaps"]:
+                        log.info("swaps: %s", out)
                 elif kind == "measure":
                     from . import traits
                     log.info("measuring %s on demand: %s", arg, traits.measure_track(con, self.cfg, arg, self.spotify()))
+                elif kind in ("original", "original_soon"):
+                    out = originals.check(con, arg, self.deezer(), self.spotify())
+                    if out and out["reason"]:
+                        log.info("possible cover %s: %s", arg, out)
                 elif kind == "metadata":
                     from .sync import fill_metadata
                     log.info("track metadata: %s", fill_metadata(con, self.spotify()))
@@ -173,6 +225,10 @@ class Worker(threading.Thread):
             finally:
                 if kind == "measure":
                     self.measuring.discard(arg)
+                elif kind in ("original", "original_soon"):
+                    with self._lock:
+                        self.checking.discard(arg)
+                        self._soon.discard(arg)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -221,6 +277,25 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _cards(self) -> review.Cards:
+        """Cards that know what the worker is measuring and checking right now."""
+        cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
+        w = self.server.worker
+        cards.pending = set(w.measuring) if w else set()
+        cards.checking = set(w.checking) if w else set()
+        return cards
+
+    def _check(self, items: list[dict], limit: int | None = None, soon: bool = False) -> None:
+        """Queue a possible-cover check of these cards' tracks that have none (the first `limit` of them). `soon`:
+        needle is waiting on them, so a check already queued behind the others moves up too."""
+        w = self.server.worker
+        if not w:
+            return
+        want = ("unknown", "pending") if soon else ("unknown",)
+        for c in [c for c in items if c["original_check"] in want][:limit]:
+            w.original(c["id"], soon)
+            c["original_check"] = "pending"
+
     # ---- routes ----
     def do_GET(self):
         if not self._gate():
@@ -230,32 +305,32 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "version": VERSION, "time": db.now(), "server": server_info()})
         if path == "/v1/state":
             verdicts.judge_picks(self._con())       # a Calibrate pick judged by a verdict from anywhere
-            cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
-            cards.pending = set(self.server.worker.measuring) if self.server.worker else set()
-            st = review.state(self._con(), self.server.cfg, cards)
+            st = review.state(self._con(), self.server.cfg, self._cards())
             for qname in ("discoveries", "calibrate", "likes"):   # the next tracks with no Readings: measure them
                 for c in [c for c in st["queues"][qname]["items"] if c["measure"] == "unknown"][:MEASURE_AHEAD]:
                     if self.server.worker:
                         self.server.worker.measure(c["id"])
+                self._check([c for c in st["queues"][qname]["items"] if not c["verdict"]], CHECK_AHEAD)
             if self.server.worker:
                 self.server.worker.playlists(PLAYLISTS_EVERY)
             st["server"] = server_info()
             return self._send(200, st)
         m = PLAYLIST_PATH.match(path)
         if m:
-            cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
-            cards.pending = set(self.server.worker.measuring) if self.server.worker else set()
-            pl = playlists.cards(self._con(), cards, m.group(1))
+            pl = playlists.cards(self._con(), self._cards(), m.group(1))
             if pl is None:
                 return self._error(404, "no such playlist in the listener's library")
+            self._check(pl["items"], CHECK_AHEAD)
             return self._send(200, pl)
         m = TRACK_PATH.match(path)
         if m:
             cards = review.Cards(self._con(), self.server.cfg, self.server.classes)
+            cards.checking = set(self.server.worker.checking) if self.server.worker else set()
             offer = review.discoveries(self._con())[1].get(m.group(1))
             pick = review.calibrate_picks(self._con())[1].get(m.group(1))
             card = cards.build([m.group(1)], {m.group(1): offer} if offer else None,
                                {m.group(1): pick} if pick else None)[0]
+            self._check([card], soon=True)
             if card["measure"] == "unknown" and self.server.worker:
                 self.server.worker.measure(m.group(1))
                 card["measure"] = "pending"
@@ -283,8 +358,26 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e:
                     rejected.append({"id": v.get("id") if isinstance(v, dict) else None, "error": str(e)})
                     continue
-                verdicts.record(con, kw.pop("spotify_id"), kw.pop("kind"), kw.pop("stars"), source="needle", **kw)
+                if not originals.swallowed(con, kw["id"], kw["spotify_id"], kw["given_at"]):   # taken back by a Swap
+                    verdicts.record(con, kw.pop("spotify_id"), kw.pop("kind"), kw.pop("stars"), source="needle", **kw)
                 accepted.append(kw["id"])
+            if accepted and self.server.worker:
+                self.server.worker.effects()
+            return self._send(200, {"accepted": accepted, "rejected": rejected})
+        if path == "/v1/swaps":
+            items = body.get("swaps") if isinstance(body, dict) else None
+            if not isinstance(items, list) or len(items) > 500:
+                return self._error(400, "expected {\"swaps\": [...]} (at most 500)")
+            accepted, rejected = [], []
+            con = self._con()
+            for s in items:
+                try:
+                    kw = parse_swap(s)
+                except ValueError as e:
+                    rejected.append({"id": s.get("id") if isinstance(s, dict) else None, "error": str(e)})
+                    continue
+                originals.record_swap(con, **kw)
+                accepted.append(kw["swap_id"])
             if accepted and self.server.worker:
                 self.server.worker.effects()
             return self._send(200, {"accepted": accepted, "rejected": rejected})

@@ -2,7 +2,8 @@
 
 A track card carries everything the Concept A screen needs for one track, so needle can prefetch every queue and
 Review offline: metadata (with the record label Deezer gives) and cover, its Song, the current verdict, why the server
-picked it, its top Discogs styles and its Readings. Read-only: nothing here writes."""
+picked it, its top Discogs styles, its Readings and whether it may be a cover (ADR 0022). Read-only: nothing here
+writes."""
 from __future__ import annotations
 
 import json
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from . import baseline, calibrate, db, metadata, playlists, traits, verdicts
+from . import baseline, calibrate, db, metadata, originals, playlists, traits, verdicts
 
 SOURCE_LABELS = {
     "deezer_chart": "the Deezer chart",
@@ -76,6 +77,7 @@ class Cards:
                 classes = []
         self.names = style_names(classes)
         self.pending: set[str] = set()      # tracks the API is measuring right now
+        self.checking: set[str] = set()     # tracks the API is checking for a possible cover right now
 
     def build(self, sids: list[str], offers: dict | None = None, picks: dict | None = None) -> list[dict]:
         """Cards for these tracks; offers (track id: offers row) and picks (track id: calibrations row) give the
@@ -98,6 +100,7 @@ class Cards:
         unmeasurable = {r[0] for r in con.execute(
             "SELECT spotify_id FROM liked_map WHERE vector_status IN ('no_preview','not_found') "
             "UNION SELECT spotify_id FROM spotify_deezer WHERE status IN ('no_preview','not_found')")}
+        orig = originals.card_fields(con, sids, self.checking)
         out = []
         for sid in sids:
             m = meta.get(sid)
@@ -130,6 +133,7 @@ class Cards:
                 "styles": self._styles(st.get(did)) if did is not None else [],
                 "readings": readings or None,
                 "measure": measure,
+                **orig[sid],
             }
             out.append(card)
         return out
@@ -250,10 +254,12 @@ def state(con, cfg: dict, cards: Cards | None = None) -> dict:
     c_cards = cards.build(c_sids, picks=picks)
     c_done = [c for c in c_cards if c["verdict"]]
     c_cards = [c for c in c_cards if not c["verdict"]] + c_done
-    l_sids = unrated_likes(con)
+    swapping = originals.swapping(con)
+    l_sids = [s for s in unrated_likes(con) if s not in swapping]     # a swapped cover: its heart is moving
     pend = con.execute("SELECT COUNT(DISTINCT spotify_id) FROM verdicts WHERE effects='pending'").fetchone()[0]
     err = con.execute("SELECT effects_error FROM verdicts WHERE effects='pending' AND effects_error IS NOT NULL "
                       "ORDER BY received_at DESC LIMIT 1").fetchone()
+    s_pend, s_err = originals.pending_writes(con)
     return {
         "generated_at": db.now(),
         "baseline": baseline.compute(con, cfg),
@@ -265,5 +271,5 @@ def state(con, cfg: dict, cards: Cards | None = None) -> dict:
             "likes": {"total": len(l_sids), "items": cards.build(l_sids)},
         },
         "playlists": playlists.summaries(con),
-        "spotify": {"pending_writes": pend, "error": err[0] if err else None},
+        "spotify": {"pending_writes": pend + s_pend, "error": (err[0] if err else None) or s_err},
     }

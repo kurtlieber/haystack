@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS playlists (
 );
 CREATE TABLE IF NOT EXISTS playlist_tracks (
     playlist_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
+    position INTEGER NOT NULL,           -- read from the Web API: its place on Spotify, counting the local files left out
     spotify_id TEXT NOT NULL,
     added_at TEXT,
     PRIMARY KEY (playlist_id, position)
@@ -124,18 +124,20 @@ def read_web(con, sp, pid: str, snapshot: str | None) -> int | None:
             log.info("Spotify won't list playlist %s (%s): left to needle's engine", pid, e.status)
             return None
         raise
-    for _added, t in items:
+    for _pos, _added, t in items:
         upsert_track(con, t)
-    return store(con, pid, snapshot, [(t["id"], added) for added, t in items], "web")
+    return store(con, pid, snapshot, [(t["id"], added, pos) for pos, added, t in items], "web")
 
 
-def store(con, pid: str, snapshot: str | None, rows: list[tuple[str, str | None]], source: str) -> int:
-    """Replace a playlist's songs with this version of them, in order: [(spotify id, added_at)]."""
+def store(con, pid: str, snapshot: str | None, rows: list[tuple], source: str) -> int:
+    """Replace a playlist's songs with this version of them, in order: [(spotify id, added_at)], or from the Web API
+    [(spotify id, added_at, position)], where position is the song's place on Spotify, which counts the local files
+    and episodes left out (a Swap adds at it)."""
     con.execute("BEGIN")
     try:
         con.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
         con.executemany("INSERT INTO playlist_tracks(playlist_id, position, spotify_id, added_at) VALUES(?,?,?,?)",
-                        [(pid, i, sid, added) for i, (sid, added) in enumerate(rows)])
+                        [(pid, r[2] if len(r) > 2 else i, r[0], r[1]) for i, r in enumerate(rows)])
         con.execute("UPDATE playlists SET tracks_snapshot=?, tracks_source=?, tracks_at=? WHERE id=?",
                     (snapshot, source, db.now(), pid))
         con.execute("COMMIT")

@@ -50,8 +50,8 @@ class FakeSpotify:
         self.reads.append(pid)
         if pid not in self.items:
             raise SpotifyError(403, "Forbidden")
-        for t in self.items[pid]:
-            yield "2026-10-01T00:00:00Z", t
+        for i, t in enumerate(self.items[pid]):
+            yield i, "2026-10-01T00:00:00Z", t
 
 
 @pytest.fixture
