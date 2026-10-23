@@ -10,7 +10,6 @@
 
 ### Bug Fixes
 
-* **verdicts:** a tie between two releases of a song goes to the verdict received last ([005a60f](https://github.com/kurtlieber/haystack/commit/005a60f2dbdb404dfc1a253b8c203e159a586931))
 * **deps:** certifi 2026.10.19 or later, without the compromised eMudhra CA ([be9fd9e](https://github.com/kurtlieber/haystack/commit/be9fd9e8b1d49bf2261c5c47657545898a49f622))
 
 ## [0.8.0](https://github.com/kurtlieber/haystack/compare/v0.7.1...v0.8.0) (2026-10-22)
