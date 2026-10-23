@@ -286,11 +286,13 @@ class Handler(BaseHTTPRequestHandler):
         return cards
 
     def _check(self, items: list[dict], limit: int | None = None, soon: bool = False) -> None:
-        """Queue a possible-cover check of these cards' tracks that have none (the first `limit` of them)."""
+        """Queue a possible-cover check of these cards' tracks that have none (the first `limit` of them). `soon`:
+        needle is waiting on them, so a check already queued behind the others moves up too."""
         w = self.server.worker
         if not w:
             return
-        for c in [c for c in items if c["original_check"] == "unknown"][:limit]:
+        want = ("unknown", "pending") if soon else ("unknown",)
+        for c in [c for c in items if c["original_check"] in want][:limit]:
             w.original(c["id"], soon)
             c["original_check"] = "pending"
 

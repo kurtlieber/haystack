@@ -341,6 +341,9 @@ def test_cards_say_whether_a_track_may_be_a_cover_and_unchecked_ones_are_queued(
     assert all(s != sid("rezz") and s != sid("blind") for s, _ in worker.checked)   # checked, and rated
     code, card = call(srv, "GET", f"/v1/tracks/{sid('newone')}")
     assert card["original_check"] == "pending" and worker.checked[-1] == (sid("newone"), True)
+    worker.checking.add(sid("like1"))                     # queued with the snapshot: needle waiting on it moves it up
+    assert call(srv, "GET", f"/v1/tracks/{sid('like1')}")[1]["original_check"] == "pending"
+    assert worker.checked[-1] == (sid("like1"), True)
     add_playlists(con)
     worker.checked.clear()
     pl = call(srv, "GET", f"/v1/playlists/{sid('bass')}")[1]

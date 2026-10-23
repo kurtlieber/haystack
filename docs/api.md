@@ -252,8 +252,9 @@ place (ADR 0022).
 
 One track card, for any Spotify track. A track the server has never measured is queued for measuring and answered
 `202` with `"measure": "pending"`; ask again later. A track with no preview stays `no_preview`. A Discoveries offer
-or a Calibrate pick comes with its `why`. A track not yet checked for a possible cover is checked ahead of the
-background checks, with `"original_check": "pending"` (the status stays `200` when only that is pending).
+or a Calibrate pick comes with its `why`. A track not yet checked for a possible cover, or waiting for its check, is
+checked ahead of the background checks, with `"original_check": "pending"` (the status stays `200` when only that
+is pending).
 
 ### `GET /v1/playlists/{id}`
 
