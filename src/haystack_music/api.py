@@ -31,7 +31,7 @@ PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
 PLAYLIST_TRACKS_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})/tracks$")
 QUEUES = ("discoveries", "likes", "playlists", "calibrate")
 MEASURE_AHEAD = 20      # per queue; the harvest's backfill measures the rest
-CHECK_AHEAD = 20        # per queue: the next tracks checked for a possible cover (a playlist's: all of them)
+CHECK_AHEAD = 20        # per queue or playlist: the next tracks checked for a possible cover (a card asked for: first)
 PLAYLISTS_EVERY = 600   # s: a snapshot read re-lists the playlists at most this often (one call if none changed)
 MAX_PLAYLIST_BODY = 8 << 20      # a 10,000-song playlist read by needle's engine
 
@@ -320,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
             pl = playlists.cards(self._con(), self._cards(), m.group(1))
             if pl is None:
                 return self._error(404, "no such playlist in the listener's library")
-            self._check(pl["items"])
+            self._check(pl["items"], CHECK_AHEAD)
             return self._send(200, pl)
         m = TRACK_PATH.match(path)
         if m:

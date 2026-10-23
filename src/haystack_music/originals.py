@@ -158,9 +158,13 @@ def find_original(sp, title: str, artist: str, exclude: str) -> dict | None:
     return None
 
 
+def _retry_cutoff() -> str:
+    return (datetime.now(timezone.utc) - RETRY).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def due(con, sids: list[str]) -> list[str]:
     """The tracks to check: never checked, or the last check failed more than RETRY ago."""
-    cutoff = (datetime.now(timezone.utc) - RETRY).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = _retry_cutoff()
     done = set()
     for i in range(0, len(sids), 500):
         ch = sids[i:i + 500]
@@ -201,7 +205,9 @@ def check(con, sid: str, dz, sp, force: bool = False) -> dict | None:
 
 
 def card_fields(con, sids: list[str], checking=()) -> dict[str, dict]:
-    """Each track's `original` and `original_check` for its card (docs/api.md, Track card)."""
+    """Each track's `original` and `original_check` for its card (docs/api.md, Track card). A check that failed is
+    `failed` until RETRY has passed, so nobody waits on it or queues it again, then `unknown`."""
+    cutoff = _retry_cutoff()
     rows = {}
     for i in range(0, len(sids), 500):
         ch = sids[i:i + 500]
@@ -213,7 +219,8 @@ def card_fields(con, sids: list[str], checking=()) -> dict[str, dict]:
         done = r is not None and r["error"] is None
         out[s] = {"original": {"title": r["of_title"], "artist": r["of_artist"], "id": r["of_spotify_id"],
                                "reason": r["reason"]} if done and r["reason"] else None,
-                  "original_check": "done" if done else "pending" if s in checking else "unknown"}
+                  "original_check": "done" if done else "pending" if s in checking else
+                                    "failed" if r is not None and r["checked_at"] > cutoff else "unknown"}
     return out
 
 
@@ -264,20 +271,26 @@ def pending_writes(con) -> tuple[int, str | None]:
     return n, err[0] if err else None
 
 
-def apply_swaps(con, cfg: dict, sp, limit: int = 50) -> dict:
+def apply_swaps(con, cfg: dict, sp, limit: int = 50, library=None) -> dict:
     """Make the Spotify writes of every pending Swap, oldest first. In each playlist the listener owns that holds the
     cover, the Original goes where the cover first was (unless its Song is there already) and the cover comes out. A
-    liked cover's heart moves to the Original, unless the Original's Song has a Verdict below 3 stars, and the cover
-    leaves To Rip if haystack put it there. Playlists the listener follows are left alone (the Web API can't edit
-    them): the result names them. Each step adds before it removes and reads Spotify's state first, so a Swap that
-    failed half-way is simply made again. -> counts."""
+    liked cover's heart moves to the Original, unless the Original's Song has a Verdict below 3 stars. A cover haystack
+    put on To Rip comes off, and the Original goes on in its place, on the same terms as the heart, unless it is in
+    the library already. Playlists the listener follows are left alone (the Web API can't edit them): the result names
+    them. Each step adds before it removes and reads Spotify's state first, so a Swap that failed half-way is simply
+    made again. -> counts."""
+    from . import library as libmod
+    from .matching import Index
     rows = con.execute("SELECT * FROM swaps WHERE effects='pending' ORDER BY received_at, rowid LIMIT ?",
                        (limit,)).fetchall()
     out = {"swaps": len(rows), "applied": 0, "pending": 0}
-    fresh: set[str] = set()                  # playlists checked against Spotify in this run
+    if not rows:
+        return out
+    lib = Index(library if library is not None else libmod.library_refs(con))
+    fresh: set[str] = set()                  # playlists read from Spotify in this run
     for s in rows:
         try:
-            res = _apply(con, sp, s, fresh)
+            res = _apply(con, cfg, sp, s, fresh, lib)
             con.execute("UPDATE swaps SET effects='done', effects_at=?, effects_error=NULL, result=? WHERE id=?",
                         (db.now(), json.dumps(res), s["id"]))
             out["applied"] += 1
@@ -289,14 +302,15 @@ def apply_swaps(con, cfg: dict, sp, limit: int = 50) -> dict:
     return out
 
 
-def _apply(con, sp, s, fresh: set[str]) -> dict:
-    from .sync import bot_remove, upsert_track
+def _apply(con, cfg: dict, sp, s, fresh: set[str], lib) -> dict:
+    from .sync import bot_add, bot_remove, upsert_track
     cover, orig = s["cover"], s["original"]
     if not con.execute("SELECT 1 FROM spotify_tracks WHERE spotify_id=?", (orig,)).fetchone():
         upsert_track(con, sp.track(orig))
-    res = {"playlists": [], "already_there": [], "followed": [], "heart": None, "to_rip": False}
+    res = {"playlists": [], "already_there": [], "followed": [], "heart": None, "to_rip": None}
     song = verdicts.songs(con)
     k = verdicts.song_of(song, orig)
+    v = verdicts.current_by_song(con, [orig]).get(orig)        # its Song rated below 3 stars: no heart, no To Rip
     for p in con.execute("""SELECT DISTINCT p.id, p.mine, p.position FROM playlists p JOIN playlist_tracks t
                             ON t.playlist_id=p.id WHERE p.removed_at IS NULL AND t.spotify_id=? ORDER BY p.position""",
                          (cover,)).fetchall():
@@ -304,34 +318,32 @@ def _apply(con, sp, s, fresh: set[str]) -> dict:
         if not p["mine"]:
             res["followed"].append(pid)
             continue
-        if pid not in fresh:
+        if pid not in fresh:                 # as it is now, with Spotify's positions (stored ones may be older)
             snap = sp.playlist(pid).get("snapshot_id")
-            if snap != con.execute("SELECT tracks_snapshot FROM playlists WHERE id=?", (pid,)).fetchone()[0]:
-                playlists.read_web(con, sp, pid, snap)
-                con.execute("UPDATE playlists SET snapshot_id=? WHERE id=?", (snap, pid))
+            playlists.read_web(con, sp, pid, snap)
+            con.execute("UPDATE playlists SET snapshot_id=? WHERE id=?", (snap, pid))
             fresh.add(pid)
-        rows = [tuple(r) for r in con.execute("SELECT spotify_id, added_at FROM playlist_tracks WHERE playlist_id=? "
-                                              "ORDER BY position", (pid,))]
+        rows = [tuple(r) for r in con.execute("SELECT spotify_id, added_at, position FROM playlist_tracks "
+                                              "WHERE playlist_id=? ORDER BY position", (pid,))]
         ids = [r[0] for r in rows]
         if cover not in ids:
             continue
         there = any(x != cover and (x == orig or verdicts.song_of(song, x) == k) for x in ids)
-        snap = None if there else sp.add_items(pid, [orig], position=ids.index(cover))
+        at = rows[ids.index(cover)][2]
+        snap = None if there else sp.add_items(pid, [orig], position=at)
         snap = sp.remove_items(pid, [cover], snap)
-        kept, placed = [], there               # the stored songs follow, so the next sync has nothing to re-read
-        for x, added in rows:
-            if x == cover:
-                if not placed:
-                    kept.append((orig, db.now()))
-                    placed = True
-                continue
-            kept.append((x, added))
-        playlists.store(con, pid, snap, kept, "web")
+        # the stored songs follow, so the next sync has nothing to re-read: each song moves up one place for every
+        # copy of the cover before it, and down one if the Original went in before it
+        gone = [q for x, _, q in rows if x == cover]
+        kept = [] if there else [(orig, db.now(), at)]
+        for x, added, q in rows:
+            if x != cover:
+                kept.append((x, added, q - sum(g < q for g in gone) + (0 if there or q < at else 1)))
+        playlists.store(con, pid, snap, sorted(kept, key=lambda r: r[2]), "web")
         con.execute("UPDATE playlists SET snapshot_id=? WHERE id=?", (snap, pid))
         res["already_there" if there else "playlists"].append(pid)
     liked = sp.library_contains([cover, orig])
     if liked.get(cover):
-        v = verdicts.current_by_song(con, [orig]).get(orig)
         now = db.now()
         if not liked.get(orig) and (v is None or v.keeps_heart):
             sp.library_save([orig])
@@ -344,7 +356,15 @@ def _apply(con, sp, s, fresh: set[str]) -> dict:
         sp.library_remove([cover])
         con.execute("UPDATE likes SET removed_at=? WHERE spotify_id=? AND removed_at IS NULL", (now, cover))
     to_rip = verdicts._bot_on(con, "to_rip", cover)          # only if haystack put it there
-    if to_rip and bot_remove(con, sp, "to_rip", to_rip, [cover], "swap"):
+    if to_rip:                                               # the Song still wants ripping: the Original's turn
+        on = con.execute("SELECT 1 FROM to_rip WHERE spotify_id=? AND removed_at IS NULL", (orig,)).fetchone()
+        if not on and cfg["spotify"]["to_rip"] and (v is None or v.keeps_heart) and \
+                not verdicts._in_library(con, cfg, sp, orig, lib):
+            bot_add(con, sp, "to_rip", to_rip, [orig])
+            con.execute("""INSERT INTO to_rip(spotify_id, added_at) VALUES(?,?) ON CONFLICT(spotify_id)
+                           DO UPDATE SET added_at=excluded.added_at, removed_at=NULL""", (orig, db.now()))
+            on = True
+        bot_remove(con, sp, "to_rip", to_rip, [cover], "swap")
         con.execute("UPDATE to_rip SET removed_at=? WHERE spotify_id=? AND removed_at IS NULL", (db.now(), cover))
-        res["to_rip"] = True
+        res["to_rip"] = "moved" if on else "removed"
     return res

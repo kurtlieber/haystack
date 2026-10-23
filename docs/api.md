@@ -176,8 +176,8 @@ most every 10 minutes.
   the track's ISRC under another artist's track of the same title) or `rank` (another artist's track of the same
   title is at least three times as popular on Deezer). A client shows `reason` in its own words.
 - `original_check` (feature `card.original`): `done` (checked: `original` is the answer), `pending` (being checked
-  now; fetch the card again later) or `unknown` (not checked yet, or the last check failed and is tried again after
-  a day). `original` is `null` unless it is `done`.
+  now; fetch the card again later), `failed` (the check failed within the last day; it is tried again after that,
+  don't wait for it) or `unknown` (not checked yet). `original` is `null` unless it is `done`.
 
 Cards from `GET /v1/playlists/{id}` add `playlists` (the ids of the listener's playlists the song is on, in
 library order), `liked` (in Liked Songs) and `in_library` (certainly in the local music library already). The first
@@ -244,9 +244,10 @@ place (ADR 0022).
   it given before the Swap that arrives later is accepted and dropped. The server keeps what it took back.
 - In the background, as for Verdicts (`spotify` in the snapshot): in each playlist the listener owns that holds the
   cover, the Original goes where the cover first was, unless its Song is there already, and every copy of the
-  cover comes out. If the cover is in Liked Songs, its heart moves to the Original (unless the Original's Song has
-  a Verdict below 3★) and the cover leaves To Rip if the server put it there. Followed playlists, Discoveries and
-  the cover's plays are left alone.
+  cover comes out. If the cover is in Liked Songs, its heart moves to the Original, unless the Original's Song has
+  a Verdict below 3★. If the server put the cover on To Rip, it comes off, and the Original goes on in its place
+  on the same terms, unless it is in the library already. Followed playlists, Discoveries and the cover's plays are
+  left alone.
 
 ### `GET /v1/tracks/{id}`
 
@@ -259,7 +260,8 @@ is pending).
 ### `GET /v1/playlists/{id}`
 
 A playlist summary plus `items`, a track card per song in playlist order. `404` for a playlist not in the
-listener's library. Every song not yet checked for a possible cover is queued for a check.
+listener's library. The first 20 songs not yet checked for a possible cover are queued for a check; fetch a card
+with `GET /v1/tracks/{id}` to have any other checked ahead of them.
 
 Playlist summary:
 

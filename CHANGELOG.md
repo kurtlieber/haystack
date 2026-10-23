@@ -5,7 +5,7 @@
 
 ### Features
 
-* **api:** a possible cover is flagged and the listener may swap it for its original: each track is checked once, in the background, for a title marker (cover, karaoke, tribute, "originally performed by"), a live take, an ISRC Deezer files under another artist's track of the same title, or another artist's track of the same title three times as popular; a track card carries `original` and `original_check` (API feature `card.original`), and `POST /v1/swaps` takes back the cover's verdicts and puts the Original where the cover was in the listener's own playlists and Liked Songs (ADR 0022; API feature `swaps`) ([50a3848](https://github.com/kurtlieber/haystack/commit/50a384876f62eb50d0ffb5ce1a2f3df007b56530))
+* **api:** a possible cover is flagged and the listener may swap it for its original: each track is checked once, in the background, for a title marker (cover, karaoke, tribute, "originally performed by"), a live take, an ISRC Deezer files under another artist's track of the same title, or another artist's track of the same title three times as popular; a track card carries `original` and `original_check` (API feature `card.original`), and `POST /v1/swaps` takes back the cover's verdicts and puts the Original where the cover was in the listener's own playlists, Liked Songs and To Rip (ADR 0022; API feature `swaps`) ([50a3848](https://github.com/kurtlieber/haystack/commit/50a384876f62eb50d0ffb5ce1a2f3df007b56530))
 
 
 ### Bug Fixes

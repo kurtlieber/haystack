@@ -350,6 +350,24 @@ def test_cards_say_whether_a_track_may_be_a_cover_and_unchecked_ones_are_queued(
     assert [c["original_check"] for c in pl["items"]] == ["done", "pending"] and worker.checked == [(sid("blind"), False)]
 
 
+def test_a_failed_check_is_not_waited_on_or_queued_again(world):
+    srv, worker, con = world
+    con.execute("INSERT INTO original_checks(spotify_id, checked_at, error) VALUES(?, ?, 'ReadTimeout()')",
+                (sid("like1"), db.now()))
+    st = call(srv, "GET", "/v1/state")[1]
+    assert st["queues"]["likes"]["items"][0]["original_check"] == "failed"
+    assert call(srv, "GET", f"/v1/tracks/{sid('like1')}")[1]["original_check"] == "failed"
+    assert all(s != sid("like1") for s, _ in worker.checked)
+
+
+def test_a_playlist_queues_only_its_next_songs_for_a_check(world, monkeypatch):
+    srv, worker, con = world
+    add_playlists(con)
+    monkeypatch.setattr(api, "CHECK_AHEAD", 0)
+    pl = call(srv, "GET", f"/v1/playlists/{sid('bass')}")[1]
+    assert [c["original_check"] for c in pl["items"]] == ["unknown", "unknown"] and worker.checked == []
+
+
 def test_a_swap_is_stored_once_and_takes_the_covers_verdicts_with_it(world):
     srv, worker, con = world
     v = {"id": "late-verdict", "track": sid("like1"), "kind": "rating", "stars": 2, "given_at": "2026-10-23T08:00:00Z"}

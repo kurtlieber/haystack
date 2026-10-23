@@ -11,6 +11,10 @@ def sid(name: str) -> str:
     return name.ljust(22, "0")
 
 
+CFG = {"spotify": {"to_rip": True}, "matching": {"duration_tolerance": 3.0}}
+LOCAL = "local file"            # a local file in a playlist: Spotify counts its place, haystack doesn't store it
+
+
 def _con(tmp_path):
     return db.connect(tmp_path / "t.db")
 
@@ -67,7 +71,7 @@ class FakeSpotify:
         return {"id": pid, "snapshot_id": f"snap{self.snap}"}
 
     def playlist_tracks(self, pid):
-        return [("2026-01-01T00:00:00Z", self.track(t)) for t in self.lists[pid]]
+        return [(i, "2026-01-01T00:00:00Z", self.track(t)) for i, t in enumerate(self.lists[pid]) if t != LOCAL]
 
     def add_items(self, pid, ids, position=None):
         self.calls.append(("add", pid, tuple(ids), position))
@@ -212,11 +216,13 @@ def test_a_failed_check_is_tried_again_a_day_later(tmp_path):
 
     row = originals.check(con, sid("song"), Down(), FakeSpotify())
     assert "Deezer is down" in row["error"] and row["reason"] is None
-    assert originals.card_fields(con, [sid("song")])[sid("song")]["original_check"] == "unknown"
+    assert originals.card_fields(con, [sid("song")])[sid("song")] == {"original": None, "original_check": "failed"}
+    assert originals.card_fields(con, [sid("song")], {sid("song")})[sid("song")]["original_check"] == "pending"
     assert originals.due(con, [sid("song")]) == []
     old = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%SZ")
     con.execute("UPDATE original_checks SET checked_at=?", (old,))
     assert originals.due(con, [sid("song")]) == [sid("song")]
+    assert originals.card_fields(con, [sid("song")])[sid("song")]["original_check"] == "unknown"
 
 
 def test_a_track_not_stored_yet_is_fetched_first(tmp_path):
@@ -282,41 +288,68 @@ def _stored(con, pid):
 
 def test_a_swap_puts_the_original_in_the_covers_place_and_moves_the_heart(tmp_path):
     con, sp = _swap_world(tmp_path)
-    out = originals.apply_swaps(con, {}, sp)
+    out = originals.apply_swaps(con, CFG, sp, library=[])
     assert out == {"swaps": 1, "applied": 1, "pending": 0}
     assert sp.lists[sid("rock")] == [sid("a"), sid("orig"), sid("b")]                    # in the cover's first place
     assert ("add", sid("rock"), (sid("orig"),), 1) in sp.calls
     assert sp.lists[sid("mix")] == [sid("c"), sid("origre")]                            # its Song is there already
-    assert sp.lists[sid("theirs")] == [sid("cover")] and sp.lists[sid("torip")] == []
+    assert sp.lists[sid("theirs")] == [sid("cover")] and sp.lists[sid("torip")] == [sid("orig")]
     assert _stored(con, "rock") == sp.lists[sid("rock")] and _stored(con, "mix") == sp.lists[sid("mix")]
     assert sp.liked == {sid("orig")}
     assert sp.calls.index(("save", (sid("orig"),))) < sp.calls.index(("unsave", (sid("cover"),)))
     assert con.execute("SELECT removed_at FROM likes WHERE spotify_id=?", (sid("orig"),)).fetchone()[0] is None
     assert con.execute("SELECT removed_at FROM likes WHERE spotify_id=?", (sid("cover"),)).fetchone()[0]
     assert con.execute("SELECT removed_at FROM to_rip WHERE spotify_id=?", (sid("cover"),)).fetchone()[0]
+    assert con.execute("SELECT removed_at FROM to_rip WHERE spotify_id=?", (sid("orig"),)).fetchone()[0] is None
+    assert verdicts._bot_on(con, "to_rip", sid("orig")) == sid("torip")
     res = json.loads(con.execute("SELECT result FROM swaps").fetchone()[0])
     assert res == {"playlists": [sid("rock")], "already_there": [sid("mix")], "followed": [sid("theirs")],
-                   "heart": "moved", "to_rip": True}
-    assert originals.pending(con) == [] and originals.apply_swaps(con, {}, sp)["swaps"] == 0
+                   "heart": "moved", "to_rip": "moved"}
+    assert originals.pending(con) == [] and originals.apply_swaps(con, CFG, sp)["swaps"] == 0
+
+
+def test_a_swap_counts_the_local_files_spotify_has_before_the_cover(tmp_path):
+    con, sp = _swap_world(tmp_path)
+    sp.lists[sid("rock")] = [LOCAL, sid("a"), sid("cover"), LOCAL, sid("b"), sid("cover")]
+    originals.apply_swaps(con, CFG, sp, library=[])
+    assert sp.lists[sid("rock")] == [LOCAL, sid("a"), sid("orig"), LOCAL, sid("b")]
+    assert ("add", sid("rock"), (sid("orig"),), 2) in sp.calls
+    assert [tuple(r) for r in con.execute("SELECT spotify_id, position FROM playlist_tracks WHERE playlist_id=? "
+                                          "ORDER BY position", (sid("rock"),))] == \
+        [(sid("a"), 1), (sid("orig"), 2), (sid("b"), 4)]                      # as a fresh read would store them
+    playlists.read_web(con, sp, sid("rock"), "again")
+    assert [tuple(r) for r in con.execute("SELECT spotify_id, position FROM playlist_tracks WHERE playlist_id=? "
+                                          "ORDER BY position", (sid("rock"),))] == \
+        [(sid("a"), 1), (sid("orig"), 2), (sid("b"), 4)]
+
+
+def test_a_swap_leaves_an_original_off_to_rip_that_is_in_the_library(tmp_path):
+    con, sp = _swap_world(tmp_path)
+    con.execute("INSERT INTO local_tracks(path, size, content_hash, spotify_id) VALUES('/m/zombie.m4a', 1, 'h', ?)",
+                (sid("orig"),))
+    originals.apply_swaps(con, CFG, sp, library=[])
+    assert sp.lists[sid("torip")] == []
+    assert json.loads(con.execute("SELECT result FROM swaps").fetchone()[0])["to_rip"] == "removed"
 
 
 def test_a_swap_leaves_an_original_unhearted_that_the_listener_rated_low(tmp_path):
     con, sp = _swap_world(tmp_path)
     verdicts.record(con, sid("origre"), "rating", 2)                      # on another release of its Song
-    originals.apply_swaps(con, {}, sp)
-    assert sp.liked == set()
-    assert json.loads(con.execute("SELECT result FROM swaps").fetchone()[0])["heart"] == "removed"
+    originals.apply_swaps(con, CFG, sp, library=[])
+    assert sp.liked == set() and sp.lists[sid("torip")] == []
+    res = json.loads(con.execute("SELECT result FROM swaps").fetchone()[0])
+    assert (res["heart"], res["to_rip"]) == ("removed", "removed")
 
 
 def test_a_swap_that_failed_half_way_is_made_again_without_a_second_copy(tmp_path):
     con, sp = _swap_world(tmp_path)
     sp.fail_remove = True
-    out = originals.apply_swaps(con, {}, sp)
+    out = originals.apply_swaps(con, CFG, sp, library=[])
     assert out["pending"] == 1 and "Spotify said no" in originals.pending_writes(con)[1]
     assert sp.lists[sid("rock")] == [sid("a"), sid("orig"), sid("cover"), sid("b"), sid("cover")]
     sp.fail_remove = False                                                # the add changed the playlist: re-read
-    assert originals.apply_swaps(con, {}, sp)["applied"] == 1
-    assert sp.lists[sid("rock")] == [sid("a"), sid("orig"), sid("b")]
+    assert originals.apply_swaps(con, CFG, sp, library=[])["applied"] == 1
+    assert sp.lists[sid("rock")] == [sid("a"), sid("orig"), sid("b")] and sp.lists[sid("torip")] == [sid("orig")]
     assert _stored(con, "rock") == sp.lists[sid("rock")]
     assert originals.pending_writes(con) == (0, None)
 

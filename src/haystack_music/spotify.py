@@ -180,12 +180,13 @@ class Spotify:
         return out
 
     def playlist_tracks(self, playlist_id: str):
-        """A playlist's songs in order, with their full track objects: yields (added_at, track). Local files and
-        podcast episodes are left out. Dev mode answers 403 for a playlist the listener follows but doesn't own."""
-        for it in self._pages(f"/playlists/{playlist_id}/items", {"limit": 100}):
+        """A playlist's songs in order, with their full track objects: yields (position, added_at, track). Local files
+        and podcast episodes are left out, but `position` (0-based, as `add_items` takes it) counts them. Dev mode
+        answers 403 for a playlist the listener follows but doesn't own."""
+        for i, it in enumerate(self._pages(f"/playlists/{playlist_id}/items", {"limit": 100})):
             t = it.get("item") or it.get("track")
             if t and t.get("id") and t.get("type", "track") == "track" and not t.get("is_local"):
-                yield it.get("added_at"), t
+                yield i, it.get("added_at"), t
 
     def add_items(self, playlist_id: str, track_ids: list[str], position: int | None = None) -> str | None:
         """Add tracks at the end, or from `position` (0-based) on."""
