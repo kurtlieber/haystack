@@ -281,11 +281,12 @@ DEFAULTS: dict = {
         "allow_networks": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"],
         "spotify_writes": True,        # dev only: false = record verdicts but never touch Spotify
     },
-    # When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",
-    # "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off" (scheduler.py). The systemd units
-    # ignore this: their timers hold the times.
+    # When `haystack serve` (the container) runs each job, in the server's local time: "every Nm" (N dividing 60),
+    # "hourly", "daily HH:MM", "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off"
+    # (scheduler.py). The systemd units ignore this: their timers hold the times.
     "schedule": {
         "sync": "hourly",
+        "plays": "every 15m",          # Spotify plays alone, so recently-played's 50 never overflow (ADR 0023)
         "library": "daily 03:15",
         "harvest": "daily 05:00",
         "harvest_broad": "Sun 04:00",  # `harvest --broad 150`, weekly (ADR 0013)

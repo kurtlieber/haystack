@@ -1,0 +1,17 @@
+[Unit]
+Description=haystack: Spotify plays every 15 minutes, so recently-played's last 50 never overflow
+Documentation=https://github.com/kurtlieber/haystack#readme
+Wants=network-online.target
+After=network-online.target
+OnFailure=haystack-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/haystack/venv/bin/haystack plays
+Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=8G
+TimeoutStartSec=45min
+SyslogIdentifier=haystack-plays
+# exit 3 = Spotify not authorised yet: run `haystack auth`

@@ -19,6 +19,7 @@ log = logging.getLogger("haystack_music.spotify")
 API = "https://api.spotify.com/v1"
 ACCOUNTS = "https://accounts.spotify.com"
 PENDING_TOKEN = "refresh-token.pending"   # emergency 0600 copy if a rotated token cannot be stored
+RECENTLY_PLAYED_LIMIT = 50   # the most recently-played returns in one page; a full page may have dropped older plays
 
 
 class AuthMissing(RuntimeError):
@@ -156,7 +157,7 @@ class Spotify:
                 yield it.get("added_at"), t
 
     def recently_played(self, after_ms: int | None = None) -> list[dict]:
-        p = {"limit": 50}
+        p = {"limit": RECENTLY_PLAYED_LIMIT}
         if after_ms:
             p["after"] = int(after_ms)
         return self.request("GET", "/me/player/recently-played", p).get("items", [])

@@ -48,7 +48,7 @@ Prefer to do it yourself? Read on.
 
 - **An always-on Linux machine with Docker**, x86_64 (Intel or AMD; ARM boards like the Raspberry Pi aren't
   supported yet). It needs about 2 GB of disk for the image, plus room for its data. It should stay on: Spotify
-  only shows haystack your last 50 plays, so it checks every hour.
+  only shows haystack your last 50 plays, so it checks every 15 minutes.
 - **A Spotify account** and a free Spotify developer app (step 2 below), so haystack can manage its playlists.
 - **Optionally, your own music folder** (`.m4a` files). With one, haystack learns your taste from far more songs
   than your Spotify likes. See [Your music folder](#your-music-folder-optional).
@@ -307,6 +307,7 @@ The ones people change most:
 |---|---|---|
 | `batch.size` | `15` | How many new songs each batch brings. |
 | `schedule.batch` | `"Mon 08:00"` | When a new batch arrives. `"Fri 18:00"`, `"Mon,Thu 08:00"` or `"daily 07:00"` work too, in your `TZ`. |
+| `schedule.plays` | `"every 15m"` | How often haystack reads your Spotify plays. Spotify shows it only your last 50, so it checks often. |
 | `library.root` | `""` (none) | Your music folder: `"/music"` in Docker. See [Your music folder](#your-music-folder-optional). |
 | `library.workers`, `library.threads_per_worker` | `6`, `3` | How much CPU the first pass over your music folder gets. On a small VPS, try `1` and `2`. |
 | `batch.expiry_days` | `14` | A discovery you don't like leaves Discoveries after this many days. |
@@ -338,8 +339,9 @@ batch = "Fri 18:00"
 root = "/music"
 ```
 
-`[schedule]` also sets when the other jobs run: `sync` (hourly), `library` (daily 03:15), `harvest` (daily
-05:00) and `harvest_broad` (a wider harvest, Sundays 04:00). Any of them can be `"off"`. Every other setting, including the scoring options, is in
+`[schedule]` also sets when the other jobs run: `sync` (hourly), `plays` (your Spotify plays alone, every 15
+minutes), `library` (daily 03:15), `harvest` (daily 05:00) and `harvest_broad` (a wider harvest, Sundays 04:00).
+Any of them can be `"off"`. Every other setting, including the scoring options, is in
 [docs/reference.md](docs/reference.md).
 
 ## Day to day

@@ -47,8 +47,8 @@ which keeps clear of Spotify's rule against using its content for machine learni
 - needle via AUR (needle's `app/pkgbuild` exists), Flathub, AppImage. First-run screen: server URL + pairing code.
 - The API needs TLS, or docs pointing at Tailscale / a reverse proxy. A bearer token over plain HTTP is only
   acceptable on a trusted LAN.
-- Pro: closest to the current split (ADR 0004, 0006). An always-on server keeps the hourly play sync accurate;
-  `recently-played` returns only the last 50 plays, so a sleeping host loses plays.
+- Pro: closest to the current split (ADR 0004, 0006). An always-on server keeps the 15-minute play poll accurate;
+  `recently-played` returns only the last 50 plays, so a sleeping host loses plays (ADR 0023 records them as gaps).
 - Audience: homelab users.
 
 ### B. All-in-one desktop

@@ -26,8 +26,9 @@ def _logging(log_file: str | None = None, json_out: bool = False) -> None:
                         handlers=handlers, force=True)
 
 
-def job(name: str, fn, needs_spotify: bool = False) -> int:
-    """Run a job, record it in the runs table and status.json. Spotify jobs fail fast without auth."""
+def job(name: str, fn, needs_spotify: bool = False, refresh: bool = True) -> int:
+    """Run a job, record it in the runs table and status.json. Spotify jobs fail fast without auth.
+    refresh=False skips the like rates and gates in status.json (the 15-minute plays job changes neither)."""
     from .spotify import AuthMissing
     con = db.connect()
     started = db.now(); t0 = time.time()
@@ -43,8 +44,9 @@ def job(name: str, fn, needs_spotify: bool = False) -> int:
         log.info("%s done: %s", name, json.dumps(summary, default=str))
         if needs_spotify:
             status.update("auth", {"ok": True, "message": "authorised"})
-        _like_rate(con)
-        _gates(con)
+        if refresh:
+            _like_rate(con)
+            _gates(con)
         return 0
     except AuthMissing as e:
         msg = f"{e}"
@@ -186,6 +188,11 @@ def cmd_score(cfg, a) -> int:
 def cmd_sync(cfg, a) -> int:
     from . import sync
     return job("sync", lambda con: sync.run(con, cfg), needs_spotify=True)
+
+
+def cmd_plays(cfg, a) -> int:
+    from . import sync
+    return job("plays", lambda con: sync.plays(con, cfg), needs_spotify=True, refresh=False)
 
 
 def _print_clear(c: dict) -> None:
@@ -723,6 +730,15 @@ def _candidate_stats(con) -> dict:
     return {"by_state": st, "by_source": src}
 
 
+def _play_gaps(con) -> dict:
+    """Spans where Spotify plays may be missing (ADR 0023): how many, and the latest one."""
+    n = con.execute("SELECT COUNT(*) FROM play_gaps").fetchone()[0]
+    r = con.execute("SELECT from_ms, to_ms, found_at FROM play_gaps ORDER BY to_ms DESC LIMIT 1").fetchone()
+    latest = None if r is None else {"from": db.ms_iso(r[0]) if r[0] else "the start", "to": db.ms_iso(r[1]),
+                                     "found_at": r[2]}
+    return {"count": n, "latest": latest, "tracked_since": db.kv_get(con, "play_gaps_since")}
+
+
 def cmd_status(cfg, a) -> int:
     st = status.read()
     con = db.connect()
@@ -734,6 +750,7 @@ def cmd_status(cfg, a) -> int:
         "review_pending": con.execute("SELECT COUNT(*) FROM liked_map WHERE review='pending'").fetchone()[0],
         "active_offers": con.execute("SELECT COUNT(*) FROM offers WHERE removed_at IS NULL").fetchone()[0],
         "to_rip_open": con.execute("SELECT COUNT(*) FROM to_rip WHERE removed_at IS NULL").fetchone()[0],
+        "play_gaps": _play_gaps(con),
     }
     print(json.dumps(st, indent=1, sort_keys=True, default=str))
     return 0
@@ -925,6 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sync", help="hourly: plays, likes, outcomes, To Rip, token expiry (needs auth)")
     s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("plays", help="every 15 minutes: Spotify plays only, so none are lost (needs auth)")
+    s.set_defaults(fn=cmd_plays)
 
     s = sub.add_parser("batch", help="weekly: clear Discoveries, then add a batch (needs auth)")
     s.add_argument("--size", type=int)

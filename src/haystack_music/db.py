@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS plays (
     PRIMARY KEY (spotify_id, played_at)
 );
 
+-- Spans where Spotify plays may be missing (ADR 0023): a poll got a full page of recently-played, so plays between
+-- the cursor it asked from (from_ms, 0 for none) and the oldest play on the page (to_ms) may have been dropped.
+-- Unix ms, like the cursor. The clear reads a span overlapping a track's time on Discoveries as "unknown".
+CREATE TABLE IF NOT EXISTS play_gaps (
+    from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL, found_at TEXT NOT NULL,
+    PRIMARY KEY (from_ms, to_ms)
+);
+
 CREATE TABLE IF NOT EXISTS liked_map (
     spotify_id TEXT PRIMARY KEY,
     local_id INTEGER,                    -- NULL = not in library
@@ -219,6 +227,11 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def ms_iso(ms: int) -> str:
+    """Unix milliseconds (the plays cursor, play_gaps) as the UTC timestamps the tables use."""
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     path = Path(path or config.DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -277,6 +290,13 @@ def _migrate(con) -> None:
     _add_column(con, "liked_map", "album_id", "INTEGER")           # deezer_id's album, as on candidates
     _add_column(con, "rerank_runs", "loo_auc_no_meta", "REAL")     # the model's AUC without Deezer's metadata
     _add_column(con, "deezer_vectors", "provider", "TEXT NOT NULL DEFAULT 'deezer'")   # whose preview (0.7.0)
+    if kv_get(con, "play_gaps_since") is None:     # gap tracking starts now (ADR 0023)
+        # Plays up to the cursor were polled with nothing watching for a full page: mark that history unknown.
+        after = kv_get(con, "recently_played_after_ms")
+        if after:
+            con.execute("INSERT OR IGNORE INTO play_gaps(from_ms, to_ms, found_at) VALUES(0,?,?)",
+                        (int(after), now()))
+        kv_set(con, "play_gaps_since", now())
 
 
 def kv_get(con, k: str, default=None):

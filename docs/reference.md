@@ -91,9 +91,13 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   the offer as `unplayed` (back in the pool, no negative weight), `keep` leaves them for a later run.
   `--no-penalty` closes every removed offer except likes that same unplayed way. A batch skipped because the
   library embedding is incomplete does not clear.
-* **Unheard by design.** `recently-played` only returns the last 50 plays. The server is always on and syncs
-  hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
-  tracks count as "unplayed" (the conservative direction). Not a bug.
+* **Play gaps (ADR 0023).** `recently-played` only returns the last 50 plays. `haystack plays` polls them every
+  15 minutes (the hourly sync polls too), and Spotify logs a play only after 30 seconds, so 50 cannot pile up
+  between two polls while the server is up. A poll that still gets a full page (after an outage) records the span
+  from its cursor to the oldest play on the page in `play_gaps`: plays there may be missing. A never-played
+  discovery whose time on the playlist overlaps a gap is let off without counting toward retirement. The plays
+  polled before gap tracking began form one gap, from the start to the cursor at that time. `haystack status`
+  shows the count and the latest gap (`live.play_gaps`).
 * **Metric.** Kept rate, overall, per source and per seed (`haystack sources`), and the fuller `haystack report`. A source
   can't be retired before 30 offered tracks. Spotify's plays carry no length, so they say nothing about skips;
   a short, unfinished needle play of an offer or a Calibrate pick is a *soft no* for the re-ranker only (see
@@ -115,6 +119,7 @@ haystack library scan|embed|update   index / embed / both + preview alignment re
 haystack harvest [--sources a,b] [--limit-per-source N]
 haystack score                       re-score the candidate pool
 haystack sync                        hourly job (needs auth)
+haystack plays                       Spotify plays only, every 15 minutes (needs auth)
 haystack batch [--size N] [--dry-run] [--force] [--variant V] [--no-penalty]
                                               [--clear-min-age-hours H] [--clear-recent keep|remove]
                                               weekly job (needs auth): clear Discoveries, then add a batch
@@ -692,6 +697,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
 | harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
 | sync | hourly | plays, likes (songs you now have leave the pool), outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
+| plays | every 15 minutes | Spotify's recently played alone, so its last 50 never overflow; a full page is recorded as a play gap | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |
@@ -703,7 +709,8 @@ next to a scheduled one shares it.
 ### `haystack serve` (the container)
 
 One process: needle's API in a thread, and a scheduler that starts each job as a child process at the times in
-`[schedule]` (`hourly`, `daily HH:MM`, `Mon HH:MM` with comma-separated days, or `off`), in local time (`TZ`).
+`[schedule]` (`every Nm` with N dividing 60, on the hour's marks; `hourly`, `daily HH:MM`, `Mon HH:MM` with
+comma-separated days, or `off`), in local time (`TZ`).
 
 * A run missed while haystack was down starts when it comes back. The last start of each job comes from the
   database's `runs` table, which the units write too, so moving from the units to the container doesn't replay a
@@ -727,7 +734,7 @@ three hours.
 
 ### systemd user units (no container)
 
-`systemd/` holds the five oneshot services + timers above (all `Persistent=true`, `Nice=19`,
+`systemd/` holds the six oneshot services + timers above (all `Persistent=true`, `Nice=19`,
 `IOSchedulingClass=idle`), the one-shot `haystack-first-batch.service` (via `OnSuccess=` of the library unit,
 `ConditionPathExists=!` on `first-batch.done`) and the always-on `haystack-api.service`. They ignore `[schedule]`.
 
@@ -740,7 +747,7 @@ ln -s ~/.local/share/haystack/venv/bin/haystack ~/.local/bin/haystack
 haystack models fetch
 systemctl --user enable --now haystack-library.timer haystack-harvest.timer haystack-harvest-broad.timer
 # after `haystack auth`:
-systemctl --user enable --now haystack-sync.timer haystack-batch.timer
+systemctl --user enable --now haystack-sync.timer haystack-plays.timer haystack-batch.timer
 systemctl --user enable --now haystack-api.service   # needle
 ```
 Turn on lingering once (`sudo loginctl enable-linger $USER`) so the timers run without a login session. Times
