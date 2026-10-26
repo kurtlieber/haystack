@@ -110,6 +110,14 @@ _Avoid_: like rate (liked over decided, without the Ratings), hit rate
 A short, unfinished play in needle of a Discoveries pick or a Calibrate track that has no verdict. It counts a little against the track for the re-ranker only; it is not a verdict and changes nothing in Spotify.
 _Avoid_: skip, Pass, implicit verdict
 
+**Unplayed**:
+A Discoveries pick that left the playlist unliked with nothing learned about it: never played (from Spotify or needle) since it was added, or let off because it arrived less than a day before the clear. It is not a verdict and counts nothing against the song; it goes back to the pool. A never-played pick counts toward retirement, so a second time retires it, unless a Play gap means a play may be missing (ADR 0023).
+_Avoid_: no, Pass, expired, skipped
+
+**Play gap**:
+A span of time in which some of the listener's Spotify plays may be missing, because Spotify returned a full page of its last 50 when the server asked. A never-played pick whose time in Discoveries overlaps one is not counted toward its retirement (ADR 0023).
+_Avoid_: outage, missed sync, hole
+
 **Confidence**:
 The re-ranker's chance, 0–1, that the listener keeps a Discoveries pick (rates it 3★ or more, or likes it with no Rating). A top pick of a re-ranked batch has one, and so does a Calibrate track whenever the re-ranker has a fitted model; a client may show it as a percentage.
 _Avoid_: score (the similarity the picks start from), match, certainty

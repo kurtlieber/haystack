@@ -5,10 +5,18 @@ track missing from the playlist whose offer is still active (that path sets outc
 the negative penalty treats as a rejection).
 
 A track in Liked Songs keeps that positive: the offer is closed as liked and no verdict is recorded.
-Any other track on the playlist for at least batch.clear_min_age_hours (default 24) gets a Pass (verdict source
-'playlist', effects skipped: the clear makes its own Spotify write) and its offer is closed as negative. A track
-the listener already gave a verdict (needle, the CLI) keeps it: its heart may simply not be written yet. Younger tracks
-follow batch.clear_recent:
+Any other track on the playlist for at least batch.clear_min_age_hours (default 24) splits three ways on the play
+log (ADR 0023; the clear polls plays first, so the log reaches the moment of the clear):
+
+  played        a play since it was added (Spotify's or needle's): a Pass (verdict source 'playlist', effects
+                skipped: the clear makes its own Spotify write) and the offer is closed as negative
+  never_played  no play, and no gap in the log (play_gaps) over its time on the playlist: closed as unplayed, back
+                in the pool with no negative, and unplayed_expiries goes up as at the 14-day expiry; it retires at
+                batch.max_unplayed_expiries
+  unknown       no play, but a gap overlaps: closed as unplayed without counting
+
+A track the listener already gave a verdict (needle, the CLI) keeps it: its heart may simply not be written yet.
+Younger tracks follow batch.clear_recent:
 
   remove  take them off and close the offer as unplayed (back in the pool, no negative). The weekly unit pins this.
   keep    leave them in Discoveries until a later run
@@ -22,7 +30,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from . import db, feedback, verdicts
+from . import config, db, feedback, verdicts
 from .spotify import Spotify
 
 log = logging.getLogger("haystack_music.clear")
@@ -42,7 +50,10 @@ CREATE TABLE IF NOT EXISTS clear_pending (
 );
 """
 
-_REMOVED_REASON = {"liked": "liked", "unliked": "clear_no", "recent": "unplayed", "unplayed": "unplayed"}
+_REMOVED_REASON = {"liked": "liked", "unliked": "clear_no", "recent": "unplayed", "unplayed": "unplayed",
+                   "never_played": "never_played", "unknown": "unplayed"}
+_UNPLAYED = ("recent", "unplayed", "never_played", "unknown")      # the reasons that close as unplayed
+_COUNTS = ("feedback", "unlinked", "liked", "no", "recent_removed", "unplayed", "never_played", "unknown", "retired")
 
 
 def ensure(con) -> None:
@@ -89,6 +100,9 @@ def _summary(min_age: float, recent: str, dry_run: bool, no_penalty: bool) -> di
         "liked": 0,
         "no": 0,
         "unplayed": 0,
+        "never_played": 0,
+        "unknown": 0,
+        "retired": 0,
         "recent_removed": 0,
         "recent_kept": 0,
         "removed": 0,
@@ -157,8 +171,22 @@ def _collapse(items: list[dict]) -> list[dict]:
     return list(by.values())
 
 
+def _heard(con, sid: str, added_at: str | None, now: datetime) -> str:
+    """'played' when the play log has a play of the track since it was added (Spotify's or needle's), 'never' when it
+    has none and no gap (play_gaps) overlaps its time on the playlist, 'unknown' when one does. With no known
+    added_at, any play counts, and no play is unknown."""
+    if added_at is None:
+        return "played" if con.execute("SELECT 1 FROM plays WHERE spotify_id=? LIMIT 1", (sid,)).fetchone() \
+            else "unknown"
+    if con.execute("SELECT 1 FROM plays WHERE spotify_id=? AND played_at>=? LIMIT 1", (sid, added_at)).fetchone():
+        return "played"
+    added_ms, now_ms = int(_parse(added_at).timestamp() * 1000), int(now.timestamp() * 1000)
+    gap = con.execute("SELECT 1 FROM play_gaps WHERE to_ms>? AND from_ms<? LIMIT 1", (added_ms, now_ms)).fetchone()
+    return "unknown" if gap else "never"
+
+
 def _classify(added_at: str | None, liked: bool, min_age: float, recent_mode: str, now: datetime,
-              no_penalty: bool) -> dict:
+              no_penalty: bool, heard: str = "played") -> dict:
     if liked:
         return {"reason": "liked", "verdict": None, "keep": False, "age_unknown": False, "recent": False}
     parsed = _parse(added_at)
@@ -169,6 +197,11 @@ def _classify(added_at: str | None, liked: bool, min_age: float, recent_mode: st
     # Recent removals, and every non-like when --no-penalty is set, close as unplayed.
     if is_recent or no_penalty:
         return {"reason": "unplayed", "verdict": None, "keep": False, "age_unknown": False, "recent": is_recent}
+    # Old enough to judge: a no only if it was heard (ADR 0023).
+    if heard == "never":
+        return {"reason": "never_played", "verdict": None, "keep": False, "age_unknown": unknown, "recent": False}
+    if heard == "unknown":
+        return {"reason": "unknown", "verdict": None, "keep": False, "age_unknown": unknown, "recent": False}
     return {"reason": "unliked", "verdict": "no", "keep": False, "age_unknown": unknown, "recent": False}
 
 
@@ -190,24 +223,40 @@ def _row_recent(r) -> bool:
         return False
 
 
-def _close_unplayed(con, sid: str, cid: int | None, ts: str) -> None:
+def _close_unplayed(con, sid: str, cid: int | None, ts: str, max_unplayed: int | None = None) -> bool:
     """Close like an unplayed expiry: the candidate returns to the pool and carries no negative weight.
 
-    Unlike the 14-day expiry, this does not increment unplayed_expiries, so a clear never retires the track.
+    Without max_unplayed (a recent track, --no-penalty, or plays unknown for a gap) unplayed_expiries is left alone,
+    so the close never retires the track. With it (surely never played, ADR 0023) closing the active offer counts as
+    the 14-day expiry does: unplayed_expiries goes up and the candidate retires at max_unplayed; a retry with the
+    offer already closed counts nothing. True when it retired.
     A Pass from an earlier clear is dropped; a verdict the listener gave is left alone.
     """
     verdicts.retract_playlist_no(con, sid)
+    closed = con.execute("""UPDATE offers SET removed_at=?, outcome='unplayed'
+                            WHERE spotify_id=? AND removed_at IS NULL""", (ts, sid)).rowcount
+    retired = False
     if cid and not verdicts.judged_elsewhere(con, sid):
-        con.execute("UPDATE candidates SET state='pool' WHERE id=? AND state!='liked'", (cid,))
+        if max_unplayed is None:
+            con.execute("UPDATE candidates SET state='pool' WHERE id=? AND state!='liked'", (cid,))
+        elif closed:
+            row = con.execute("SELECT unplayed_expiries FROM candidates WHERE id=? AND state!='liked'",
+                              (cid,)).fetchone()
+            if row:
+                n = (row[0] or 0) + 1
+                retired = n >= max_unplayed
+                con.execute("UPDATE candidates SET unplayed_expiries=?, state=? WHERE id=?",
+                            (n, "retired" if retired else "pool", cid))
+        else:       # no active offer left: a retry after the Spotify delete failed, and the first pass counted it
+            con.execute("UPDATE candidates SET state='pool' WHERE id=? AND state NOT IN ('liked', 'retired')", (cid,))
         con.execute("""UPDATE candidates SET exclude_reason=NULL WHERE id=? AND (exclude_reason LIKE 'verdict:%'
                        OR exclude_reason LIKE 'playlist feedback:%')""", (cid,))
-    con.execute("""UPDATE offers SET removed_at=?, outcome='unplayed'
-                   WHERE spotify_id=? AND removed_at IS NULL""", (ts, sid))
+    return retired
 
 
-def _finalize(con, playlist_id: str, rows) -> dict:
+def _finalize(con, playlist_id: str, rows, max_unplayed: int) -> dict:
     """Commit verdicts and offer outcomes. Idempotent. Call this before the Spotify delete."""
-    counts = {"feedback": 0, "unlinked": 0, "liked": 0, "no": 0, "recent_removed": 0, "unplayed": 0}
+    counts = dict.fromkeys(_COUNTS, 0)
     if not rows:
         return counts
     ts = db.now()
@@ -222,11 +271,14 @@ def _finalize(con, playlist_id: str, rows) -> dict:
                     con.execute("UPDATE candidates SET state='liked' WHERE id=?", (cid,))
                 con.execute("""UPDATE offers SET removed_at=?, outcome='liked'
                                WHERE spotify_id=? AND removed_at IS NULL""", (ts, sid))
-            elif reason in ("recent", "unplayed"):
+            elif reason in _UNPLAYED:
                 counts["unplayed"] += 1
                 if reason == "recent" or _row_recent(r):
                     counts["recent_removed"] += 1
-                _close_unplayed(con, sid, cid, ts)
+                if reason in ("never_played", "unknown"):
+                    counts[reason] += 1
+                counts["retired"] += _close_unplayed(con, sid, cid, ts,
+                                                     max_unplayed if reason == "never_played" else None)
             else:
                 counts["no"] += 1
                 con.execute("""UPDATE offers SET removed_at=?, outcome='negative'
@@ -248,20 +300,24 @@ def _finalize(con, playlist_id: str, rows) -> dict:
     return _tx(con, apply)
 
 
-def reconcile_pending(con, playlist_id: str, present_ids: set[str]) -> dict:
+def reconcile_pending(con, playlist_id: str, present_ids: set[str], max_unplayed: int | None = None) -> dict:
     """Finish bookkeeping for a clear whose Spotify delete already happened."""
     ensure(con)
-    empty = {"reconciled": 0, "feedback": 0, "unlinked": 0, "liked": 0, "no": 0, "recent_removed": 0, "unplayed": 0}
+    if max_unplayed is None:
+        max_unplayed = config.DEFAULTS["batch"]["max_unplayed_expiries"]
+    empty = {"reconciled": 0, **dict.fromkeys(_COUNTS, 0)}
     if not playlist_id:
         return empty
     rows = con.execute("SELECT * FROM clear_pending WHERE playlist_id=?", (playlist_id,)).fetchall()
     due = [r for r in rows if r["spotify_id"] not in present_ids]
     if not due:
         return empty
-    counts = _finalize(con, playlist_id, due)
+    counts = _finalize(con, playlist_id, due, max_unplayed)
     counts["reconciled"] = len(due)
-    log.info("clear discoveries: reconciled %d track(s) already removed (liked=%d no=%d recent_removed=%d feedback=%d)",
-             counts["reconciled"], counts["liked"], counts["no"], counts["recent_removed"], counts["feedback"])
+    log.info("clear discoveries: reconciled %d track(s) already removed (liked=%d no=%d unplayed=%d never_played=%d "
+             "unknown=%d retired=%d recent_removed=%d feedback=%d)", counts["reconciled"], counts["liked"],
+             counts["no"], counts["unplayed"], counts["never_played"], counts["unknown"], counts["retired"],
+             counts["recent_removed"], counts["feedback"])
     return counts
 
 
@@ -274,13 +330,15 @@ def clear_discoveries(con, cfg: dict, sp: Spotify | None = None, *, playlist_id:
                       resolve_playlist: bool = True, min_age_hours: float | None = None,
                       recent: str | None = None, no_penalty: bool | None = None, dry_run: bool = False,
                       now: datetime | None = None) -> dict:
-    """Remove every Discoveries track. Liked Songs stay positives; older unliked tracks get a normal no.
+    """Remove every Discoveries track. Liked Songs stay positives; older unliked tracks get a normal no if they
+    were played, and close as unplayed if not (never_played counts toward retiring them; unknown does not).
 
     recent='keep' leaves tracks younger than min_age_hours in the playlist. recent='remove' (default)
     takes those tracks off and closes them as unplayed. no_penalty closes every non-like the same way.
-    Outcomes are committed before the Spotify delete. dry_run reads Spotify and writes nothing.
+    Outcomes are committed before the Spotify delete. dry_run reads Spotify and writes nothing (nor polls plays).
     """
     min_age, recent_mode, no_penalty = _options(cfg, min_age_hours, recent, no_penalty)
+    max_unplayed = cfg["batch"]["max_unplayed_expiries"]
     now = now or datetime.now(timezone.utc)
     summary = _summary(min_age, recent_mode, dry_run, no_penalty)
     ensure(con)
@@ -296,8 +354,10 @@ def clear_discoveries(con, cfg: dict, sp: Spotify | None = None, *, playlist_id:
     items = list(sp.playlist_items(playlist_id))
     present = {it["spotify_id"] for it in items if it.get("spotify_id")}
     if not dry_run:
-        _bump(summary, reconcile_pending(con, playlist_id, present),
-              ("reconciled", "feedback", "unlinked", "liked", "no", "recent_removed", "unplayed"))
+        _bump(summary, reconcile_pending(con, playlist_id, present, max_unplayed), ("reconciled", *_COUNTS))
+        # Plays up to now, so a song heard since the last 15-minute poll is not read as never played.
+        from .sync import poll_plays
+        poll_plays(con, sp)
 
     tracks = _collapse(items)
     summary["items"] = len(items)
@@ -311,18 +371,23 @@ def clear_discoveries(con, cfg: dict, sp: Spotify | None = None, *, playlist_id:
     for t in tracks:
         sid = t["spotify_id"]
         added = _added_at(con, sid, t.get("added_at"))
-        decision = _classify(added, bool(saved.get(sid)), min_age, recent_mode, now, no_penalty)
+        decision = _classify(added, bool(saved.get(sid)), min_age, recent_mode, now, no_penalty,
+                             _heard(con, sid, added, now))
         cand = None if decision["keep"] else _candidate(con, sid, t)
         if decision["keep"]:
             summary["recent_kept"] += 1
         elif decision["reason"] == "liked":
             summary["liked"] += 1
             summary["would_remove"] += 1
-        elif decision["reason"] == "unplayed":
+        elif decision["reason"] in _UNPLAYED:
             summary["unplayed"] += 1
             summary["would_remove"] += 1
             if decision["recent"]:
                 summary["recent_removed"] += 1
+            if decision["reason"] in ("never_played", "unknown"):
+                summary[decision["reason"]] += 1
+            if decision["age_unknown"]:
+                summary["age_unknown"] += 1
         else:
             summary["no"] += 1
             summary["would_remove"] += 1
@@ -332,12 +397,13 @@ def clear_discoveries(con, cfg: dict, sp: Spotify | None = None, *, playlist_id:
                 summary["unlinked"] += 1
         plan.append((sid, added, decision, cand))
 
-    log.info("clear discoveries: items=%d tracks=%d liked=%d no=%d unplayed=%d recent_removed=%d recent_kept=%d "
-             "would_remove=%d unlinked=%d age_unknown=%d reconciled=%d dry_run=%s min_age_hours=%s recent=%s "
-             "no_penalty=%s",
+    log.info("clear discoveries: items=%d tracks=%d liked=%d no=%d unplayed=%d never_played=%d unknown=%d "
+             "recent_removed=%d recent_kept=%d would_remove=%d unlinked=%d age_unknown=%d reconciled=%d dry_run=%s "
+             "min_age_hours=%s recent=%s no_penalty=%s",
              summary["items"], summary["tracks"], summary["liked"], summary["no"], summary["unplayed"],
-             summary["recent_removed"], summary["recent_kept"], summary["would_remove"], summary["unlinked"],
-             summary["age_unknown"], summary["reconciled"], dry_run, min_age, recent_mode, no_penalty)
+             summary["never_played"], summary["unknown"], summary["recent_removed"], summary["recent_kept"],
+             summary["would_remove"], summary["unlinked"], summary["age_unknown"], summary["reconciled"], dry_run,
+             min_age, recent_mode, no_penalty)
     if dry_run:
         return summary
 
@@ -352,14 +418,16 @@ def clear_discoveries(con, cfg: dict, sp: Spotify | None = None, *, playlist_id:
     rows = [{"spotify_id": sid, "reason": decision["reason"], "verdict": decision["verdict"],
              "candidate_id": None if cand is None else cand["id"], "recent": decision["recent"]}
             for sid, _, decision, cand in plan if not decision["keep"]]
-    done = _finalize(con, playlist_id, rows)
+    done = _finalize(con, playlist_id, rows, max_unplayed)
     summary["feedback"] += done["feedback"]
+    summary["retired"] += done["retired"]
     remove_ids = [r["spotify_id"] for r in rows]
     if not remove_ids:
         return summary
     snap = sp.playlist(playlist_id).get("snapshot_id")
     sp.remove_items(playlist_id, remove_ids, snap)
     summary["removed"] = len(remove_ids)
-    log.info("clear discoveries: removed=%d feedback=%d unplayed=%d no_penalty=%s",
-             summary["removed"], summary["feedback"], summary["unplayed"], no_penalty)
+    log.info("clear discoveries: removed=%d feedback=%d unplayed=%d never_played=%d unknown=%d retired=%d "
+             "no_penalty=%s", summary["removed"], summary["feedback"], summary["unplayed"], summary["never_played"],
+             summary["unknown"], summary["retired"], no_penalty)
     return summary

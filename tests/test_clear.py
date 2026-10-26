@@ -1,14 +1,14 @@
 """Discoveries clear: mocked Spotify only. Never talks to the live API."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from haystack_music import config, db, feedback, vectors
-from haystack_music.clear import clear_discoveries
-from haystack_music.cli import build_parser
+from haystack_music.clear import clear_discoveries, reconcile_pending
+from haystack_music.cli import _print_clear, build_parser
 from haystack_music.matching import Index
 from haystack_music.textnorm import song_key
 
@@ -29,6 +29,12 @@ class FakeSpotify:
         self.snapshot_ids = []
         self.fail = None  # "before" | "after" | None
         self.on_remove = None
+        self.plays = []   # recently-played items the clear's poll gets
+        self.polls = 0
+
+    def recently_played(self, after_ms=None):
+        self.polls += 1
+        return [dict(x) for x in self.plays]
 
     def playlist_items(self, pid):
         assert pid == PID
@@ -66,7 +72,24 @@ def _cfg(tmp_path, text=""):
     return config.load(p)
 
 
-def _add(con, cid, sid, artist, title, added_at, *, offer=True, playlist_add=True):
+def _ms(ts):
+    return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def _play(con, sid, at, context="spotify:playlist:x"):
+    con.execute("INSERT INTO plays(spotify_id, played_at, context) VALUES(?,?,?)", (sid, at, context))
+
+
+def _gap(con, start, end):
+    con.execute("INSERT INTO play_gaps(from_ms, to_ms, found_at) VALUES(?,?,?)", (_ms(start), _ms(end), db.now()))
+
+
+def _add(con, cid, sid, artist, title, added_at, *, offer=True, playlist_add=True, played=True):
+    """A Discoveries track. played: the play log has a play an hour after it was added, so an old unliked one is a
+    no (without one it is never played, ADR 0023)."""
+    if played:
+        at = datetime.fromisoformat(added_at.replace("Z", "+00:00")) + timedelta(hours=1)
+        _play(con, sid, at.strftime("%Y-%m-%dT%H:%M:%SZ"))
     con.execute("""INSERT INTO candidates(id, deezer_id, artist, title, song_key, source, state, spotify_id, vector_status)
                    VALUES(?,?,?,?,?,?,?,?,?)""",
                 (cid, cid, artist, title, song_key(artist, title), "deezer_chart", "offered", sid, "ok"))
@@ -223,6 +246,7 @@ def test_duplicate_rows_use_the_earliest_add_and_one_verdict(tmp_path):
 
 def test_unlinked_track_is_removed_with_no_feedback_row(tmp_path):
     con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _play(con, "nocandidate0000000001", "2026-10-02T12:00:00Z")
     sp = FakeSpotify([_item("nocandidate0000000001", OLD, "Ghost", ["Nobody"])])
     out = _clear(con, cfg, sp)
     assert out["no"] == 1 and out["unlinked"] == 1 and out["feedback"] == 0 and out["removed"] == 1
@@ -530,3 +554,142 @@ def test_clear_pass_skips_its_own_spotify_writes(tmp_path):
     _add(con, 1, "oldtrack00000000000001", "Old", "Track", OLD)
     _clear(con, cfg, FakeSpotify([_item("oldtrack00000000000001", OLD)]))
     assert verdicts.pending(con) == []
+
+
+# ---- played, never played, unknown (ADR 0023) ----
+
+def _expiries(con, cid):
+    return tuple(con.execute("SELECT state, unplayed_expiries FROM candidates WHERE id=?", (cid,)).fetchone())
+
+
+def test_never_played_is_unplayed_not_a_no_and_retires_on_the_second(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "EMB_DIR", tmp_path / "emb")
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "played0000000000000001", "Heard", "It", OLD)
+    _add(con, 2, "never00000000000000001", "Never", "Heard", OLD, played=False)
+    for i in (1, 2):
+        vectors.put_deezer_vector(con, i, np.ones(512, np.float32) * i, np.zeros(1280), 1, 30.0)
+    _play(con, "never00000000000000001", "2026-09-30T12:00:00Z")      # before it was added: not a play of the offer
+    sp = FakeSpotify([_item("played0000000000000001", OLD), _item("never00000000000000001", OLD)])
+    out = _clear(con, cfg, sp)
+    assert out["no"] == 1 and out["feedback"] == 1
+    assert out["unplayed"] == 1 and out["never_played"] == 1 and out["unknown"] == 0 and out["retired"] == 0
+    assert set(sp.removed) == {"played0000000000000001", "never00000000000000001"}
+    assert [r["spotify_id"] for r in _feedback(con)] == ["played0000000000000001"]
+    assert _offer(con, "played0000000000000001")["outcome"] == "negative"
+    assert _offer(con, "never00000000000000001")["outcome"] == "unplayed"
+    assert _expiries(con, 2) == ("pool", 1)
+    assert con.execute("SELECT removed_reason FROM playlist_adds WHERE spotify_id='never00000000000000001'"
+                       ).fetchone()[0] == "never_played"
+    assert [n["candidate_id"] for n in vectors.negatives(con, cfg)] == [1]
+    # offered again a week later and ignored again: the second never-played close retires it (max_unplayed_expiries 2)
+    week = "2026-10-12T12:00:00Z"
+    con.execute("UPDATE candidates SET state='offered' WHERE id=2")
+    con.execute("INSERT INTO offers(candidate_id, spotify_id, source, added_at) VALUES(2,?,?,?)",
+                ("never00000000000000001", "deezer_chart", week))
+    sp2 = FakeSpotify([_item("never00000000000000001", week)])
+    out2 = _clear(con, cfg, sp2, now=NOW + timedelta(days=7))
+    assert out2["never_played"] == 1 and out2["retired"] == 1 and out2["no"] == 0
+    assert _expiries(con, 2) == ("retired", 2)
+    assert _feedback(con) == [r for r in _feedback(con) if r["spotify_id"] == "played0000000000000001"]
+
+
+def test_a_gap_over_its_time_leaves_it_unknown_and_uncounted(tmp_path):
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "gapped0000000000000001", "Gap", "Over", OLD, played=False)
+    _add(con, 2, "before0000000000000001", "Gap", "Before", OLD, played=False)
+    _gap(con, "2026-10-05T10:00:00Z", "2026-10-05T11:00:00Z")      # inside its time on the playlist
+    _gap(con, "2026-09-01T00:00:00Z", "2026-10-01T11:00:00Z")      # ends before either was added
+    _gap(con, "2026-10-12T12:30:00Z", "2026-10-12T13:00:00Z")      # after the clear
+    con.execute("UPDATE offers SET added_at='2026-10-06T00:00:00Z' WHERE spotify_id='before0000000000000001'")
+    sp = FakeSpotify([_item("gapped0000000000000001", OLD), _item("before0000000000000001", "2026-10-06T00:00:00Z")])
+    out = _clear(con, cfg, sp)
+    assert out["unknown"] == 1 and out["never_played"] == 1 and out["unplayed"] == 2 and out["no"] == 0
+    assert _offer(con, "gapped0000000000000001")["outcome"] == "unplayed"
+    assert _expiries(con, 1) == ("pool", 0)
+    assert _expiries(con, 2) == ("pool", 1)
+    assert _feedback(con) == []
+    assert con.execute("SELECT removed_reason FROM playlist_adds WHERE spotify_id='gapped0000000000000001'"
+                       ).fetchone()[0] == "unplayed"
+
+
+def test_a_needle_play_counts_and_the_clear_polls_plays_first(tmp_path):
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "needle0000000000000001", "In", "Needle", OLD, played=False)
+    _add(con, 2, "spotify000000000000001", "Just", "Now", OLD, played=False)
+    _play(con, "needle0000000000000001", "2026-10-03T09:00:00Z", context="needle")
+    sp = FakeSpotify([_item("needle0000000000000001", OLD), _item("spotify000000000000001", OLD)])
+    sp.plays = [{"played_at": "2026-10-12T11:55:00.000Z", "context": None,
+                 "track": {"id": "spotify000000000000001", "name": "Now", "artists": [{"name": "Just"}],
+                           "album": {}, "duration_ms": 1000}}]
+    dry = _clear(con, cfg, sp, dry_run=True)
+    assert sp.polls == 0 and dry["no"] == 1 and dry["never_played"] == 1        # a dry run writes no plays
+    out = _clear(con, cfg, sp)
+    assert sp.polls == 1
+    assert out["no"] == 2 and out["never_played"] == 0 and out["feedback"] == 2
+    assert con.execute("SELECT COUNT(*) FROM plays WHERE spotify_id='spotify000000000000001'").fetchone()[0] == 1
+
+
+def test_dry_run_counts_the_three_ways(tmp_path, caplog, capsys):
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "played0000000000000001", "A", "A", OLD)
+    _add(con, 2, "never00000000000000001", "B", "B", OLD, played=False)
+    _add(con, 3, "gapped0000000000000001", "C", "C", "2026-10-05T00:00:00Z", played=False)
+    _gap(con, "2026-10-06T00:00:00Z", "2026-10-06T01:00:00Z")
+    con.execute("UPDATE offers SET added_at='2026-10-06T02:00:00Z' WHERE spotify_id='never00000000000000001'")
+    sp = FakeSpotify([_item("played0000000000000001", OLD), _item("never00000000000000001", "2026-10-06T02:00:00Z"),
+                      _item("gapped0000000000000001", "2026-10-05T00:00:00Z")])
+    caplog.set_level(logging.INFO)
+    out = _clear(con, cfg, sp, dry_run=True)
+    assert (out["no"], out["never_played"], out["unknown"], out["unplayed"], out["would_remove"]) == (1, 1, 1, 2, 3)
+    assert out["removed"] == 0 and sp.remove_calls == 0
+    assert "never_played=1" in caplog.text and "unknown=1" in caplog.text
+    assert con.execute("SELECT COUNT(*) FROM offers WHERE removed_at IS NULL").fetchone()[0] == 3
+    assert _expiries(con, 2) == ("offered", 0)
+    _print_clear(out)
+    printed = capsys.readouterr().out
+    assert "no 1 unplayed 2 never_played 1 unknown 1" in printed
+
+
+def test_a_retry_does_not_count_a_never_played_track_twice(tmp_path):
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "never00000000000000001", "Never", "Heard", OLD, played=False)
+    sp = FakeSpotify([_item("never00000000000000001", OLD)])
+    sp.fail = "before"
+    with pytest.raises(RuntimeError, match="spotify down"):
+        _clear(con, cfg, sp)
+    assert _expiries(con, 1) == ("pool", 1)
+    sp.fail = None
+    out = _clear(con, cfg, sp)
+    assert out["removed"] == 1 and out["never_played"] == 1 and out["retired"] == 0
+    assert _expiries(con, 1) == ("pool", 1)
+
+
+def test_pending_rows_with_the_new_reasons_reconcile(tmp_path):
+    con, cfg = _db(tmp_path), _cfg(tmp_path)
+    _add(con, 1, "never00000000000000001", "Never", "Heard", OLD, played=False)
+    _add(con, 2, "gapped0000000000000001", "Gap", "Over", OLD, played=False)
+    con.execute("UPDATE candidates SET unplayed_expiries=1 WHERE id=1")
+    for cid, sid, reason in ((1, "never00000000000000001", "never_played"), (2, "gapped0000000000000001", "unknown")):
+        con.execute("""INSERT INTO clear_pending(playlist_id, spotify_id, reason, verdict, candidate_id, added_at,
+                       created_at) VALUES(?,?,?,NULL,?,?,?)""", (PID, sid, reason, cid, OLD, db.now()))
+    out = reconcile_pending(con, PID, set(), cfg["batch"]["max_unplayed_expiries"])
+    assert out["reconciled"] == 2 and out["unplayed"] == 2 and out["no"] == 0 and out["feedback"] == 0
+    assert out["never_played"] == 1 and out["unknown"] == 1 and out["retired"] == 1
+    assert _expiries(con, 1) == ("retired", 2) and _expiries(con, 2) == ("pool", 0)
+    assert {_offer(con, s)["outcome"] for s in ("never00000000000000001", "gapped0000000000000001")} == {"unplayed"}
+    reasons = dict(con.execute("SELECT spotify_id, removed_reason FROM playlist_adds"))
+    assert reasons == {"never00000000000000001": "never_played", "gapped0000000000000001": "unplayed"}
+    assert con.execute("SELECT COUNT(*) FROM clear_pending").fetchone()[0] == 0
+    assert _feedback(con) == []
+
+
+def test_no_penalty_and_recent_still_never_count(tmp_path):
+    con = _db(tmp_path)
+    cfg = _cfg(tmp_path, "[batch]\nclear_no_penalty = true\n")
+    _add(con, 1, "never00000000000000001", "Never", "Heard", OLD, played=False)
+    _add(con, 2, "recent0000000000000001", "New", "One", RECENT, played=False)
+    sp = FakeSpotify([_item("never00000000000000001", OLD), _item("recent0000000000000001", RECENT)])
+    out = _clear(con, cfg, sp)
+    assert out["unplayed"] == 2 and out["never_played"] == 0 and out["unknown"] == 0 and out["recent_removed"] == 1
+    assert _expiries(con, 1) == ("pool", 0) and _expiries(con, 2) == ("pool", 0)

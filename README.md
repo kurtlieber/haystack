@@ -7,8 +7,8 @@ haystack finds new music for your Spotify account by **how it sounds**. It liste
 candidates from Deezer, ListenBrainz and [more places](#more-places-to-look-optional). Once a week it puts the closest matches into a private **Discoveries**
 playlist in your Spotify account.
 
-You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Let one sit
-in Discoveries and it counts as a no. The next week's picks get better.
+You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Play one
+and leave it in Discoveries and it counts as a no. The next week's picks get better.
 
 For a detailed explanation of how haystack works, and what the seven Traits needle shows (tempo, valence,
 energy and the rest) mean, see [How haystack works](docs/how-it-works.md).
@@ -359,10 +359,13 @@ ahead (in `status`, and as an alert if alerts are on). Run `docker compose exec 
 paste the address back, as in step 5.
 
 **What counts as yes and no.** A Discoveries song you like in Spotify is a yes: it leaves Discoveries at the next
-hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song still in
-Discoveries when the next batch comes is a no, played or not, because the playlist is meant to be listened
-through. Songs added less than a day before are let off. Ratings in needle (1 to 5 stars, Pass, Dislike) count
-too, and say more than a like. A discovery you skip in needle after 5 seconds but within 30 counts as a gentle no.
+hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song you played that is
+still in Discoveries when the next batch comes is a no. A song you never played is not a no: it leaves
+Discoveries and may come back in a later batch, and once it has gone unplayed twice haystack stops offering it. If
+haystack missed some of your plays while the song was there (more than 50 between two checks), it can't tell, so
+the song is let off without counting. Songs added less than a day before are let off too. Ratings in needle (1 to
+5 stars, Pass, Dislike) count too, and say more than a like. A discovery you skip in needle after 5 seconds but
+within 30 counts as a gentle no.
 
 Without Docker, haystack runs as systemd user services on any Linux machine with Python 3.14 and ffmpeg. See
 [docs/reference.md](docs/reference.md#running-it), which also covers every command, how the scoring works and

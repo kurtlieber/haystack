@@ -129,7 +129,7 @@ CREATE INDEX IF NOT EXISTS playlist_adds_active ON playlist_adds(playlist, remov
 CREATE TABLE IF NOT EXISTS clear_pending (
     playlist_id TEXT NOT NULL,
     spotify_id TEXT NOT NULL,
-    reason TEXT NOT NULL,                -- liked | unliked | recent
+    reason TEXT NOT NULL,                -- liked | unliked | recent | unplayed | never_played | unknown
     verdict TEXT,                        -- 'no' or NULL (liked and recent record nothing)
     candidate_id INTEGER,
     added_at TEXT,

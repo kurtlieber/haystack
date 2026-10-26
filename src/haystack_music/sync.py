@@ -312,7 +312,7 @@ def process_offers(con, sp: Spotify, cfg: dict, pl: dict, lib: Index) -> dict:
         # A clear already deleted these tracks and crashed before recording verdicts. Finish that,
         # so the absence is not read as the listener removing them by hand.
         from .clear import reconcile_pending
-        reconcile_pending(con, pid, in_playlist)
+        reconcile_pending(con, pid, in_playlist, max_unplayed)
         active = con.execute("SELECT * FROM offers WHERE removed_at IS NULL").fetchall()
         c["active"] = len(active)
         if not active:

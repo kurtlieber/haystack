@@ -79,14 +79,20 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   own playlists are edited only by a Swap you make in needle (ADR 0022).
 * **Outcomes.** Liked discovery -> removed from Discoveries at once, positive (higher weight), added to To Rip
   if not in the library. After 14 days unliked -> removed: played = negative; unplayed = back to the pool with no
-  penalty, retired after 2 unplayed expiries.
+  penalty, retired after 2 unplayed expiries. The clear before each batch makes the same split, with a third case
+  for missed plays (below).
 * **Clear before each batch.** `batch` and `first-batch` empty Discoveries before adding tracks. The offer
   outcome is committed before the Spotify delete, so the hourly sync cannot mark the removal
   `manual_removed`. A track in Liked Songs keeps that positive: the offer is closed as `liked` and no verdict
   is written. Every other track that has been on the playlist for at least `batch.clear_min_age_hours`
-  (default 24) gets a normal `no` in `feedback` (source `playlist`, weight 1) and the offer is closed as
-  `negative`. Discoveries is meant to be heard through the playlist, so a track you did not like is a no, played
-  or not.
+  (default 24) is judged by its plays since it was added: any `plays` row, Spotify or needle. The clear polls
+  Spotify's plays first, so the last 15 minutes count (ADR 0023).
+  - Played: a normal `no` in `feedback` (source `playlist`, weight 1), and the offer is closed as `negative`.
+  - Never played, and no play gap (`play_gaps`) overlaps its time on the playlist: the offer is closed as
+    `unplayed` (back in the pool, no negative weight) and counts toward `batch.max_unplayed_expiries`, as the
+    14-day expiry does, so the second one retires it. Counted as `never_played`.
+  - Never played, but a play gap overlaps: closed as `unplayed` without counting, since a play may be missing.
+    Counted as `unknown`.
   Younger tracks follow `batch.clear_recent`: `remove` (default; the weekly and first batch pin it) takes them off and closes
   the offer as `unplayed` (back in the pool, no negative weight), `keep` leaves them for a later run.
   `--no-penalty` closes every removed offer except likes that same unplayed way. A batch skipped because the
@@ -126,7 +132,8 @@ haystack batch [--size N] [--dry-run] [--force] [--variant V] [--no-penalty]
 haystack batch --plan [--size N] [--variant V] [--stage1]
                                               the would-be picks, scored in memory: no Spotify, no writes
 haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] [--clear-recent keep|remove]
-                                              empty Discoveries and record nos (also run by batch)
+                                              empty Discoveries: nos for played tracks, unplayed for the rest
+                                              (also run by batch)
 haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
                                               offline scoring-variant eval (no Spotify calls); --choose stores its pick
 haystack rerank fit|show [--limit N] fit the second stage on your Verdicts and record it / show the last fit
@@ -636,6 +643,14 @@ clear_min_age_hours = 24
 clear_recent = "remove"       # or "keep"
 clear_no_penalty = false
 ```
+
+An older unliked track is a `no` if it was played since it was added, else `unplayed` (see **Clear before each
+batch**). A never-played track's close increments the candidate's `unplayed_expiries` and sets `state` to
+`retired` at `batch.max_unplayed_expiries` (2); the count is taken only when the clear closes the offer, so a
+retried clear never counts it twice. The playlist row's `removed_reason` is `never_played`; a track a play gap
+covers is `unplayed`, like a younger one. The summary and the log count `no`, `unplayed` (all four kinds),
+`never_played`, `unknown`, `recent_removed` and `retired`; `--dry-run` counts them too, from the plays already
+stored.
 
 `remove` takes a younger track off and closes its offer as `unplayed`: candidate `state` goes back to `pool`,
 `unplayed_expiries` is not incremented, and `vectors.negatives` ignores it. `keep` leaves it in Discoveries.

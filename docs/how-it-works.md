@@ -110,10 +110,13 @@ You don't have to do anything special. haystack watches what happens to each dis
 |---|---|
 | Like it in Spotify (the heart) | **Yes.** It becomes one of "your songs" and shapes future picks. |
 | Rate it in needle | **Yes, this much** (1 to 5 stars), or **no** (Pass), or **really no** (Dislike). |
-| Leave it in Discoveries until the next batch | **No**, played or not: the playlist is meant to be heard. |
+| Play it and leave it in Discoveries until the next batch | **No.** You heard it and didn't keep it. |
+| Never play it before the next batch | **Not yet.** It leaves Discoveries without counting against it, and may come back. If it goes unplayed twice, haystack stops offering it. |
 | Remove it from Discoveries yourself | **No.** |
 
 Songs added less than a day before a new batch get a pass, so a late Sunday batch doesn't count against you.
+Spotify only shows haystack your last 50 plays, so haystack checks every 15 minutes. If it still missed some plays
+while a song was in Discoveries, it can't tell whether you heard that song, so it gives that one a pass too.
 
 How you listen counts a little too. If you play a discovery in needle for more than 5 seconds and skip it within 30,
 haystack takes that as a gentle no, much weaker than a Pass, and only for working out which close matches you keep.

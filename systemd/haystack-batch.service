@@ -7,8 +7,9 @@ OnFailure=haystack-alert@%n.service
 
 [Service]
 Type=oneshot
-# Clear Discoveries first (inside `batch`). Tracks younger than --clear-min-age-hours are removed
-# and closed as unplayed (no negative). Pass --no-penalty to close every non-like that way.
+# Clear Discoveries first (inside `batch`). An older unliked track is a no if it was played, else unplayed
+# (no negative; a sure never-played counts toward batch.max_unplayed_expiries). Tracks younger than
+# --clear-min-age-hours are removed and closed as unplayed. Pass --no-penalty to close every non-like that way.
 # Use --clear-recent keep, or batch.clear_recent = "keep" on a manual run, to leave recent tracks.
 ExecStart=%h/.local/share/haystack/venv/bin/haystack batch --clear-recent remove --clear-min-age-hours 24
 Environment=PYTHONUNBUFFERED=1 TF_CPP_MIN_LOG_LEVEL=3

@@ -197,7 +197,8 @@ def cmd_plays(cfg, a) -> int:
 
 def _print_clear(c: dict) -> None:
     print(f"clear: items {c.get('items', 0)} tracks {c.get('tracks', 0)} liked {c.get('liked', 0)} "
-          f"no {c.get('no', 0)} unplayed {c.get('unplayed', 0)} recent_removed {c.get('recent_removed', 0)} "
+          f"no {c.get('no', 0)} unplayed {c.get('unplayed', 0)} never_played {c.get('never_played', 0)} "
+          f"unknown {c.get('unknown', 0)} retired {c.get('retired', 0)} recent_removed {c.get('recent_removed', 0)} "
           f"recent_kept {c.get('recent_kept', 0)} removed {c.get('removed', 0)} feedback {c.get('feedback', 0)} "
           f"reconciled {c.get('reconciled', 0)} dry_run {bool(c.get('dry_run'))} "
           f"min_age_hours {c.get('min_age_hours')} recent {c.get('recent')} no_penalty {bool(c.get('no_penalty'))}")
@@ -961,7 +962,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clear_args(s)
     s.set_defaults(fn=cmd_batch)
 
-    s = sub.add_parser("clear-discoveries", help="empty Discoveries and record nos for unliked tracks (needs auth)")
+    s = sub.add_parser("clear-discoveries", help="empty Discoveries: a no for unliked tracks that were played, "
+                                                 "unplayed for the rest (needs auth)")
     s.add_argument("--dry-run", action="store_true", help="read the playlist and print counts; write nothing")
     _add_clear_args(s)
     s.set_defaults(fn=cmd_clear)
