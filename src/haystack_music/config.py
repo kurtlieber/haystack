@@ -110,7 +110,10 @@ DEFAULTS: dict = {
         "map_attempts_factor": 4,      # try mapping up to size*factor candidates to Spotify
         "min_embedded_fraction": 0.98, # real batches wait until the library embedding is (almost) complete
         # Before each batch, Discoveries is emptied. Outcomes are stored before the Spotify delete so the
-        # hourly sync cannot mark them manual_removed. Unliked tracks at least this old get a normal 'no'.
+        # hourly sync cannot mark them manual_removed. Unliked tracks at least this old get a normal 'no' if
+        # they were played since they were added. One never played closes as unplayed (back in the pool, no
+        # negative) and counts toward max_unplayed_expiries; when a gap in the play record (play_gaps, ADR 0023)
+        # leaves that unknown, it closes as unplayed without counting.
         # Younger tracks: clear_recent "remove" (the weekly unit) takes them off as unplayed — back in the
         # pool, no negative — and "keep" leaves them in the playlist. clear_no_penalty closes every removed
         # offer except likes that same unplayed way, including tracks past the age cutoff.
@@ -281,11 +284,12 @@ DEFAULTS: dict = {
         "allow_networks": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"],
         "spotify_writes": True,        # dev only: false = record verdicts but never touch Spotify
     },
-    # When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",
-    # "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off" (scheduler.py). The systemd units
-    # ignore this: their timers hold the times.
+    # When `haystack serve` (the container) runs each job, in the server's local time: "every Nm" (N dividing 60),
+    # "hourly", "daily HH:MM", "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off"
+    # (scheduler.py). The systemd units ignore this: their timers hold the times.
     "schedule": {
         "sync": "hourly",
+        "plays": "every 15m",          # Spotify plays alone, so recently-played's 50 never overflow (ADR 0023)
         "library": "daily 03:15",
         "harvest": "daily 05:00",
         "harvest_broad": "Sun 04:00",  # `harvest --broad 150`, weekly (ADR 0013)

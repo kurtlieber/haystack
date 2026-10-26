@@ -2,9 +2,9 @@
 vectors, Discoveries outcomes (like / 14-day expiry / manual removal), the Calibrate queue's top-up (ADR 0015), To
 Rip upkeep, the listener's playlists (for needle's Playlist review), token-expiry warning.
 
-Recently-played only returns the last 50 tracks, so more than ~50 plays between two hourly syncs are not
-visible; such offers count as "unheard" at expiry (the conservative direction, by design). On an always-on
-server that only happens during a long outage or after more than ~50 plays in one hour."""
+Recently-played only returns the last 50 plays, so plays are also polled on their own every 15 minutes (`haystack
+plays`): Spotify logs a play after 30 seconds, so 50 plays take at least 25 minutes. A poll that still gets a full
+page records the span it may have lost in play_gaps (ADR 0023); the Discoveries clear reads a gap as "unknown"."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from . import alert, calibrate, db, known, library, playlists, status, traits, verdicts
 from .deezer import Deezer
 from .matching import Index, TrackRef, use_local_vector
-from .spotify import Spotify
+from .spotify import RECENTLY_PLAYED_LIMIT, Spotify
 from .textnorm import key, split_title
 
 log = logging.getLogger("haystack_music.sync")
@@ -160,10 +160,16 @@ def fill_metadata(con, sp: Spotify) -> dict:
 # ---------------- polling ----------------
 
 def poll_plays(con, sp: Spotify) -> int:
+    """New Spotify plays since the stored cursor; the count added. A full page means older plays after the cursor
+    may have been dropped: that span (the cursor, 0 for none, to the oldest play on the page) goes in play_gaps."""
     after = db.kv_get(con, "recently_played_after_ms")
-    items = sp.recently_played(int(after) if after else None)
-    n, mx = 0, int(after or 0)
+    cursor = int(after or 0)
+    items = sp.recently_played(cursor or None)
+    n, mx, oldest = 0, cursor, None
     for it in items:
+        if it.get("played_at"):
+            ms = int(_iso(it["played_at"]).timestamp() * 1000)
+            mx, oldest = max(mx, ms), ms if oldest is None else min(oldest, ms)
         t = it.get("track") or it.get("item")
         if not t or not t.get("id"):
             continue
@@ -171,10 +177,19 @@ def poll_plays(con, sp: Spotify) -> int:
         cur = con.execute("INSERT OR IGNORE INTO plays(spotify_id, played_at, context) VALUES(?,?,?)",
                           (t["id"], it["played_at"], ((it.get("context") or {}).get("uri"))))
         n += cur.rowcount
-        mx = max(mx, int(_iso(it["played_at"]).timestamp() * 1000))
+    if len(items) >= RECENTLY_PLAYED_LIMIT and oldest is not None and oldest > cursor:
+        con.execute("INSERT OR IGNORE INTO play_gaps(from_ms, to_ms, found_at) VALUES(?,?,?)",
+                    (cursor, oldest, db.now()))
+        log.warning("plays: a full page of %d; plays between %s and %s may be missing (recorded in play_gaps)",
+                    len(items), db.ms_iso(cursor) if cursor else "the start", db.ms_iso(oldest))
     if mx:
         db.kv_set(con, "recently_played_after_ms", mx)
     return n
+
+
+def plays(con, cfg: dict, sp: Spotify | None = None) -> dict:
+    """The 15-minute plays job: poll_plays alone, so a busy hour cannot overflow recently-played."""
+    return {"plays_new": poll_plays(con, sp or Spotify(cfg))}
 
 
 def poll_likes(con, sp: Spotify, cfg: dict) -> dict:
@@ -297,7 +312,7 @@ def process_offers(con, sp: Spotify, cfg: dict, pl: dict, lib: Index) -> dict:
         # A clear already deleted these tracks and crashed before recording verdicts. Finish that,
         # so the absence is not read as the listener removing them by hand.
         from .clear import reconcile_pending
-        reconcile_pending(con, pid, in_playlist)
+        reconcile_pending(con, pid, in_playlist, max_unplayed)
         active = con.execute("SELECT * FROM offers WHERE removed_at IS NULL").fetchall()
         c["active"] = len(active)
         if not active:

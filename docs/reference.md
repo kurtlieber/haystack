@@ -79,21 +79,31 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   own playlists are edited only by a Swap you make in needle (ADR 0022).
 * **Outcomes.** Liked discovery -> removed from Discoveries at once, positive (higher weight), added to To Rip
   if not in the library. After 14 days unliked -> removed: played = negative; unplayed = back to the pool with no
-  penalty, retired after 2 unplayed expiries.
+  penalty, retired after 2 unplayed expiries. The clear before each batch makes the same split, with a third case
+  for missed plays (below).
 * **Clear before each batch.** `batch` and `first-batch` empty Discoveries before adding tracks. The offer
   outcome is committed before the Spotify delete, so the hourly sync cannot mark the removal
   `manual_removed`. A track in Liked Songs keeps that positive: the offer is closed as `liked` and no verdict
   is written. Every other track that has been on the playlist for at least `batch.clear_min_age_hours`
-  (default 24) gets a normal `no` in `feedback` (source `playlist`, weight 1) and the offer is closed as
-  `negative`. Discoveries is meant to be heard through the playlist, so a track you did not like is a no, played
-  or not.
+  (default 24) is judged by its plays since it was added: any `plays` row, Spotify or needle. The clear polls
+  Spotify's plays first, so the last 15 minutes count (ADR 0023).
+  - Played: a normal `no` in `feedback` (source `playlist`, weight 1), and the offer is closed as `negative`.
+  - Never played, and no play gap (`play_gaps`) overlaps its time on the playlist: the offer is closed as
+    `unplayed` (back in the pool, no negative weight) and counts toward `batch.max_unplayed_expiries`, as the
+    14-day expiry does, so the second one retires it. Counted as `never_played`.
+  - Never played, but a play gap overlaps: closed as `unplayed` without counting, since a play may be missing.
+    Counted as `unknown`.
   Younger tracks follow `batch.clear_recent`: `remove` (default; the weekly and first batch pin it) takes them off and closes
   the offer as `unplayed` (back in the pool, no negative weight), `keep` leaves them for a later run.
   `--no-penalty` closes every removed offer except likes that same unplayed way. A batch skipped because the
   library embedding is incomplete does not clear.
-* **Unheard by design.** `recently-played` only returns the last 50 plays. The server is always on and syncs
-  hourly, so plays are only missed after more than ~50 plays in one hour or a long server/network outage; such
-  tracks count as "unplayed" (the conservative direction). Not a bug.
+* **Play gaps (ADR 0023).** `recently-played` only returns the last 50 plays. `haystack plays` polls them every
+  15 minutes (the hourly sync polls too), and Spotify logs a play only after 30 seconds, so 50 cannot pile up
+  between two polls while the server is up. A poll that still gets a full page (after an outage) records the span
+  from its cursor to the oldest play on the page in `play_gaps`: plays there may be missing. A never-played
+  discovery whose time on the playlist overlaps a gap is let off without counting toward retirement. The plays
+  polled before gap tracking began form one gap, from the start to the cursor at that time. `haystack status`
+  shows the count and the latest gap (`live.play_gaps`).
 * **Metric.** Kept rate, overall, per source and per seed (`haystack sources`), and the fuller `haystack report`. A source
   can't be retired before 30 offered tracks. Spotify's plays carry no length, so they say nothing about skips;
   a short, unfinished needle play of an offer or a Calibrate pick is a *soft no* for the re-ranker only (see
@@ -115,13 +125,15 @@ haystack library scan|embed|update   index / embed / both + preview alignment re
 haystack harvest [--sources a,b] [--limit-per-source N]
 haystack score                       re-score the candidate pool
 haystack sync                        hourly job (needs auth)
+haystack plays                       Spotify plays only, every 15 minutes (needs auth)
 haystack batch [--size N] [--dry-run] [--force] [--variant V] [--no-penalty]
                                               [--clear-min-age-hours H] [--clear-recent keep|remove]
                                               weekly job (needs auth): clear Discoveries, then add a batch
 haystack batch --plan [--size N] [--variant V] [--stage1]
                                               the would-be picks, scored in memory: no Spotify, no writes
 haystack clear-discoveries [--dry-run] [--no-penalty] [--clear-min-age-hours H] [--clear-recent keep|remove]
-                                              empty Discoveries and record nos (also run by batch)
+                                              empty Discoveries: nos for played tracks, unplayed for the rest
+                                              (also run by batch)
 haystack eval [--seeds 1,2,3] [--choose] [--objective auc|mean_pct]
                                               offline scoring-variant eval (no Spotify calls); --choose stores its pick
 haystack rerank fit|show [--limit N] fit the second stage on your Verdicts and record it / show the last fit
@@ -632,6 +644,14 @@ clear_recent = "remove"       # or "keep"
 clear_no_penalty = false
 ```
 
+An older unliked track is a `no` if it was played since it was added, else `unplayed` (see **Clear before each
+batch**). A never-played track's close increments the candidate's `unplayed_expiries` and sets `state` to
+`retired` at `batch.max_unplayed_expiries` (2); the count is taken only when the clear closes the offer, so a
+retried clear never counts it twice. The playlist row's `removed_reason` is `never_played`; a track a play gap
+covers is `unplayed`, like a younger one. The summary and the log count `no`, `unplayed` (all four kinds),
+`never_played`, `unknown`, `recent_removed` and `retired`; `--dry-run` counts them too, from the plays already
+stored.
+
 `remove` takes a younger track off and closes its offer as `unplayed`: candidate `state` goes back to `pool`,
 `unplayed_expiries` is not incremented, and `vectors.negatives` ignores it. `keep` leaves it in Discoveries.
 `--no-penalty` uses that same unplayed close for every removed offer except likes, including tracks past the
@@ -692,6 +712,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
 | harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
 | sync | hourly | plays, likes (songs you now have leave the pool), outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
+| plays | every 15 minutes | Spotify's recently played alone, so its last 50 never overflow; a full page is recorded as a play gap | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
 | first batch | once | sanity check + scoring eval/variant choice (later batches re-check it) + first batch (clears first, same flags); then writes `first-batch.done` in the state dir | yes |
 | API | always on | needle's API, Spotify writes after verdicts, on-demand Readings, your playlists | yes |
@@ -703,7 +724,8 @@ next to a scheduled one shares it.
 ### `haystack serve` (the container)
 
 One process: needle's API in a thread, and a scheduler that starts each job as a child process at the times in
-`[schedule]` (`hourly`, `daily HH:MM`, `Mon HH:MM` with comma-separated days, or `off`), in local time (`TZ`).
+`[schedule]` (`every Nm` with N dividing 60, on the hour's marks; `hourly`, `daily HH:MM`, `Mon HH:MM` with
+comma-separated days, or `off`), in local time (`TZ`).
 
 * A run missed while haystack was down starts when it comes back. The last start of each job comes from the
   database's `runs` table, which the units write too, so moving from the units to the container doesn't replay a
@@ -727,7 +749,7 @@ three hours.
 
 ### systemd user units (no container)
 
-`systemd/` holds the five oneshot services + timers above (all `Persistent=true`, `Nice=19`,
+`systemd/` holds the six oneshot services + timers above (all `Persistent=true`, `Nice=19`,
 `IOSchedulingClass=idle`), the one-shot `haystack-first-batch.service` (via `OnSuccess=` of the library unit,
 `ConditionPathExists=!` on `first-batch.done`) and the always-on `haystack-api.service`. They ignore `[schedule]`.
 
@@ -740,7 +762,7 @@ ln -s ~/.local/share/haystack/venv/bin/haystack ~/.local/bin/haystack
 haystack models fetch
 systemctl --user enable --now haystack-library.timer haystack-harvest.timer haystack-harvest-broad.timer
 # after `haystack auth`:
-systemctl --user enable --now haystack-sync.timer haystack-batch.timer
+systemctl --user enable --now haystack-sync.timer haystack-plays.timer haystack-batch.timer
 systemctl --user enable --now haystack-api.service   # needle
 ```
 Turn on lingering once (`sudo loginctl enable-linger $USER`) so the timers run without a login session. Times

@@ -7,8 +7,8 @@ haystack finds new music for your Spotify account by **how it sounds**. It liste
 candidates from Deezer, ListenBrainz and [more places](#more-places-to-look-optional). Once a week it puts the closest matches into a private **Discoveries**
 playlist in your Spotify account.
 
-You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Let one sit
-in Discoveries and it counts as a no. The next week's picks get better.
+You don't have to do anything special: just listen. Like a song in Spotify and haystack learns from it. Play one
+and leave it in Discoveries and it counts as a no. The next week's picks get better.
 
 For a detailed explanation of how haystack works, and what the seven Traits needle shows (tempo, valence,
 energy and the rest) mean, see [How haystack works](docs/how-it-works.md).
@@ -48,7 +48,7 @@ Prefer to do it yourself? Read on.
 
 - **An always-on Linux machine with Docker**, x86_64 (Intel or AMD; ARM boards like the Raspberry Pi aren't
   supported yet). It needs about 2 GB of disk for the image, plus room for its data. It should stay on: Spotify
-  only shows haystack your last 50 plays, so it checks every hour.
+  only shows haystack your last 50 plays, so it checks every 15 minutes.
 - **A Spotify account** and a free Spotify developer app (step 2 below), so haystack can manage its playlists.
 - **Optionally, your own music folder** (`.m4a` files). With one, haystack learns your taste from far more songs
   than your Spotify likes. See [Your music folder](#your-music-folder-optional).
@@ -307,6 +307,7 @@ The ones people change most:
 |---|---|---|
 | `batch.size` | `15` | How many new songs each batch brings. |
 | `schedule.batch` | `"Mon 08:00"` | When a new batch arrives. `"Fri 18:00"`, `"Mon,Thu 08:00"` or `"daily 07:00"` work too, in your `TZ`. |
+| `schedule.plays` | `"every 15m"` | How often haystack reads your Spotify plays. Spotify shows it only your last 50, so it checks often. |
 | `library.root` | `""` (none) | Your music folder: `"/music"` in Docker. See [Your music folder](#your-music-folder-optional). |
 | `library.workers`, `library.threads_per_worker` | `6`, `3` | How much CPU the first pass over your music folder gets. On a small VPS, try `1` and `2`. |
 | `batch.expiry_days` | `14` | A discovery you don't like leaves Discoveries after this many days. |
@@ -338,8 +339,9 @@ batch = "Fri 18:00"
 root = "/music"
 ```
 
-`[schedule]` also sets when the other jobs run: `sync` (hourly), `library` (daily 03:15), `harvest` (daily
-05:00) and `harvest_broad` (a wider harvest, Sundays 04:00). Any of them can be `"off"`. Every other setting, including the scoring options, is in
+`[schedule]` also sets when the other jobs run: `sync` (hourly), `plays` (your Spotify plays alone, every 15
+minutes), `library` (daily 03:15), `harvest` (daily 05:00) and `harvest_broad` (a wider harvest, Sundays 04:00).
+Any of them can be `"off"`. Every other setting, including the scoring options, is in
 [docs/reference.md](docs/reference.md).
 
 ## Day to day
@@ -357,10 +359,13 @@ ahead (in `status`, and as an alert if alerts are on). Run `docker compose exec 
 paste the address back, as in step 5.
 
 **What counts as yes and no.** A Discoveries song you like in Spotify is a yes: it leaves Discoveries at the next
-hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song still in
-Discoveries when the next batch comes is a no, played or not, because the playlist is meant to be listened
-through. Songs added less than a day before are let off. Ratings in needle (1 to 5 stars, Pass, Dislike) count
-too, and say more than a like. A discovery you skip in needle after 5 seconds but within 30 counts as a gentle no.
+hourly check, and with `to_rip` on, it goes to To Rip if it isn't in your music folder. A song you played that is
+still in Discoveries when the next batch comes is a no. A song you never played is not a no: it leaves
+Discoveries and may come back in a later batch, and once it has gone unplayed twice haystack stops offering it. If
+haystack missed some of your plays while the song was there (more than 50 between two checks), it can't tell, so
+the song is let off without counting. Songs added less than a day before are let off too. Ratings in needle (1 to
+5 stars, Pass, Dislike) count too, and say more than a like. A discovery you skip in needle after 5 seconds but
+within 30 counts as a gentle no.
 
 Without Docker, haystack runs as systemd user services on any Linux machine with Python 3.14 and ffmpeg. See
 [docs/reference.md](docs/reference.md#running-it), which also covers every command, how the scoring works and

@@ -11,4 +11,4 @@ systemctl --user daemon-reload
 echo "linked: $(ls "$repo"/systemd | tr '\n' ' ')"
 echo "token-free jobs:   systemctl --user enable --now haystack-library.timer haystack-harvest.timer \\"
 echo "                   haystack-harvest-broad.timer"
-echo "after auth:        systemctl --user enable --now haystack-sync.timer haystack-batch.timer"
+echo "after auth:        systemctl --user enable --now haystack-sync.timer haystack-plays.timer haystack-batch.timer"

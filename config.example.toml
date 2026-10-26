@@ -82,9 +82,11 @@ preview_fallback = "off"
 # preview_fallback = "itunes"
 
 [schedule]
-# When `haystack serve` (the container) runs each job, in the server's local time: "hourly", "daily HH:MM",
-# "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off". The systemd units ignore this.
+# When `haystack serve` (the container) runs each job, in the server's local time: "every Nm" (N dividing 60),
+# "hourly", "daily HH:MM", "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off". The systemd
+# units ignore this.
 sync = "hourly"
+plays = "every 15m"            # Spotify plays alone, often enough that none are lost
 library = "daily 03:15"
 harvest = "daily 05:00"
 harvest_broad = "Sun 04:00"    # a wider harvest from the week's seeds

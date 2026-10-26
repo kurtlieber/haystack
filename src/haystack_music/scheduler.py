@@ -1,10 +1,10 @@
 """`haystack serve`'s job schedule: the systemd timers' work, for hosts without systemd (the container).
 
-The times come from [schedule]: "hourly", "daily HH:MM", "Mon HH:MM" (days Mon..Sun, comma-separated:
-"Mon,Thu 08:00") or "off", in the server's local time. Each job runs as its own `haystack <job>` child at nice 19,
-as the units do, so a crash or a TensorFlow memory spike in one never takes the API down. A job still running is
-not started again; different jobs may overlap (the first library embedding takes hours, and the hourly sync must
-not wait for it).
+The times come from [schedule]: "every Nm" (N minutes, N dividing 60: "every 15m" runs at :00, :15, :30, :45),
+"hourly", "daily HH:MM", "Mon HH:MM" (days Mon..Sun, comma-separated: "Mon,Thu 08:00") or "off", in the server's
+local time. Each job runs as its own `haystack <job>` child at nice 19, as the units do, so a crash or a TensorFlow
+memory spike in one never takes the API down. A job still running is not started again; different jobs may overlap
+(the first library embedding takes hours, and the hourly sync must not wait for it).
 
 A run missed while haystack was down is caught up on start, like the timers' Persistent=true. The last start of
 each job comes from the runs table, which the units fill too, so moving from the units to the container doesn't
@@ -32,6 +32,7 @@ DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 CLEAR = ["--clear-recent", "remove", "--clear-min-age-hours", "24"]   # what the batch units pin
 JOBS = {
     "sync": ["sync"],
+    "plays": ["plays"],                                 # every 15 minutes (ADR 0023)
     "library": ["library", "update"],
     "harvest": ["harvest"],
     "harvest_broad": ["harvest", "--broad", "150"],     # weekly (ADR 0013)
@@ -48,6 +49,7 @@ class Spec:
     days: frozenset
     hour: int = 0
     minute: int = 0
+    every: int = 0       # "every Nm": N minutes, aligned to the hour
 
 
 def parse(spec: str) -> Spec | None:
@@ -57,6 +59,11 @@ def parse(spec: str) -> Spec | None:
         return None
     if s == "hourly":
         return Spec(True, frozenset(range(7)))
+    if s.startswith("every "):
+        n = s.removeprefix("every ")
+        if n.endswith("m") and n[:-1].isdigit() and 0 < int(n[:-1]) <= 60 and 60 % int(n[:-1]) == 0:
+            return Spec(False, frozenset(range(7)), every=int(n[:-1]))
+        raise ValueError(f"schedule: can't read {spec!r}; every Nm needs N to divide 60 (5, 10, 15, 20, 30)")
     try:
         when, hm = s.rsplit(" ", 1)
         hour, minute = (int(x) for x in hm.split(":"))
@@ -64,12 +71,16 @@ def parse(spec: str) -> Spec | None:
         if not (0 <= hour < 24 and 0 <= minute < 60):
             raise ValueError
     except ValueError:
-        raise ValueError(f"schedule: can't read {spec!r}; use hourly, daily HH:MM, Mon HH:MM or off") from None
+        raise ValueError(f"schedule: can't read {spec!r}; use every Nm, hourly, daily HH:MM, Mon HH:MM or off"
+                         ) from None
     return Spec(False, frozenset(days), hour, minute)
 
 
 def next_after(spec: Spec, t: datetime) -> datetime:
     """The first run time strictly after t (naive local time)."""
+    if spec.every:
+        step = (t.minute // spec.every + 1) * spec.every
+        return t.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=step)
     if spec.hourly:
         return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     for d in range(8):
@@ -81,6 +92,8 @@ def next_after(spec: Spec, t: datetime) -> datetime:
 
 def last_due(spec: Spec, t: datetime) -> datetime:
     """The latest run time at or before t (naive local time)."""
+    if spec.every:
+        return t.replace(minute=t.minute // spec.every * spec.every, second=0, microsecond=0)
     if spec.hourly:
         return t.replace(minute=0, second=0, microsecond=0)
     for d in range(8):

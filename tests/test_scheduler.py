@@ -134,3 +134,28 @@ def test_next_batch_without_systemd_follows_the_schedule(monkeypatch):
     assert review.next_batch_at(sun, "Mon 08:00") == utc(datetime(2026, 10, 19, 8, 0))
     assert review.next_batch_at(sun, "Thu 09:30") == utc(datetime(2026, 10, 22, 9, 30))
     assert review.next_batch_at(sun, "off") is None
+
+
+def test_every_n_minutes():
+    """plays polls every 15 minutes (ADR 0023): every Nm, N dividing 60, on the hour's quarter marks."""
+    e = parse("every 15m")
+    assert (e.every, e.hourly, len(e.days)) == (15, False, 7)
+    assert parse("Every 5M").every == 5 and parse("every 60m").every == 60
+    for bad in ("every 7m", "every 0m", "every m", "every 90m", "every -15m", "every 15"):
+        with pytest.raises(ValueError):
+            parse(bad)
+    assert next_after(e, datetime(2026, 10, 19, 10, 14, 59)) == datetime(2026, 10, 19, 10, 15)
+    assert next_after(e, datetime(2026, 10, 19, 10, 15)) == datetime(2026, 10, 19, 10, 30)
+    assert next_after(e, datetime(2026, 10, 19, 23, 50)) == datetime(2026, 10, 20, 0, 0)
+    assert last_due(e, datetime(2026, 10, 19, 10, 44, 30)) == datetime(2026, 10, 19, 10, 30)
+    assert last_due(e, datetime(2026, 10, 19, 10, 45)) == datetime(2026, 10, 19, 10, 45)
+    assert missed("plays", e, None, MON)                                   # never ran: starts now
+    assert missed("plays", e, datetime(2026, 10, 19, 7, 44), MON)          # missed 07:45 and 08:00
+    assert not missed("plays", e, datetime(2026, 10, 19, 8, 0), datetime(2026, 10, 19, 8, 14))
+
+
+def test_plays_is_scheduled_by_default():
+    s = scheduler.Scheduler(config.load(), run=lambda job, args: 0)
+    assert s.specs["plays"].every == 15
+    assert scheduler.JOBS["plays"] == ["plays"]
+    assert s.specs["sync"].hourly                                          # the hourly sync still polls plays too
