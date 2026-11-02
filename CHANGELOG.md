@@ -11,7 +11,7 @@
 
 ### Bug Fixes
 
-* **harvest:** `deezer_label` passes over the major labels and the big catalogue labels (`harvest.label_skip`, matched by whole words of the label's name) and the next label takes the slot: their album search returned a whole catalogue of every style (Columbia France's chanson for a listener of drum & bass); the run's stats count `majors_skipped` (ADR 0020 note)
+* **harvest:** `deezer_label` passes over the major labels, the big catalogue labels and the catalogue companies (`harvest.label_skip`, matched by whole words of the label's name) and the next label takes the slot: their album search returned a whole catalogue of every style (Columbia France's chanson for a listener of drum & bass); the run's stats count `majors_skipped` (ADR 0020 note)
 
 ## [0.9.0](https://github.com/kurtlieber/haystack/compare/v0.8.0...v0.9.0) (2026-10-23)
 

@@ -96,11 +96,12 @@ by 2026-11-02 it had 862, and its two offers were a Dislike and a cartoon's song
 says something about taste (Monstercat, Never Say Die, Deadbeats, Armada, Spinnin').
 
 So a label whose name holds a word of `harvest.label_skip` is passed over and the next label takes its slot. The
-default names the three majors' labels and the big catalogue labels (Columbia, Universal, Warner, Rhino, UME,
-Concord, Craft and others); the match is on whole words of the label's key, because Deezer writes one major many
-ways ('Universal-Island Records Ltd.', 'Rhino/Warner Records', 'Blackened Recordings / Universal Music'). On the
-reference installation the top 10 became Guns N Roses P&D, XL Recordings, Deadbeats, Armada Music, Spinnin'
-Records, The Bicycle Music Company, Kordhell, Radioactive, Goost Music and Musical Freedom, with 34 skipped.
+default names the three majors' labels, the big catalogue labels and the companies that buy up catalogues
+(Columbia, Universal, Warner, Rhino, UME, Concord, Craft, BMG, The Bicycle Music Company and others); the match is
+on whole words of the label's key, because Deezer writes one major many ways ('Universal-Island Records Ltd.',
+'Rhino/Warner Records', 'Blackened Recordings / Universal Music'). On the reference installation the top 10 became
+Guns N Roses P&D, XL Recordings, Deadbeats, Armada Music, Spinnin' Records, Kordhell, Radioactive, Goost Music,
+Musical Freedom and NCS, with 35 skipped.
 
 **Why not the label's size.** Deezer's album search reports a `total`, but never more than 300 (checked
 2026-11-02: `label:"Columbia"`, `label:"Monstercat"` and `label:"Deadbeats"` all say 300, and `index=300` returns
