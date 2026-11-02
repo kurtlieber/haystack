@@ -54,8 +54,9 @@ is told):
 - **Your ListenBrainz recommendations**: if ListenBrainz records your listening, it works out songs for you every
   week, and haystack considers them.
 - **LB Radio**: ListenBrainz's radio playlists for the styles and artists you like most.
-- **Your record labels**: the newest albums from the labels whose songs you keep most. This one needs nothing
-  from you, only a few kept songs.
+- **Your record labels**: the newest albums from the labels whose songs you keep most. The big labels are left
+  out: they put out every kind of music, so liking one of their songs says little about the rest. This one needs
+  nothing from you, only a few kept songs.
 
 Artist radio, related artists, ListenBrainz and Last.fm start from **seeds**: the songs you rated 4 or 5 stars and the
 discoveries you kept lately come first, then your other liked songs, then your music folder. An artist is a seed

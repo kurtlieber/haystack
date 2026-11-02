@@ -86,3 +86,29 @@ source project can't ship one. Making one is free and takes a minute.
 - A fresh installation behaves as 0.6.0 did: the three outside sources wait for a key, a name or a token,
   `deezer_label` waits until some kept song's label is known, and the fallback stays off. Each says so in the
   harvest's log.
+
+## Note (2026-11-02): `deezer_label` passes over the majors
+
+The labels with the most kept mass were the majors': on the reference installation 23 of the top 25 were
+Columbia, Universal, Warner and their imprints and catalogue arms, and `label:"Columbia"` returns Columbia's whole
+catalogue, Columbia France's chanson included. Of the source's first 167 candidates (2026-10-23) none was offered;
+by 2026-11-02 it had 862, and its two offers were a Dislike and a cartoon's song. Only a small label's catalogue
+says something about taste (Monstercat, Never Say Die, Deadbeats, Armada, Spinnin').
+
+So a label whose name holds a word of `harvest.label_skip` is passed over and the next label takes its slot. The
+default names the three majors' labels, the big catalogue labels and the companies that buy up catalogues
+(Columbia, Universal, Warner, Rhino, UME, Concord, Craft, BMG, The Bicycle Music Company and others); the match is
+on whole words of the label's key, because Deezer writes one major many ways ('Universal-Island Records Ltd.',
+'Rhino/Warner Records', 'Blackened Recordings / Universal Music'). On the reference installation the top 10 became
+Guns N Roses P&D, XL Recordings, Deadbeats, Armada Music, Spinnin' Records, Kordhell, Radioactive, Goost Music,
+Musical Freedom and NCS, with 35 skipped.
+
+**Why not the label's size.** Deezer's album search reports a `total`, but never more than 300 (checked
+2026-11-02: `label:"Columbia"`, `label:"Monstercat"` and `label:"Deadbeats"` all say 300, and `index=300` returns
+nothing), and the search matches loosely, so a small label's name inside a bigger one counts too. A limit on it
+can't tell Columbia from Monstercat.
+
+**Considered Options**: a limit on the search's `total` (above); kept mass weighed against the catalogue's size
+(no size to weigh by); MusicBrainz label ids and their ownership relations to the majors (exact, but another
+service and a walk of parent labels per label; still the longer-term route, with `browse release` by date); a name
+list in `harvest.label_skip` that the listener can change (chosen).

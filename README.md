@@ -224,7 +224,8 @@ docker compose run --rm haystack secret set listenbrainz-token
 Sent to ListenBrainz, with the token: the names of your top styles and of the artists the harvest starts from.
 
 **Record labels.** `deezer_label` uses the labels Deezer lists for the albums of the songs you keep (a rating of 3
-stars or more, or a like). Sent to Deezer: those label names, in its album search.
+stars or more, or a like), leaving out the major labels (`harvest.label_skip`), whose catalogues hold every style.
+Sent to Deezer: those label names, in its album search.
 
 **A second source of previews.** A few songs on Deezer have no 30-second preview, so haystack can't listen to
 them. With this setting it looks such a song up on Apple's iTunes Search API (no key needed) and listens to Apple's
@@ -316,6 +317,7 @@ The ones people change most:
 | `spotify.discoveries_name` | `"Discoveries"` | The playlist's name. |
 | `calibrate.enabled`, `calibrate.per_week` | `true`, `30` | needle's **Calibrate** list: up to this many songs a week that haystack is least sure about, for you to rate. `false` stops new ones. |
 | `spotify.to_rip` | `false` | Also keep a **To Rip** playlist of songs you rate 3 stars or more that aren't in your music folder, to buy later. |
+| `harvest.label_skip` | the majors' labels | Record labels the label source passes over, matched by whole words of the label's name (`"Universal"` covers `"Universal-Island Records Ltd."`). `[]` keeps them all. |
 | `harvest.listenbrainz_contact` | `""` | Your email or website. ListenBrainz asks API users for one. |
 | `harvest.listenbrainz_user` | `""` | Your ListenBrainz name, for your own recommendations. See [More places to look](#more-places-to-look-optional). |
 | `harvest.preview_fallback` | `"off"` | `"itunes"`: listen to Apple's preview of a song Deezer has none for. See [More places to look](#more-places-to-look-optional). |
