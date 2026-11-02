@@ -230,7 +230,9 @@ token before it answers `/1/explore/lb-radio`.
 
 **`deezer_label`**. The `harvest.label_count` (10) record labels with the most kept mass: Deezer's label for the
 album of each song you Rated or liked, weighted 3 for 5 stars, 2 for 4 stars and 1 for 3 stars or a liked song
-with no Rating. For each label it searches Deezer's albums (`/search/album?q=label:"<name>"`; Deezer can't sort
+with no Rating. A label whose name holds a word of `harvest.label_skip` (the three majors' labels and the big
+catalogue labels: Columbia, Universal, Warner, Rhino, Concord and so on; `[]` keeps them) is passed over and the
+next label takes its place; the run's stats count them as `majors_skipped`. For each label it searches Deezer's albums (`/search/album?q=label:"<name>"`; Deezer can't sort
 these by date, so the highest album id, the newest added, comes first), keeps albums whose label matches, and
 takes the top 2 tracks by rank from each of the `harvest.label_albums` (5) newest it hasn't seen. Detail
 `label/<name>/album/<id>`. It waits until Deezer's metadata (below) knows the labels.

@@ -80,6 +80,9 @@ listenbrainz_user = ""
 # title go to Apple's iTunes Search API), or "off".
 preview_fallback = "off"
 # preview_fallback = "itunes"
+# deezer_label passes over the majors' labels (src/haystack_music/config.py has the list). A list of your own
+# replaces it, matched by whole words of the label's name; [] keeps every label.
+# label_skip = ["Columbia", "Universal", "Warner"]
 
 [schedule]
 # When `haystack serve` (the container) runs each job, in the server's local time: "every Nm" (N dividing 60),

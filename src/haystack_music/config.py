@@ -257,6 +257,15 @@ DEFAULTS: dict = {
         "lastfm_min_interval": 1.0,
         "label_count": 10,             # deezer_label: the labels with the most kept mass (stars and likes)
         "label_albums": 5,             # and the newest albums of each, two tracks per album
+        # deezer_label passes over a label whose name holds one of these as whole words (case and punctuation
+        # aside): the three majors' labels and the big catalogue labels, whose album search returns a whole
+        # catalogue of every style. Deezer's search reports at most 300 albums, so a label's size can't tell a
+        # major from Monstercat. [] keeps them all.
+        "label_skip": ["Sony", "Columbia", "RCA", "Epic", "Arista", "Jive", "Legacy Recordings",
+                       "Universal", "UMC", "UMG", "UME", "Island Records", "Geffen", "DGC", "Interscope", "Polydor",
+                       "Capitol", "Virgin", "EMI", "Republic Records", "Def Jam", "Motown", "Decca", "Mercury",
+                       "A&M", "Warner", "Rhino", "Atlantic", "Reprise", "Elektra", "Roadrunner", "Parlophone",
+                       "Concord", "Craft Recordings"],
         "preview_fallback": "off",     # a Deezer track without a preview: "itunes" embeds Apple's 30 s clip of it
                                        # instead (sends its artist and title to Apple), or "off"
         "itunes_min_interval": 3.0,    # Apple allows about 20 requests a minute

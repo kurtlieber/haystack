@@ -330,6 +330,52 @@ def test_label_source_takes_the_newest_albums_it_hasnt_seen_two_tracks_each(worl
     assert tuple(a) == (50, 7050)
 
 
+@pytest.mark.parametrize("name, major", [
+    ("Columbia", True), ("Universal Music Group International", True), ("Rhino/Warner Records", True),
+    ("Universal-Island Records Ltd.", True), ("Blackened Recordings / Universal Music", True),
+    ("UMC (Universal Music Catalogue)", True), ("A&M", True), ("Parlophone UK", True), ("RCA Records Label", True),
+    ("Monstercat", False), ("Never Say Die", False), ("Deadbeats", False), ("Guns N Roses P&D", False),
+    ("Epicenter Records", False), ("Emission", False), ("Warnerbeats", False),     # whole words only
+])
+def test_a_major_label_is_matched_by_whole_words_of_its_name(name, major):
+    assert harvest.major_label(name, config.DEFAULTS["harvest"]["label_skip"]) is major
+
+
+def test_label_source_passes_over_the_majors_and_the_next_label_takes_the_slot(world, caplog):
+    con, cfg, _ = world
+    _kept(con, 1, "Columbia", 5)
+    _kept(con, 2, "Columbia", 5)
+    _kept(con, 3, "Monstercat", 5)
+    _kept(con, 4, "Rhino/Warner Records", 5)
+    _kept(con, 5, "Never Say Die", 4)
+    _kept(con, 6, "Deadbeats", liked=True)
+    cfg["harvest"]["label_count"] = 2
+    h = Harvester(con, cfg, rng=random.Random(1))
+    dz = h.dz
+    dz.label_search = {'label:"Monstercat"': [10], 'label:"Never Say Die"': [20]}
+    dz.albums = {10: _album(10, "Monstercat"), 20: _album(20, "Never Say Die")}
+    with caplog.at_level("INFO"):
+        h.deezer_label(10)
+    assert [q for q in dz.asked if q.startswith("search_album")] == [
+        'search_album label:"Monstercat"', 'search_album label:"Never Say Die"']      # never Columbia; Deadbeats is 3rd
+    assert h.stats["deezer_label"]["majors_skipped"] == 2
+    assert "2 major labels skipped (harvest.label_skip): Columbia, Rhino/Warner Records" in caplog.text
+    assert details(con, "deezer_label") == ["label/Monstercat/album/10"] * 2 + ["label/Never Say Die/album/20"] * 2
+
+
+def test_label_source_with_only_majors_says_so_and_label_skip_empty_keeps_them(world):
+    con, cfg, _ = world
+    _kept(con, 1, "Columbia", 5)
+    h = Harvester(con, cfg, rng=random.Random(1))
+    h.deezer_label(10)
+    assert h.stats["deezer_label"]["skipped"] == "every kept label is a major's (harvest.label_skip)"
+    assert h.dz.asked == []
+    cfg["harvest"]["label_skip"] = []
+    h = Harvester(con, cfg, rng=random.Random(1))
+    h.deezer_label(10)
+    assert h.dz.asked == ['search_album label:"Columbia"']
+
+
 # ---------------- iTunes ----------------
 
 def test_a_track_without_a_deezer_preview_is_embedded_from_itunes(world):

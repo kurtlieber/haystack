@@ -260,6 +260,14 @@ def label_mass(con) -> list[tuple[str, float]]:
     return [(best[k], m) for k, m in sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+def major_label(name: str, terms) -> bool:
+    """True when a label's name holds one of `terms` as whole words (harvest.label_skip). Deezer writes a major's
+    labels many ways: 'Universal-Island Records Ltd.', 'Rhino/Warner Records', 'Blackened Recordings / Universal
+    Music', so a whole-word match on the name is the test, case, accents and punctuation aside."""
+    words = f" {key(name)} "
+    return any(k and f" {k} " in words for k in map(key, terms))
+
+
 def _prompt_safe(name: str) -> str:
     """A name inside an LB Radio prompt's parentheses: no parentheses or colons of its own."""
     return " ".join(name.replace("(", " ").replace(")", " ").replace(":", " ").split())
@@ -705,12 +713,22 @@ class Harvester:
         """The newest albums of the labels the listener keeps most (ADR 0020): harvest.label_count labels by
         label_mass, harvest.label_albums albums each, two tracks per album (Deezer's most played first). Deezer's
         search can't sort by date, so the newest are the highest album ids; an album already in the candidates
-        is skipped without a request."""
+        is skipped without a request. A major's label (harvest.label_skip) is passed over and the next label takes
+        its place: its search returns the major's whole catalogue, which says nothing of the listener's taste."""
         src = "deezer_label"
         h = self.cfg["harvest"]
-        labels = label_mass(self.con)[:h["label_count"]]
+        labels, majors = [], []
+        for name, mass in label_mass(self.con):
+            if len(labels) >= h["label_count"]:
+                break
+            (majors if major_label(name, h["label_skip"]) else labels).append((name, mass))
+        if majors:
+            self._st(src)["majors_skipped"] = len(majors)
+            log.info("deezer_label: %d major labels skipped (harvest.label_skip): %s", len(majors),
+                     ", ".join(n for n, _ in majors))
         if not labels:
-            return self.skip(src, "no label yet (no kept track has an album row from Deezer's metadata)")
+            return self.skip(src, "every kept label is a major's (harvest.label_skip)" if majors else
+                             "no label yet (no kept track has an album row from Deezer's metadata)")
         per = max(2, -(-cap // len(labels)))
         have = {r[0] for r in self.con.execute("SELECT DISTINCT album_id FROM candidates WHERE album_id > 0")}
         for name, _ in labels:
