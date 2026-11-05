@@ -1,5 +1,6 @@
 """Harvest seeds by Verdicts, the style search, adaptive caps, the chart share per batch and the weekly broad job
 (ADR 0013), over a synthetic world with a fake Deezer and ListenBrainz."""
+import logging
 import random
 from datetime import datetime
 
@@ -209,6 +210,47 @@ def test_broad_liked_seeds_go_by_stars_and_leave_out_passes(world):
     like(con, "d", "Passed One", kind="pass")
     got = harvest.broad_liked_seeds(con, cfg, random.Random(1))
     assert [(s.artist, s.tag) for s in got] == [("Five Star", "5"), ("Unrated One", "like")]
+
+
+def retitle(con, name: str, title: str):
+    con.execute("UPDATE spotify_tracks SET name=? WHERE spotify_id=?", (title, sid(name)))
+
+
+def test_possible_covers_are_no_seeds(world, caplog):
+    """kurtlieber/dotfiles#349: a 5-star karaoke cover seeded Last.fm, whose similar tracks were more karaoke."""
+    con, cfg = world
+    like(con, "five", "Five Artist", 5)
+    like(con, "karaoke", "DJ Covers", 5)
+    retitle(con, "karaoke", "Runaway (Karaoke / Instrumental)")
+    like(con, "styled", "Studio Band", 4)
+    retitle(con, "styled", "Hello - In the Style of Adele")
+    like(con, "instrumental", "Some Band")
+    retitle(con, "instrumental", "Song (Instrumental)")
+    like(con, "act", "Singer's Edge Karaoke")
+    like(con, "cover_me", "Plain Artist")
+    retitle(con, "cover_me", "Cover Me")                                   # a title, not a version suffix
+    library_track(con, 1, "Tribute Kings")
+    library_track(con, 2, "Library Artist")
+    discovery(con, 50, "kept", "Kept Discovery", "liked")
+    discovery(con, 51, "kept_cover", "Kept Karaoke", "liked")
+    with caplog.at_level(logging.INFO, logger="haystack_music.harvest"):
+        b = seed_buckets(con, cfg, random.Random(1))
+    assert {s.artist for s in b["top"]} == {"Five Artist", "Kept Discovery"}
+    assert {s.artist for s in b["mid"]} == {"Plain Artist"}
+    assert [s.artist for s in b["library"]] == ["Library Artist"]
+    assert "6 possible covers left out" in caplog.text
+
+
+def test_broad_liked_seeds_leave_out_possible_covers(world, caplog):
+    con, cfg = world
+    like(con, "a", "Real Artist", 5)
+    like(con, "b", "DJ Covers", 5)
+    retitle(con, "b", "Runaway (Karaoke / Instrumental)")
+    like(con, "c", "Karaoke All Hits")
+    with caplog.at_level(logging.INFO, logger="haystack_music.harvest"):
+        got = harvest.broad_liked_seeds(con, cfg, random.Random(1))
+    assert [s.artist for s in got] == ["Real Artist"]
+    assert "2 possible covers left out" in caplog.text
 
 
 def test_style_search_takes_the_most_followed_playlists_within_each_styles_share(world, monkeypatch):

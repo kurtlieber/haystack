@@ -65,6 +65,7 @@ LIVE = re.compile(r"(?:[\(\[][^\)\]]*|\s[-–—]\s.*)\b(live|unplugged|bbc)\b",
 ARTIST_MARKER = re.compile(r"\b(karaoke|tribute)\b", re.I)
 BY = re.compile(r"\b(?:originally performed by|made famous by|in the style of|tribute to|cover of)\s+"
                 r"([^\)\]]+?)\s*(?:[\)\]]|\s[-–—]\s|$)", re.I)
+INSTRUMENTAL = re.compile(_SUFFIX + r"\binstrumental\b", re.I)
 
 
 def ensure(con) -> None:
@@ -86,6 +87,14 @@ def same_artist(a: str | None, b: str | None) -> bool:
     """One name is the other, or holds it as whole words: 'Bob Marley' and 'Bob Marley & The Wailers'."""
     a, b = _akey(a), _akey(b)
     return bool(a and b) and (a == b or f" {a} " in f" {b} " or f" {b} " in f" {a} ")
+
+
+def marked(title: str | None, artists: list[str]) -> bool:
+    """The marker sign from the track's own title and artists, without asking Deezer, or an instrumental suffix: a
+    track that is no harvest seed (kurtlieber/dotfiles#349). Last.fm's similar tracks for a karaoke cover are other
+    karaoke covers."""
+    t = title or ""
+    return bool(MARKER.search(t) or INSTRUMENTAL.search(t) or any(ARTIST_MARKER.search(a or "") for a in artists))
 
 
 def _ours(name: str | None, artists: list[str]) -> bool:
