@@ -30,5 +30,6 @@ CHANGELOG lines are the commit subjects. A release PR can rewrite them, but rele
 the next push to main, so do it last. The release PR is opened with `GITHUB_TOKEN`, so `server-ci` and `image`
 don't run on it; the release run's image build and smoke test are the check. The repository needs "Allow GitHub
 Actions to create and approve pull requests" on. Merging the release PR is the go for the tag, the image and the
-deploy: no separate word for the tag push. The first release under release-please starts from v0.9.0's commit
-(`bootstrap-sha`).
+deploy: no separate word for the tag push. The first release under release-please starts from v0.9.0: with no GitHub
+Release yet, release-please finds the manifest's version by its tag (`bootstrap-sha`, v0.9.0's commit, is the
+fallback).
