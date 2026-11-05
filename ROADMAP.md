@@ -93,11 +93,13 @@ already judged, then shows how often the model was right and what that cost. It 
 These come one step at a time, each in a release of its own, and each is measured on real verdicts before the
 next one starts.
 
-**A song is a song, whichever release it's on.** The same recording often sits on the album, a remaster, a deluxe
-edition and a best-of, each with its own id. haystack already counts a verdict on one of them for all of them.
-Next, every candidate gets the code the music industry gives each recording (its ISRC), so haystack recognises a
-song you have, have liked or have judged by that code instead of by matching titles, and doesn't offer you the
-same song on another release.
+**A song is a song, whichever release it's on.** The same song often sits on the album, a deluxe edition, a
+best-of and a remaster, each with its own id. Most of those releases share the code the music industry gives each
+recording (its ISRC), but a remaster often gets a code of its own. haystack already counts a verdict on one release
+for every release with the same code, and a batch already skips a song you have, have liked or have judged when
+the code or the artist and title match. Next, every candidate gets its code when it arrives, so matching by code
+covers the whole pool. Matching by artist and title stays, for the releases the code doesn't join, such as a
+remaster with a code of its own.
 
 **The language model gets a say in the order, if it earns it.** If the optional language model proves better than
 the sound alone at telling which songs you'll keep, haystack will blend its opinion into the order of its best
