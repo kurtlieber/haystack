@@ -163,8 +163,9 @@ def current(con, ids=None) -> dict[str, Verdict]:
 
 
 def songs(con) -> dict[str, str]:
-    """track id -> its Song (ADR 0021): the recording's ISRC, the same on every release of it (the album, its
-    remaster, the deluxe edition, a best-of). A track with no known ISRC is left out: it is a Song of its own."""
+    """track id -> its Song (ADR 0021): the recording's ISRC, shared by most releases of it (the album, the deluxe
+    edition, a best-of; a remaster often has a code of its own, and is another Song here). A track with no known
+    ISRC is left out: it is a Song of its own."""
     return {r[0]: r[1] for r in con.execute("SELECT spotify_id, isrc FROM spotify_tracks WHERE isrc IS NOT NULL")}
 
 

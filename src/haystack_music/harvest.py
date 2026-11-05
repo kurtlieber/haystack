@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from . import db, library, metadata, secrets, sources as source_stats, traits, vectors
+from . import db, library, metadata, secrets, songs, sources as source_stats, traits, vectors
 from . import embed
 from .deezer import Deezer, DeezerError
 from .itunes import Itunes
@@ -329,6 +329,7 @@ class Harvester:
         self.liked = Index(_liked_refs(con))
         self.known_dz = {r[0]: r[1] for r in con.execute("SELECT deezer_id, id FROM candidates WHERE deezer_id IS NOT NULL")}
         self.known_song = {r[0]: r[1] for r in con.execute("SELECT song_key, id FROM candidates")}
+        self.known_isrc = {r[0]: r[1] for r in con.execute("SELECT isrc, id FROM candidates WHERE isrc IS NOT NULL")}
         self.tol = cfg["matching"]["duration_tolerance"]
         self.stats: dict[str, dict] = {}
         self.policy = h.get("seed_policy", "verdicts")
@@ -435,12 +436,18 @@ class Harvester:
             return False
         sk = song_key(artist, title)
         cid = self.known_dz.get(did) or self.known_song.get(sk)
+        full = isrc = None
+        if not cid:
+            # the full track object carries the ISRC (the Song, ADR 0025) and the bpm; a list object has neither
+            full = traits.deezer_track(self.dz, t)
+            isrc = songs.norm_isrc((full or {}).get("isrc"))
+            cid = isrc and self.known_isrc.get(isrc)     # the same recording under another Deezer id
         if cid:
             st["dupe"] += 1
             self.con.execute("INSERT OR IGNORE INTO candidate_sources(candidate_id, source, detail, seen_at) VALUES(?,?,?,?)",
                              (cid, source, detail, db.now()))
             return False
-        q = TrackRef(None, artist, title, dur)
+        q = TrackRef(None, artist, title, dur, None, isrc)
         reason = None
         m = self.lib.match(q, self.tol)
         if m and m.confidence in ("high", "medium"):
@@ -453,16 +460,19 @@ class Harvester:
         try:
             cur = self.con.execute(
             """INSERT INTO candidates(deezer_id, artist, artist_key, title, title_key, version_suffix, song_key, duration,
-               mbid, deezer_artist_id, source, harvested_at, state, exclude_reason, album_id, deezer_rank)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               mbid, deezer_artist_id, source, harvested_at, state, exclude_reason, album_id, deezer_rank, isrc,
+               isrc_checked_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (did, artist, key(artist), title, key(base), suffix, sk, dur, mbid, (t.get("artist") or {}).get("id"),
              source, db.now(), "excluded" if reason else "pool", reason, (t.get("album") or {}).get("id"),
-             t.get("rank")))
+             t.get("rank"), isrc, db.now() if full is not None else None))
         except sqlite3.IntegrityError:      # a parallel harvester took this Deezer track first
             st["dupe"] += 1
             return False
         cid = cur.lastrowid
         self.known_dz[did] = cid; self.known_song[sk] = cid
+        if isrc:
+            self.known_isrc[isrc] = cid
         self.con.execute("INSERT OR IGNORE INTO candidate_sources(candidate_id, source, detail, seen_at) VALUES(?,?,?,?)",
                          (cid, source, detail, db.now()))
         if reason:
@@ -470,14 +480,14 @@ class Harvester:
         st["new"] += 1
         url = t.get("preview")
         if not url:
-            if self.preview_elsewhere(cid, did, artist, title, dur):
+            if self.preview_elsewhere(cid, did, artist, title, dur, track=full):
                 st["embedded"] += 1; st["via_itunes"] += 1
                 return True
             st["no_preview"] += 1
             self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,))
             return True
         try:
-            traits.store(self.con, did, traits.analyse_preview(self.dz, url, bpm_hint=traits.deezer_bpm(self.dz, t)))
+            traits.store(self.con, did, traits.analyse_preview(self.dz, url, bpm_hint=(full or {}).get("bpm")))
             self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
             st["embedded"] += 1
         except Exception as e:  # noqa: BLE001
@@ -486,16 +496,17 @@ class Harvester:
             self.con.execute("UPDATE candidates SET vector_status='error' WHERE id=?", (cid,))
         return True
 
-    def preview_elsewhere(self, cid: int, did: int, artist: str, title: str, duration) -> bool:
+    def preview_elsewhere(self, cid: int, did: int, artist: str, title: str, duration, track: dict | None = None) -> bool:
         """A Deezer track without a preview: embed Apple's preview of the same song instead, if iTunes has one
-        (harvest.preview_fallback). The vectors stay under the Deezer id, with provider 'itunes'."""
+        (harvest.preview_fallback). The vectors stay under the Deezer id, with provider 'itunes'. track: Deezer's
+        full object for it, when the caller has fetched it already."""
         it = self.itunes
         if it is None:
             return False
         try:
             x = it.find(artist, title, duration, self.tol)
             if x:
-                bpm = traits.deezer_bpm(self.dz, {"id": did})     # Deezer has the song, just not its preview
+                bpm = traits.deezer_bpm(self.dz, track or {"id": did})   # Deezer has the song, just not its preview
                 traits.store(self.con, did, traits.analyse_preview(it, x["previewUrl"], bpm_hint=bpm),
                              provider="itunes")
                 self.con.execute("UPDATE candidates SET vector_status='ok' WHERE id=?", (cid,))
@@ -798,8 +809,9 @@ class Harvester:
             c["retried"] += 1
             try:
                 t = self.dz.track(did) or {}
+                songs.note_isrc(self.con, did, t)
                 if not t.get("preview"):
-                    if self.preview_elsewhere(cid, did, artist, title, dur):
+                    if self.preview_elsewhere(cid, did, artist, title, dur, track=t):
                         c["embedded"] += 1
                     else:
                         self.con.execute("UPDATE candidates SET vector_status='no_preview' WHERE id=?", (cid,))
@@ -826,6 +838,7 @@ class Harvester:
         for did, _ in rows:
             try:
                 t = self.dz.track(did) or {}
+                songs.note_isrc(self.con, did, t)
                 if not t.get("preview"):
                     c["no_preview"] += 1; continue
                 data = self.dz.preview_bytes(t["preview"])
@@ -864,9 +877,12 @@ class Harvester:
             log.info("source %s: %s", s, self.stats[s])
         meta = metadata.backfill(self.con, self.dz, h["metadata_per_run"]) if retry else {"skipped": True}
         elsewhere = self.fallback_backfill() if retry else {"skipped": True}
+        # ISRCs for older candidates, then every new row joins its Song (ADR 0025)
+        isrcs = (songs.backfill(self.con, self.dz, h["isrc_backfill_per_run"]) if retry
+                 else {"skipped": True, "songs": songs.assign(self.con)})
         return {"per_source": self.stats, "caps": caps, "retry_previous_errors": retried, "style_backfill": styles,
                 "readings_backfill": readings, "tempo_fold": tempo, "metadata_backfill": meta,
-                "preview_fallback": elsewhere,
+                "preview_fallback": elsewhere, "isrc_backfill": isrcs,
                 "deezer_requests": self.dz.requests, "listenbrainz_requests": self.lb.requests,
                 "lastfm_requests": self._lastfm.requests if self._lastfm else 0,
                 "itunes_requests": self._itunes.requests if self._itunes else 0}

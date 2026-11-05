@@ -7,7 +7,9 @@ stays in the pool, and a remaster, a deluxe edition or a best-of of it is anothe
 can't see it. The same audio as a positive scores about 0.99, so such candidates sit at the top of the ranking.
 
 Known matches a pool row against three sets, the library's files, the liked songs, and the tracks with a verdict,
-an offer or a Calibrate pick: by ISRC where the candidate has one, else by the names (same_song). The names rule is
+an offer or a Calibrate pick: by its Song first (songs.py, ADR 0025: the same ISRC, or the same names where a
+track has no ISRC), then by ISRC, then by the names (same_song). The names rule runs on every row: a remaster
+often has an ISRC of its own, so another Song can still be a song the listener has. The names rule is
 not the harvest's intake rule (matching.compare within 3 s): Deezer's length for the same recording differs from
 Spotify's or the file's by 4 to 30 s often enough, and another master or a longer cut of a song the listener has
 is not a discovery, so the length may differ by up to TOL seconds. In exchange the titles must agree exactly once
@@ -62,6 +64,27 @@ def judged_refs(con) -> list[TrackRef]:
         return _refs(con, sql.format(""))
 
 
+def _song_ids(con, sql: str) -> set[int]:
+    try:
+        return {r[0] for r in con.execute(sql) if r[0] is not None}
+    except sqlite3.OperationalError:            # a database from before 0.11, opened read-only: no song_id yet
+        return set()
+
+
+def song_sets(con) -> dict[str, set[int]]:
+    """The Songs (songs.py) of each set Known checks."""
+    return {
+        "in_library": _song_ids(con, "SELECT song_id FROM local_tracks WHERE present=1"),
+        "liked": _song_ids(con, """SELECT s.song_id FROM spotify_tracks s JOIN likes l ON l.spotify_id=s.spotify_id
+                                   WHERE l.removed_at IS NULL"""),
+        "judged": _song_ids(con, """SELECT song_id FROM spotify_tracks WHERE spotify_id IN (
+                                    SELECT spotify_id FROM verdicts UNION SELECT spotify_id FROM offers
+                                    UNION SELECT spotify_id FROM calibrations)""")
+                  or _song_ids(con, """SELECT song_id FROM spotify_tracks WHERE spotify_id IN (
+                                       SELECT spotify_id FROM verdicts UNION SELECT spotify_id FROM offers)"""),
+    }
+
+
 def _val(row, k: str):
     try:
         return row[k]
@@ -91,19 +114,23 @@ def same_song(q: TrackRef, c: TrackRef) -> bool:
 
 
 class Known:
-    """What the listener already has. why(row) says which set a candidate row (id, artist, title, duration, isrc)
-    is the same song as: 'in_library', 'liked' or 'judged', else None."""
+    """What the listener already has. why(row) says which set a candidate row (id, artist, title, duration, isrc,
+    song_id) is the same song as: 'in_library', 'liked' or 'judged', else None."""
 
     def __init__(self, con, lib: Index | None = None):
         self.sets = (("in_library", lib if lib is not None else Index(library.library_refs(con))),
                      ("liked", Index(liked_refs(con))), ("judged", Index(judged_refs(con))))
+        self.songs = song_sets(con)
 
     def why(self, row) -> str | None:
+        sid = _val(row, "song_id")
         dur = _val(row, "duration")
         if dur is not None and dur <= PREVIEW_SECONDS:     # Deezer's length for a track it has only the preview of
             dur = None
         q = TrackRef(_val(row, "id"), _val(row, "artist") or "", _val(row, "title") or "", dur, None, _val(row, "isrc"))
         for name, idx in self.sets:
+            if sid is not None and sid in self.songs[name]:     # the same Song: its ISRC, or its names
+                return name
             m = idx.match(q, TOL)                      # the ISRC, else the best fuzzy match
             if m and m.method != "fuzzy":
                 return name
@@ -119,7 +146,7 @@ def exclude_known(con, cfg: dict, lib: Index | None = None) -> dict:
     -> {checked, in_library, liked}."""
     have = Known(con, lib)
     c = {"checked": 0, "in_library": 0, "liked": 0}
-    for r in con.execute("SELECT id, artist, title, duration, isrc FROM candidates WHERE state='pool'").fetchall():
+    for r in con.execute("SELECT id, artist, title, duration, isrc, song_id FROM candidates WHERE state='pool'").fetchall():
         c["checked"] += 1
         why = have.why(r)
         if why in ("in_library", "liked"):

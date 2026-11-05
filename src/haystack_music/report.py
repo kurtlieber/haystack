@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from . import db, scoring, vectors, verdicts
+from . import db, scoring, songs, vectors, verdicts
 from .review import nearest_label, style_names
 
 WEEKS = 8       # plays and labels per ISO week: this many weeks, the current one last
@@ -282,7 +282,7 @@ def build(con, cfg: dict, status_doc: dict | None, classes: list[str] | None = N
     lbs = rerank_labels(con, cfg)
     return {"generated_at": db.now(), "offers": offers(con), "verdicts": verdict_counts(con), "pool": pool(con, cfg),
             "head": head(con, classes, tracks), "eval": eval_table(status_doc), "plays": plays(con),
-            "labels": label_weeks(con, cfg, lbs), "gates": gates(con, cfg, lbs)}
+            "labels": label_weeks(con, cfg, lbs), "gates": gates(con, cfg, lbs), "songs": songs.coverage(con)}
 
 
 # ---------------- text ----------------
@@ -330,6 +330,12 @@ def text(r: dict) -> str:
             f"at {p['scored_at'] or '-'}",
             f"  nearest positive of the top {p['top']}: library window {p['top_library']}, preview "
             f"{p['top_preview']} ({_pct(p['top_preview_share'])}; {kinds})"]
+    sg = r.get("songs")
+    if sg:
+        sp_, sa = sg["pool"], sg["all"]
+        out.append(f"  Songs (ADR 0025): ISRC known for {sp_['with_isrc']} of {sp_['n']} in the pool "
+                   f"({_pct(sp_['isrc_share'])}), {sa['with_isrc']} of {sa['n']} in all; "
+                   f"{sg['songs_with_2_or_more_candidates']} Songs with 2 or more candidates")
     if h.get("n"):
         styles = ", ".join(f"{s} {n}" for s, n in h["top1_styles"].items())
         hs = ", ".join(f"{s} {n}" for s, n in h["by_source"].items())

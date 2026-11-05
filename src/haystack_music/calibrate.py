@@ -205,7 +205,7 @@ def candidates(con, cfg: dict, variant: str | None = None) -> dict:
     bad = disliked_artists(con)
     have = Known(con)                                           # songs the listener has, on any release (ADR 0021)
     out["scored"] = len(pct[variant])
-    for r in con.execute("SELECT id, deezer_id, artist, artist_key, title, source, spotify_id, isrc, duration "
+    for r in con.execute("SELECT id, deezer_id, artist, artist_key, title, source, spotify_id, isrc, duration, song_id "
                          "FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         cid = r["id"]

@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 
-from . import db
+from . import db, songs
 from .evaluate import _chunks
 from .textnorm import key
 
@@ -80,6 +80,7 @@ def backfill(con, dz, limit: int = 150) -> dict:
         try:
             if album_id is None:
                 t = dz.track(did)
+                songs.note_isrc(con, did, t)
                 c["tracks"] += 1
                 album_id = int(((t or {}).get("album") or {}).get("id") or 0)   # 0: Deezer has no such track now
                 if not t:

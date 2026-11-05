@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import db
+from . import db, songs
 
 log = logging.getLogger("haystack_music.traits")
 
@@ -243,16 +243,22 @@ def analyse_preview(dz, url: str, style: bool = True, readings: bool = True, bpm
         del data
 
 
-def deezer_bpm(dz, t: dict):
-    """A Deezer track's own bpm. Only /track/{id} (and /track/isrc:) carry it: the track objects of a search, an
-    artist's top or radio, a chart or an album have no bpm key, so those cost one more request. None on failure."""
-    if "bpm" in t:
-        return t["bpm"]
+def deezer_track(dz, t: dict) -> dict | None:
+    """A Deezer track's full object, with its bpm and ISRC. Only /track/{id} (and /track/isrc:) carry those: the
+    track objects of a search, an artist's top or radio, a chart or an album have neither key, so those cost one
+    more request. None on failure."""
+    if "bpm" in t or "isrc" in t:
+        return t
     try:
-        return (dz.track(t["id"]) or {}).get("bpm")
-    except Exception as e:  # noqa: BLE001 - the clip's own estimate is used instead
-        log.warning("bpm for deezer %s failed: %r", t.get("id"), e)
+        return dz.track(t["id"])
+    except Exception as e:  # noqa: BLE001 - the clip's own estimate is used instead, and the ISRC is asked later
+        log.warning("track object for deezer %s failed: %r", t.get("id"), e)
         return None
+
+
+def deezer_bpm(dz, t: dict):
+    """A Deezer track's own bpm (deezer_track), or None."""
+    return (deezer_track(dz, t) or {}).get("bpm")
 
 
 # ---------------- storage ----------------
@@ -336,6 +342,7 @@ def backfill(con, dz, limit: int = 150, analyse=None) -> dict:
     for did in ids:
         try:
             t = dz.track(did) or {}
+            songs.note_isrc(con, did, t)
             if not t.get("preview"):
                 c["no_preview"] += 1
                 put(con, did, {})                 # measured: nothing to measure (keeps it out of the queue)

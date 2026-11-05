@@ -1,6 +1,6 @@
 # A verdict counts for every release of a song
 
-Spotify gives each release of a recording its own track id: the album track, its remaster, the deluxe edition and a best-of are four tracks. Verdicts are keyed by track id (ADR 0005), so a playlist holding two releases of a song showed it twice in needle's Playlist review, and rating one left the other unrated: the listener was asked about a song they had just rated, as if the rating had been lost. haystack already keeps each track's ISRC, which names the recording and is the same on every release of it.
+Spotify gives each release of a recording its own track id: the album track, its remaster, the deluxe edition and a best-of are four tracks. Verdicts are keyed by track id (ADR 0005), so a playlist holding two releases of a song showed it twice in needle's Playlist review, and rating one left the other unrated: the listener was asked about a song they had just rated, as if the rating had been lost. haystack already keeps each track's ISRC, which names the recording and is the same on most releases of it (a remaster often gets a code of its own; ADR 0025).
 
 So from 0.8.0 the API knows the **Song**. A track card carries `song`, its ISRC (API feature `card.song`), and a Song's verdict is the newest current verdict on any of its tracks. A playlist card's `verdict`, `playlists` and `liked`, the playlist snapshot's `verdicts`, and which liked songs wait in Rate your likes all go by the Song. needle lists a Song once in a Playlist review and skips it when any of its releases has a verdict.
 

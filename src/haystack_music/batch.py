@@ -13,7 +13,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from . import calibrate, db, library, rerank, vectors
+from . import calibrate, db, library, rerank, songs, vectors
 from .deezer import Deezer
 from .known import Known
 from .matching import Index, TrackRef, compare
@@ -88,6 +88,8 @@ def run(con, cfg: dict, sp: Spotify | None = None, size: int | None = None, dry_
     if not done:
         log.warning("%s (continuing: %s)", msg, "dry run" if dry_run else "--force")
     sp = sp or Spotify(cfg)
+    if not dry_run:
+        songs.assign(con)                    # every candidate in its Song before Known checks them (ADR 0025)
     pl = ensure_playlists(con, sp, cfg, create=not dry_run)
     cleared = clear_discoveries(con, cfg, sp, playlist_id=pl.get("discoveries"), resolve_playlist=False,
                                 min_age_hours=clear_min_age_hours, recent=clear_recent, no_penalty=no_penalty,

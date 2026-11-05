@@ -333,11 +333,14 @@ def _progress(con, cfg, done, todo, t0, errors, final=False):
 
 
 def library_refs(con):
-    """TrackRefs for present local files (for matching)."""
+    """TrackRefs for present local files (for matching). A file's ISRC is its own tag, else the ISRC of the Spotify
+    track its Spotify id tag names (few files carry an ISRC tag; most carry the Spotify id)."""
     from .matching import TrackRef
     out = []
-    for r in con.execute("""SELECT id, artist_raw, artists_json, title_raw, duration, spotify_id, isrc
-                            FROM local_tracks WHERE present=1"""):
+    for r in con.execute("""SELECT l.id, l.artist_raw, l.artists_json, l.title_raw, l.duration, l.spotify_id,
+                                   COALESCE(l.isrc, st.isrc) AS isrc
+                            FROM local_tracks l LEFT JOIN spotify_tracks st ON st.spotify_id=l.spotify_id
+                            WHERE l.present=1"""):
         out.append(TrackRef(r["id"], r["artist_raw"] or "", r["title_raw"] or "", r["duration"], r["spotify_id"],
                             r["isrc"], json.loads(r["artists_json"] or "[]")))
     return out

@@ -283,6 +283,8 @@ DEFAULTS: dict = {
         "traits_backfill_per_run": 150, # daily harvest: Readings for stored previews (Discoveries, likes first)
         "metadata_per_run": 150,       # daily harvest: Deezer's facts (album, rank, artist fans) for this many
                                        # tracks, judged ones and liked songs first, then the pool oldest first
+        "isrc_backfill_per_run": 300,  # daily harvest: ISRCs (the Song, ADR 0025) for this many older candidates,
+                                       # the pool first; one Deezer request each
     },
     "sources": {"min_offers_before_retire": 30},
     # needle's private API (ADR 0004). The bearer token is the api-token secret (`haystack token new`).
