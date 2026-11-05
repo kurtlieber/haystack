@@ -222,8 +222,11 @@ auth` run in an SSH session to the server.
   jargon), [docs/reference.md](docs/reference.md), [docs/api.md](docs/api.md) (a dated line in "Changes" for
   every `/v1` addition), [GLOSSARY.md](GLOSSARY.md) for a new term, and an ADR for a decision. ADR numbers are
   shared with needle: take the next number that is free in both repositories.
-- **Every release checks the docs.** A PR that bumps `version` in `pyproject.toml` is a release, and
-  bumps `__version__` in `src/haystack_music/__init__.py` with it. In it, add the
-  version's section to [CHANGELOG.md](CHANGELOG.md) and read the docs above against every change since the last
-  tag (`git log --oneline v<last>..`). Fix in that PR any line the release makes untrue, including older text
-  that the new behaviour contradicts. After the merge, tag `v<version>` on `main`.
+- Use conventional commit messages (`feat:`, `fix:`): release-please builds the changelog and the version from
+  them (ADR 0024). Don't edit `version` in `pyproject.toml`, `__version__` or [CHANGELOG.md](CHANGELOG.md) by
+  hand outside a release PR.
+- **Every release checks the docs.** release-please keeps one release PR open (`chore(main): release x.y.z`).
+  Before it is merged, read the docs above against everything it collects (`git log --oneline v<last>..main`).
+  Fix any line the release makes untrue, including older text that the new behaviour contradicts, in a `docs:`
+  PR, and merge that first so the tag carries docs that match. Merging the release PR tags `v<version>`, creates
+  the GitHub Release and publishes the image.
