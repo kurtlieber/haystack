@@ -232,6 +232,9 @@ def _harmony_algos():
 def harmony(mono44: np.ndarray, beats) -> float | None:
     """The harmony Reading of a clip: mono 44.1 kHz audio and the beat positions (s) RhythmExtractor2013 found.
     None when the clip holds fewer than H_MIN_BARS bars."""
+    beats = np.atleast_1d(np.asarray(beats, np.float64))
+    if np.isfinite(beats).sum() < 4 * H_MIN_BARS + 1:             # too few beats: no chroma pass
+        return None
     from . import embed
     es = embed._es()
     win, spec, peaks, hpcp = _harmony_algos()

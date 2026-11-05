@@ -399,3 +399,8 @@ def test_every_trait_has_a_phrase_and_the_judges_profile_is_as_it_was_measured()
     assert set(rerank.TRAIT_PHRASES) == set(traits.TRAITS)
     assert llm.PROFILE_TRAITS == ("tempo", "valence", "energy", "danceability", "acousticness", "instrumentalness",
                                   "loudness")                   # harmony waits on the judge's run 2 (dotfiles #309)
+
+
+def test_too_few_beats_skip_the_chroma_pass():
+    assert traits.harmony(np.zeros(44100, np.float32), np.arange(20) * 0.5) is None   # 19 beats: under six bars
+    assert traits.harmony(np.zeros(44100, np.float32), float("nan")) is None
