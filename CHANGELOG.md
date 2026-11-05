@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/kurtlieber/haystack/compare/v0.10.1...v0.11.0) (2026-11-05)
+
+
+### Features
+
+* a Song is a row of its own, keyed by ISRC, and every candidate joins one ([#47](https://github.com/kurtlieber/haystack/issues/47)) ([b2e5571](https://github.com/kurtlieber/haystack/commit/b2e5571d2fd50338a332b062f9cdc93ed5df8d75))
+
 ## [0.10.1](https://github.com/kurtlieber/haystack/compare/v0.10.0...v0.10.1) (2026-11-05)
 
 
