@@ -224,12 +224,14 @@ DEFAULTS: dict = {
     },
     "matching": {"duration_tolerance": 3.0, "confident_dt": 2.0},
     "harvest": {
-        # The last four do nothing until they are configured (ADR 0020): lastfm_similar needs the lastfm-api-key
-        # secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the listenbrainz-token secret, and
-        # deezer_label the album rows of Deezer's metadata (ADR 0017).
+        # Some do nothing until they are configured (ADR 0020, ADR 0026): lastfm_similar and lastfm_tag_artists
+        # need the lastfm-api-key secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the
+        # listenbrainz-token secret, deezer_label the album rows of Deezer's metadata (ADR 0017), and llm_suggest
+        # the language model with "seeds" in llm.jobs (it runs in `harvest --broad` only, once a week).
         "sources": ["deezer_chart", "deezer_editorial", "deezer_new_releases",
                     "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar",
-                    "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label"],
+                    "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label",
+                    "lastfm_tag_artists", "listenbrainz_fresh", "listenbrainz_artist_similar", "llm_suggest"],
         "retired_sources": [],
         "max_new_per_source": 60,
         "caps": {},                    # per-source base caps instead of max_new_per_source, e.g. {deezer_chart = 20}
@@ -255,6 +257,13 @@ DEFAULTS: dict = {
                                        # Spotify listens (its Settings, Music services)
         "lb_radio_prompts": 6,         # listenbrainz_radio: LB Radio prompts a run, from your top styles and artists
         "lastfm_min_interval": 1.0,
+        "lastfm_similar_artists": 6,   # lastfm_similar: similar artists per seed artist, two top tracks each
+        "tag_styles": 8,               # lastfm_tag_artists: the listener's top styles, each a Last.fm tag
+        "tag_artists": 12,             # and the tag's top artists taken per style (not already yours), two songs each
+        "fresh_days": 7,               # listenbrainz_fresh: releases of the last this many days, in your styles
+        "lb_similar_artists": 6,       # listenbrainz_artist_similar: similar artists per seed artist, two songs each
+        "listenbrainz_artist_algorithm":
+            "session_based_days_9000_session_300_contribution_5_threshold_15_limit_50_skip_30",
         "label_count": 10,             # deezer_label: the labels with the most kept mass (stars and likes)
         "label_albums": 5,             # and the newest albums of each, two tracks per album
         # deezer_label passes over a label whose name holds one of these as whole words (case and punctuation
@@ -311,8 +320,8 @@ DEFAULTS: dict = {
     # secret, with the alert-webhook-key secret (if set) as the bearer token. With `outbox` set to a folder, each
     # alert is a file there instead, for a collector to send on; no secret is needed.
     "alert": {"enabled": False, "outbox": ""},
-    # An optional language model (ADR 0019), off until enabled. For now only `haystack llm judge` and
-    # `haystack llm suggest --dry-run` use it, by hand: they measure whether what a model knows about artists, labels
+    # An optional language model (ADR 0019), off until enabled. `haystack llm judge` and
+    # `haystack llm suggest --dry-run` use it by hand: they measure whether what a model knows about artists, labels
     # and scenes predicts your verdicts. Each request sends the tracks' artist, title, album, year, label, top
     # styles and source, and a profile of your taste (artist names, styles, Trait ranges): README, "Optional: a
     # language model".
@@ -325,6 +334,11 @@ DEFAULTS: dict = {
         "min_profile_tracks": 30,      # liked and rated tracks needed before a profile is worth sending
         "price_in_per_mtok": 4.0,      # US dollars per million tokens, for the cost line (0 for a local model)
         "price_out_per_mtok": 20.0,
+        # The model's unattended jobs; [] runs none. "seeds": the llm_suggest source, deep cuts in your styles
+        # by artists you don't have, in the weekly `harvest --broad` (ADR 0026)
+        "jobs": [],
+        "seeds_per_week": 100,         # songs asked for in one llm_suggest run
+        "weekly_budget_usd": 1.0,      # the jobs stop for the ISO week once their recorded cost reaches this
     },
 }
 

@@ -255,13 +255,14 @@ def test_broad_liked_seeds_leave_out_possible_covers(world, caplog):
 
 def test_style_search_takes_the_most_followed_playlists_within_each_styles_share(world, monkeypatch):
     con, cfg = world
-    monkeypatch.setattr(harvest, "top_style_names", lambda con, cfg, n: ["Bebop", "Polka"])
+    monkeypatch.setattr(harvest.scene, "top_styles",
+                        lambda con, cfg, n: [("Bebop", {"Jazz"}), ("Polka", {"Folk, World, & Country"})])
     h = Harvester(con, cfg, rng=random.Random(1))
-    for q, base in (("Bebop", 10), ("Polka", 20)):
-        h.dz.searches[q] = [{"id": base + i} for i in range(3)]
+    for q, base, editor in (("Bebop", 10, 902801015), ("Polka", 20, 753548415)):    # Deezer's Jazz and Folk editors
+        h.dz.searches[q] = [{"id": base + i, "user": {"id": editor}} for i in range(3)]
         for i in range(3):
             pid = base + i
-            h.dz.playlists[pid] = {"id": pid, "fans": i * 100,
+            h.dz.playlists[pid] = {"id": pid, "fans": i * 100, "creator": {"id": editor},
                                    "tracks": {"data": [track(pid * 100 + j, f"Artist {pid}-{j}", f"Song {j}")
                                                        for j in range(30)]}}
     h.deezer_style_search(10)

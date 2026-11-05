@@ -211,6 +211,16 @@ CREATE TABLE IF NOT EXISTS calibrations (
 CREATE INDEX IF NOT EXISTS calibrations_open ON calibrations(judged_at);
 CREATE INDEX IF NOT EXISTS calibrations_track ON calibrations(spotify_id);
 
+-- each request of the language model's unattended jobs (llm.jobs, ADR 0026), for the weekly budget
+CREATE TABLE IF NOT EXISTS llm_runs (
+    id INTEGER PRIMARY KEY, at TEXT,
+    week TEXT,                           -- ISO week, e.g. 2026-W45: llm.weekly_budget_usd's period
+    job TEXT,                            -- seeds
+    model TEXT, n INTEGER, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL,
+    ok INTEGER, error TEXT
+);
+CREATE INDEX IF NOT EXISTS llm_runs_week ON llm_runs(week, job);
+
 CREATE TABLE IF NOT EXISTS rerank_runs (
     id INTEGER PRIMARY KEY, at TEXT,
     trigger TEXT,                        -- batch | fit (haystack rerank fit)

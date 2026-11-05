@@ -44,19 +44,27 @@ little differently, so haystack learns the difference from the songs you have bo
 Every day haystack collects new songs to consider from:
 
 - **Deezer**: charts, editorial picks and new releases, "artist radio" and related artists starting from artists
-  you like, and playlists named after the styles you like most.
-- **ListenBrainz**: an open music database that knows which recordings people tend to listen to together.
+  you like, and playlists Deezer's own editors made for the styles you like most.
+- **ListenBrainz**: an open music database that knows which recordings people tend to listen to together, which
+  artists sit near yours, and what came out this week in the styles you like.
 
-Four more places wait until you set them up (the README's "More places to look" says how, and what each one
+These follow your scene more than the charts do. A chart's songs are mostly ones you know already, or not for you;
+haystack counts, for each source, how much of what it brings you had already, and that share sits next to the kept
+rate when a source's place is weighed.
+
+A few more places wait until you set them up (the README's "More places to look" says how, and what each one
 is told):
 
-- **Last.fm**: songs similar to yours, and the best-known songs of artists similar to yours.
+- **Last.fm**: songs similar to yours, the best-known songs of artists similar to yours, and the top artists of
+  your styles that you don't have yet.
 - **Your ListenBrainz recommendations**: if ListenBrainz records your listening, it works out songs for you every
   week, and haystack considers them.
 - **LB Radio**: ListenBrainz's radio playlists for the styles and artists you like most.
 - **Your record labels**: the newest albums from the labels whose songs you keep most. The big labels are left
   out: they put out every kind of music, so liking one of their songs says little about the rest. This one needs
   nothing from you, only a few kept songs.
+- **A language model's deep cuts**: once a week, songs it knows in your styles by artists you don't have, from
+  small labels and recent singles. It never hears them; the fingerprint decides, as for every other source.
 
 Artist radio, related artists, ListenBrainz and Last.fm start from **seeds**: the songs you rated 4 or 5 stars and the
 discoveries you kept lately come first, then your other liked songs, then your music folder. An artist is a seed

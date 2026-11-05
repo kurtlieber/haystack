@@ -32,7 +32,7 @@ import numpy as np
 from . import baseline, db, metadata, rerank, secrets, traits, vectors, verdicts
 from .evaluate import _chunks, _first_artist, _track_keys
 from .review import SOURCE_LABELS, _year
-from .textnorm import song_key
+from .textnorm import key, song_key, split_artists
 
 log = logging.getLogger("haystack_music.llm")
 
@@ -46,7 +46,8 @@ TRACK_STYLES = 3
 CHANCE_CLIP = 0.01         # the chance's logit is taken on [0.01, 0.99]
 JUDGE_AUC_BAR = 0.70       # the decision rule (ADR 0019): a rerank job if the chance alone reaches this AUC,
 LOO_GAIN_BAR = 0.05        # or adds this much to the re-ranker's leave-one-out AUC
-RESOLVE_BAR = 0.60         # a seeds job on its own if more than this share of the suggestions resolve on Deezer
+NEW_BAR = 0.5              # llm_suggest is switched on after a dry run where at least this share of the songs asked
+                           # for are new, on Deezer and with a preview (ADR 0026)
 TRAIT_UNITS = {"tempo": ("BPM", 0), "loudness": ("LUFS", 1)}   # the rest are 0-1, two decimals
 
 JUDGE_SCHEMA = {
@@ -70,12 +71,14 @@ Judge every song in the list exactly once, by its number. Most songs a tool like
 keep the chances honest rather than hopeful. If you don't know an artist, say so in the reason and judge from the \
 rest: the label, the styles, the year. The styles and their scores come from an audio classifier and can be wrong."""
 
-SUGGEST_SYSTEM = """You help a music discovery tool find songs one listener will keep.
+SUGGEST_SYSTEM = """You help a music discovery tool find songs one listener will keep and has not heard.
 
-You get a profile of the listener's taste, built from the songs they liked and rated. Name real songs that \
-exist as released recordings, by artists who are not in the profile's list of artists they rate highest, that \
-this listener is likely to keep. Give the artist and title exactly as released, and one short reason each. \
-Prefer songs a streaming service has; never invent a song."""
+You get a profile of the listener's taste, built from the songs they liked and rated. Name deep cuts: real songs \
+that exist as released recordings, in the listener's styles, that this listener is likely to keep. Never name a \
+song by an artist in the profile, neither one they rate nor one they turned down. Leave out the best-known acts of \
+their styles too: the listener has found those already. Prefer artists on small and independent labels, and \
+singles and EPs, from the last ten years unless the profile points to an earlier era. Give the artist and title \
+exactly as released, and one short reason each. Prefer songs a streaming service has; never invent a song."""
 
 
 class LLMError(RuntimeError):
@@ -481,6 +484,68 @@ def decision(r: dict) -> dict:
     return {"rerank_job": bool(met), "auc_bar": JUDGE_AUC_BAR, "gain_bar": LOO_GAIN_BAR}
 
 
+def week(at: str | None = None) -> str:
+    """The ISO week of a db.now() timestamp (default now), e.g. 2026-W45: the budget's period."""
+    from .calibrate import week as iso_week
+    return iso_week(at)
+
+
+def record_run(con, job: str, model: str, n: int, tokens_in: int, tokens_out: int, cost_usd: float,
+               error: str | None = None) -> None:
+    """One request of an unattended job (llm.jobs), for the weekly budget."""
+    con.execute("""INSERT INTO llm_runs(at, week, job, model, n, tokens_in, tokens_out, cost_usd, ok, error)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (db.now(), week(), job, model, n, tokens_in, tokens_out, cost_usd, int(error is None), error))
+
+
+def spent(con, wk: str | None = None) -> float:
+    """US dollars the unattended jobs recorded in this ISO week."""
+    return float(con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_runs WHERE week=?",
+                             (wk or week(),)).fetchone()[0])
+
+
+def ran(con, job: str, wk: str | None = None) -> bool:
+    """True once the job has a recorded request this ISO week, answered or not."""
+    return con.execute("SELECT 1 FROM llm_runs WHERE job=? AND week=? LIMIT 1", (job, wk or week())).fetchone() \
+        is not None
+
+
+def ask_suggestions(con, cfg: dict, provider, n: int, classes: list[str] | None = None) -> dict:
+    """Ask for n deep cuts with the whole profile. -> {provider, model, n, tokens_in, tokens_out, cost_usd,
+    suggestions [{artist, title, why, in_profile}], reason}. in_profile: the artist is one of the profile's
+    (rated or turned down), which the prompt forbids; the caller drops those. reason: why nothing was asked or
+    answered."""
+    c = cfg["llm"]
+    out = {"provider": getattr(provider, "name", c["provider"]), "model": c["model"], "n": n, "tokens_in": 0,
+           "tokens_out": 0, "cost_usd": 0.0, "suggestions": [], "reason": None}
+    prof = Profile(con, cfg, classes)
+    if prof.n < int(c["min_profile_tracks"]):
+        return {**out, "reason": f"{prof.n} liked and rated tracks (needs llm.min_profile_tracks, "
+                                 f"{c['min_profile_tracks']})"}
+    p = prof.without()
+    user = suggest_prompt(p, n)
+    log.debug("llm suggest request to %s %s:\n%s", out["provider"], out["model"], user)
+    try:
+        obj, u = provider.complete(SUGGEST_SYSTEM, user, SUGGEST_SCHEMA, "suggest")
+    except Refused as e:
+        u = e.usage
+        out.update(tokens_in=u["in"], tokens_out=u["out"], cost_usd=cost(cfg, u["in"], u["out"]))
+        return {**out, "reason": str(e)}
+    out.update(tokens_in=u["in"], tokens_out=u["out"], cost_usd=cost(cfg, u["in"], u["out"]))
+    mine = {key(a) for a, *_ in p["artists"]} | {key(a) for a, _ in p["turned_down"]}
+    for x in (obj.get("suggestions") or [])[:n]:
+        artist, title = str(x.get("artist") or "").strip(), str(x.get("title") or "").strip()
+        if artist and title:
+            out["suggestions"].append({"artist": artist, "title": title, "why": str(x.get("why") or ""),
+                                       "in_profile": bool(mine & _artist_keys(artist))})
+    return out
+
+
+def _artist_keys(artist: str) -> set[str]:
+    """'A & B feat. C' -> the keys of A & B, A, B and C: a suggestion is the profile's when any of them is."""
+    return {k for k in map(key, [artist, *split_artists(artist)]) if k}
+
+
 def known_songs(con) -> tuple[set[int], set[str]]:
     """Deezer ids of the candidates, and the song keys of the candidates, the liked songs and the library."""
     ids = {r[0] for r in con.execute("SELECT deezer_id FROM candidates WHERE deezer_id IS NOT NULL")}
@@ -494,43 +559,30 @@ def known_songs(con) -> tuple[set[int], set[str]]:
 
 
 def suggest_dry_run(con, cfg: dict, provider, dz, n: int = 100, *, classes: list[str] | None = None) -> dict:
-    """Ask for n songs with the whole profile and look each up on Deezer (one search each, through the shared
-    throttle). Offers nothing and stores nothing. -> {n, returned, resolved, with_preview, known, new, resolve_rate,
-    meets, tokens_in, tokens_out, cost_usd, suggestions [{artist, title, why, deezer, preview, known}], reason};
-    resolve_rate is resolved / returned."""
+    """Ask for n deep cuts as llm_suggest does (ask_suggestions) and look each up on Deezer (one search each,
+    through the shared throttle). Offers nothing and stores nothing. -> {n, returned, in_profile, resolved,
+    with_preview, known, new, resolve_rate, meets, bar, tokens_in, tokens_out, cost_usd, suggestions [{artist,
+    title, why, in_profile, deezer, preview, known}], reason}. new: on Deezer with a preview, not known and not by
+    a profile artist; meets: new >= NEW_BAR * n, the switch-on rule (ADR 0026)."""
     from .harvest import deezer_lookup
-    c = cfg["llm"]
-    out = {"provider": getattr(provider, "name", c["provider"]), "model": c["model"], "n": n, "returned": 0,
-           "resolved": 0, "with_preview": 0, "known": 0, "new": 0, "resolve_rate": None, "meets": None,
-           "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "suggestions": [], "reason": None}
-    prof = Profile(con, cfg, classes)
-    if prof.n < int(c["min_profile_tracks"]):
-        return {**out, "reason": f"{prof.n} liked and rated tracks (needs llm.min_profile_tracks, "
-                                 f"{c['min_profile_tracks']})"}
-    user = suggest_prompt(prof.without(), n)
-    log.debug("llm suggest request to %s %s:\n%s", out["provider"], out["model"], user)
-    try:
-        obj, u = provider.complete(SUGGEST_SYSTEM, user, SUGGEST_SCHEMA, "suggest")
-    except Refused as e:
-        u = e.usage
-        out.update(tokens_in=u["in"], tokens_out=u["out"], cost_usd=cost(cfg, u["in"], u["out"]))
-        return {**out, "reason": str(e)}
-    out.update(tokens_in=u["in"], tokens_out=u["out"], cost_usd=cost(cfg, u["in"], u["out"]))
+    out = ask_suggestions(con, cfg, provider, n, classes)
+    out.update(returned=0, in_profile=0, resolved=0, with_preview=0, known=0, new=0, resolve_rate=None, meets=None,
+               bar=math.ceil(NEW_BAR * n))
+    if out["reason"]:
+        return out
     ids, keys = known_songs(con)
     tol = cfg["matching"]["duration_tolerance"]
-    for s in (obj.get("suggestions") or [])[:n]:
-        artist, title = str(s.get("artist") or "").strip(), str(s.get("title") or "").strip()
-        hit = deezer_lookup(dz, artist, title, tol) if artist and title else None
+    for s in out["suggestions"]:
+        hit = deezer_lookup(dz, s["artist"], s["title"], tol)
         known = hit is not None and (hit.get("id") in ids or
                                      song_key((hit.get("artist") or {}).get("name", ""), hit.get("title", "")) in keys)
-        known = known or song_key(artist, title) in keys
-        out["suggestions"].append({"artist": artist, "title": title, "why": str(s.get("why") or ""),
-                                   "deezer": hit is not None, "preview": bool(hit and hit.get("preview")),
-                                   "known": known})
+        s.update(deezer=hit is not None, preview=bool(hit and hit.get("preview")),
+                 known=known or song_key(s["artist"], s["title"]) in keys)
     sg = out["suggestions"]
-    out.update(returned=len(sg), resolved=sum(x["deezer"] for x in sg), with_preview=sum(x["preview"] for x in sg),
+    out.update(returned=len(sg), in_profile=sum(x["in_profile"] for x in sg),
+               resolved=sum(x["deezer"] for x in sg), with_preview=sum(x["preview"] for x in sg),
                known=sum(x["known"] for x in sg),
-               new=sum(x["deezer"] and x["preview"] and not x["known"] for x in sg))
+               new=sum(x["deezer"] and x["preview"] and not x["known"] and not x["in_profile"] for x in sg))
     out["resolve_rate"] = _r(out["resolved"] / len(sg)) if sg else None
-    out["meets"] = out["resolve_rate"] is not None and out["resolve_rate"] > RESOLVE_BAR
+    out["meets"] = out["new"] >= out["bar"]
     return out

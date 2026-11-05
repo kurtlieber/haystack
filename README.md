@@ -178,20 +178,26 @@ rippers put it there) wins over both.
 
 ## More places to look (optional)
 
-haystack finds its candidates in several places, called sources. Most need no setup. Four more stay idle until
-you set them up, and each one sends a little to a service, named below. `haystack sources` shows how well each
-source does for you, and `harvest.retired_sources` stops one.
+haystack finds its candidates in several places, called sources. Most need no setup. A few more stay idle until
+you set them up, and each one sends a little to a service, named below. Several follow your scene rather than the
+charts: artists like yours, the top artists of your styles, this week's releases in those styles, small labels.
+`haystack sources` shows how well each source does for you, and what share of what it brings you had already
+(the `known` column); `harvest.retired_sources` stops one.
 
 | Source | Where it looks | Setup |
 |---|---|---|
 | `deezer_chart`, `deezer_editorial`, `deezer_new_releases` | Deezer's charts, genre charts and editors' new releases | none |
 | `deezer_artist_radio`, `deezer_related` | Deezer's artist radio and related artists, from artists you like | none |
-| `deezer_style_search` | Deezer playlists named after the styles you like most | none |
+| `deezer_style_search` | Playlists named after the styles you like most, made by Deezer's own editors for that genre | none |
 | `listenbrainz_similar` | Recordings people play next to the songs you like, from ListenBrainz | none |
+| `listenbrainz_fresh` | Releases of the past week whose tags name your top styles, or by artists you already have | none |
+| `listenbrainz_artist_similar` | The best-known songs of artists ListenBrainz finds similar to yours | none |
 | `deezer_label` | The newest albums of the record labels whose songs you keep most | none: it starts once haystack knows your kept songs' labels |
 | `lastfm_similar` | Songs Last.fm finds similar to yours, and the top songs of artists similar to yours | a Last.fm API key |
+| `lastfm_tag_artists` | The top songs of the artists Last.fm's listeners tag with your top styles, leaving out artists you have | a Last.fm API key |
 | `listenbrainz_recs` | Your own weekly recommendations from ListenBrainz, made from your listening | your ListenBrainz name |
 | `listenbrainz_radio` | ListenBrainz's LB Radio playlists for your top styles and artists | your ListenBrainz token |
+| `llm_suggest` | Deep cuts a language model names for your taste, once a week | a language model, and `jobs = ["seeds"]` (below) |
 
 **Last.fm.** Create a free API account at <https://www.last.fm/api/account/create> (only the API key is needed),
 then store the key:
@@ -201,7 +207,8 @@ docker compose run --rm haystack secret set lastfm-api-key
 ```
 
 Sent to Last.fm, with the key: the artist and title of the songs the harvest starts from (your best-rated and kept
-songs first, then other liked songs and your music folder) and those artists' names.
+songs first, then other liked songs and your music folder), those artists' names, and the names of your top styles
+as tags (`drum and bass`, `uk garage`) with the names of the artists Last.fm lists for them.
 
 **Your ListenBrainz recommendations.** [ListenBrainz](https://listenbrainz.org) is an open, non-profit listening
 service. Sign in, connect Spotify under Settings, Music services, and let it record your listening history. Once it
@@ -223,6 +230,12 @@ docker compose run --rm haystack secret set listenbrainz-token
 
 Sent to ListenBrainz, with the token: the names of your top styles and of the artists the harvest starts from.
 
+**Fresh releases and similar artists.** `listenbrainz_fresh` reads ListenBrainz's list of the past week's
+releases, which is the same for everyone, and picks yours out on your server: sent to ListenBrainz, nothing about
+you. Each release it keeps is looked up on Deezer by artist and title. `listenbrainz_artist_similar` sends
+ListenBrainz the artist and title of the songs the harvest starts from, to find their artists, then asks for those
+artists' neighbours and their best-known recordings. Neither needs an account.
+
 **Record labels.** `deezer_label` uses the labels Deezer lists for the albums of the songs you keep (a rating of 3
 stars or more, or a like), leaving out the major labels (`harvest.label_skip`), whose catalogues hold every style.
 Sent to Deezer: those label names, in its album search.
@@ -243,16 +256,31 @@ seconds.
 
 A language model, the kind of AI behind chat assistants, can't hear a song, but it has read a great deal about
 artists, labels and scenes. haystack can ask one about your songs, but for now only to measure whether that would
-help you: nothing the model says changes your batches yet. It stays off until you turn it on.
+help you, and, once you switch it on, to name deep cuts for the pool (below). It stays off until you turn it on.
 
 `haystack llm judge` asks the model about every song you've already judged, 40 to a request: how likely you are
 to keep each one, and why. Your verdicts stay on your server. haystack compares the answers with them and prints
 how well the model told your yes from your no on its own, how much its answers add to haystack's own re-ranker,
 and what the run cost. `haystack llm judge --dry-run` prints the first request and sends nothing, even while the
 model is off. `haystack llm suggest --dry-run` asks the model for 100 songs you'd probably like and looks each one
-up on Deezer, to count how many are real. It offers none of them.
+up on Deezer, to count how many are real and new to you. It offers none of them.
 
-Sent to the model's provider with each request:
+**Deep cuts for the pool.** The `llm_suggest` source asks the model once a week, in the Sunday harvest, for 100
+songs you'd probably keep: in your styles, by artists who are not in your profile and are not the best-known names
+of those styles, from small labels, singles and EPs. Each one is looked up on Deezer and joins the pool like any
+other candidate unless haystack has it already or it is by an artist you have. Run the dry run first: switch the
+source on only if it finds at least 50 new songs with a preview out of 100. Then:
+
+```toml
+[llm]
+enabled = true
+jobs = ["seeds"]
+weekly_budget_usd = 1.0     # the week's requests stop once their recorded cost reaches this
+```
+
+What it sends is the profile below, without songs to judge.
+
+Sent to the model's provider with each request (a `suggest` request has no songs, only the profile):
 
 - each song's artist, title, album, year, record label, top three styles, and which source found it;
 - a profile of your taste: the artists you rate and like most, with how many of their songs and their mean

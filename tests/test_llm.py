@@ -206,7 +206,8 @@ def test_suggest_dry_run_counts_what_deezer_has(tmp_path, monkeypatch):
     fake = FakeLLM(suggestions=sugg)
     r = llm.suggest_dry_run(con, cfg, fake, dz, n=4, classes=CLASSES)
     assert (r["returned"], r["resolved"], r["with_preview"], r["known"], r["new"]) == (4, 3, 2, 1, 1)
-    assert r["resolve_rate"] == 0.75 and r["meets"] is True
+    assert r["resolve_rate"] == 0.75 and r["in_profile"] == 0
+    assert r["bar"] == 2 and r["meets"] is False            # the switch-on rule: half of n new with a preview
     assert len(dz.queries) == 4 and fake.calls[0]["name"] == "suggest"
     assert "Name 4 songs" in fake.calls[0]["user"] and "Songs\n" not in fake.calls[0]["user"]
 
@@ -369,3 +370,31 @@ def test_the_command_reports_the_measurements(tmp_path, monkeypatch, capsys):
     assert "  0.90  4★" in out and "about lab" in out
     assert cli.cmd_llm(cfg, p.parse_args(["llm", "judge", "--json"])) == 0
     assert json.loads(capsys.readouterr().out)["chance_auc"] == 1.0
+
+
+def test_ask_suggestions_marks_the_profiles_own_artists_and_drops_blank_names(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    p = llm.Profile(con, cfg, CLASSES).without()
+    mine = p["artists"][0][0]
+    sugg = [{"artist": mine, "title": "Theirs", "why": "w"},
+            {"artist": f"Someone feat. {mine}", "title": "Guest spot", "why": "w"},
+            {"artist": "New Band", "title": "Fresh Song", "why": "w"},
+            {"artist": "", "title": "Nameless", "why": "w"}]
+    fake = FakeLLM(suggestions=sugg)
+    r = llm.ask_suggestions(con, cfg, fake, 3, CLASSES)
+    assert [(s["artist"], s["in_profile"]) for s in r["suggestions"]] == [(mine, True), (f"Someone feat. {mine}", True),
+                                                                          ("New Band", False)]
+    assert r["reason"] is None and r["tokens_in"] == 1000 and r["cost_usd"] > 0
+    sys_prompt = fake.calls[0]["system"]
+    assert "Never name a song by an artist in the profile" in sys_prompt and "small and independent" in sys_prompt
+
+
+def test_week_spent_and_ran_follow_the_iso_week(tmp_path, monkeypatch):
+    con, cfg, _ = _world(tmp_path, monkeypatch)
+    assert llm.week("2026-11-05T10:00:00Z") == "2026-W45"
+    llm.record_run(con, "seeds", "m", 100, 10, 10, 0.4)
+    llm.record_run(con, "seeds", "m", 100, 10, 0, 0.1, error="declined")
+    con.execute("INSERT INTO llm_runs(at, week, job, model, n, tokens_in, tokens_out, cost_usd, ok) "
+                "VALUES('2026-01-01T00:00:00Z', '2026-W01', 'seeds', 'm', 1, 1, 1, 9.0, 1)")
+    assert llm.spent(con) == pytest.approx(0.5) and llm.ran(con, "seeds") and not llm.ran(con, "rank")
+    assert llm.spent(con, "2026-W01") == 9.0

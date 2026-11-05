@@ -40,7 +40,8 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `deezer.py`, `listenbrainz.py`, `lastfm.py`, `itunes.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), the optional sources and the iTunes preview fallback (ADR 0020); a cross-process throttle per service: Deezer 1.1 s, ListenBrainz 1.2 s, Last.fm 1 s, iTunes 3 s |
 | `songs.py` | the Song as a row of its own (ADR 0025): one per recording, by its ISRC, else by its names; every candidate, Spotify track and library file joins one; the ISRC backfill for older candidates |
 | `metadata.py` | what Deezer publishes about a track (ADR 0017): its album's label, release date and record type, its rank and its artist's fans, fetched once per album and artist, for the re-ranker and the track card |
-| `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013) |
+| `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013); the already-known share, and which pool candidates a live source still holds (ADR 0026) |
+| `scene.py` | the listener's scene for the scene sources (ADR 0026): top styles with their Discogs genres, the Last.fm spelling of a style, Deezer's genre editors, the positive artists |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
 | `align.py` | the preview alignment (ADR 0012): a linear map from preview vectors into the library's space, fitted on the liked songs that have both |
 | `rerank.py` | the second stage (ADR 0011): a logistic regression trained on your Verdicts orders the top of the pool once it beats similarity alone, with a chance and reasons per pick |
@@ -159,7 +160,7 @@ haystack first-batch [--no-penalty] [--clear-min-age-hours H] [--clear-recent ke
 haystack sanity-check [-n 10 -k 10]  write sanity-check.md in the state dir
 haystack status                      status.json + live counts
 haystack review [list|accept ID..|reject ID..]   uncertain liked-song -> library matches
-haystack sources [list|retire NAME]  kept rate per source and per seed, this harvest's caps
+haystack sources [list|retire NAME]  kept rate and known share per source, per seed, this harvest's caps
 haystack report [--tracks] [--json]  like rates, Verdict counts, the pool's make-up, latest eval (read-only)
 haystack check-secrets [--write]     which secrets are set (lengths only); --write: the token record is writable
 haystack secret set NAME             store a secret, from a hidden prompt or stdin
@@ -194,9 +195,11 @@ Spotify jobs exit with code **3** and `status.json` -> `auth.ok=false` when no r
 
 Sources: `deezer_chart`, `deezer_editorial` (genre charts), `deezer_new_releases` (editorial releases),
 `deezer_artist_radio`, `deezer_related` (related artists' top tracks), `deezer_style_search` (Deezer playlists
-named after your top styles), `listenbrainz_similar` (labs `recording-search` + `similar-recordings`), and four
-that wait for setup (ADR 0020, below): `lastfm_similar`, `listenbrainz_recs`, `listenbrainz_radio` and
-`deezer_label`. A source that isn't set up logs one line and finds nothing. Every candidate is a Deezer track:
+named after your top styles, by Deezer's genre editors), `listenbrainz_similar` (labs `recording-search` + `similar-recordings`),
+`listenbrainz_fresh` and `listenbrainz_artist_similar` (ADR 0026, below), and those that wait for setup (ADR 0020
+and 0026, below): `lastfm_similar`, `lastfm_tag_artists`, `listenbrainz_recs`, `listenbrainz_radio`,
+`deezer_label` and `llm_suggest`. A source that isn't set up logs one line (`skipped` in the run's stats, and after
+the cap in `haystack sources`) and finds nothing. Every candidate is a Deezer track:
 the sources outside Deezer name a song, and haystack finds it on Deezer by ISRC (when the source gives one), then
 by an artist and title search with the same version check as the Spotify matching.
 
@@ -213,10 +216,13 @@ many it left out: a karaoke cover's similar tracks are more karaoke. Each candid
 songs, the rest library, untagged).
 
 **`deezer_style_search`** takes your `style_search_styles` (8) top Discogs styles by mean activation over the
-liked songs (`haystack eval` shows them), searches Deezer's playlists for each style's name, and takes up to 25
-new tracks, in playlist order, from each of the `style_search_playlists` (3) with the most fans among the first 6
-results. Each style gets at most its share of the source's cap. It skips with a log line until liked songs have
-style vectors.
+liked songs (`haystack eval` shows them), searches Deezer's playlists for each style's name, and keeps only those
+made by Deezer's editor for the style's Discogs genre (`scene.GENRE_EDITORS`, one Deezer account per Deezer genre;
+the country editors are left out). A name match alone finds funk for Bassline and reggae for Dubstep; the others
+are counted in the run's `playlists_rejected`. Of the first 6 editors' playlists among 25 results it takes up to 25
+new tracks, in playlist order, from each of the `style_search_playlists` (3) with the most fans, checking each
+playlist's creator again. Each style gets at most its share of the source's cap. It skips with a log line until
+liked songs have style vectors.
 
 **Caps.** Each source finds at most `harvest.max_new_per_source` (60) new candidates per run, or its own
 `harvest.caps.<source>`. With `harvest.adaptive_caps` (default on) a source with at least
@@ -226,9 +232,46 @@ fixed cap for one run.
 
 **`lastfm_similar`** (the `lastfm-api-key` secret). Half the source's cap comes from Last.fm's
 `track.getSimilar` on seed tracks (detail `lastfm/track/<artist> - <title>`), the other half from
-`artist.getSimilar` on seed artists: the top 2 tracks (`artist.getTopTracks`) of each seed's 3 most similar
-artists (detail `lastfm/artist/<seed> -> <artist>`). Seeds are the same buckets and history as the other seeded
-sources. A refused key logs once and stops the source for the run.
+`artist.getSimilar` on seed artists: the top 2 tracks (`artist.getTopTracks`) of each seed's
+`harvest.lastfm_similar_artists` (6) most similar artists (detail `lastfm/artist/<seed> -> <artist>`). Seed tracks
+are the same buckets and history as the other seeded sources; seed artists come from the top bucket first (5 stars,
+then 4, then kept discoveries). A refused key logs once and stops the source for the run.
+
+**Scene sources** (ADR 0026). Each reads the listener's top styles (as `deezer_style_search` does) or their
+**positive artists**: every artist of a liked song, a Rating of 3 stars or more that keeps its heart, a present
+library file or a kept discovery. A style is written as Last.fm's listeners tag it through a table in
+`scene.TAG_SPELLING` ("Drum n Bass" is `drum and bass`, "Hip Hop" `hip-hop`; any other style lower-cased with "&"
+as "and").
+
+- **`lastfm_tag_artists`** (the `lastfm-api-key` secret). For each of the `harvest.tag_styles` (8) top styles,
+  `tag.getTopArtists` (the first 50), the first `harvest.tag_artists` (12) that are not positive artists and not
+  taken for another style this run, 2 top tracks each, found on Deezer. Detail `lastfm/tag/<style> -> <artist>`.
+  `tag.getTopTracks` is not used: it drifts to pop.
+- **`listenbrainz_fresh`** (keyless). `/1/explore/fresh-releases/` for the past `harvest.fresh_days` (7) days,
+  kept when a release tag names one of the top styles (any spelling: `drum & bass`, `dnb`) or the release is by a
+  positive artist. A fresh release has no recordings in ListenBrainz's metadata yet, so up to twice the cap of
+  kept releases, most listened first, are found on Deezer by an album search (title and artist), and the 2 most
+  played tracks of each offered. Detail `lb-fresh/<release mbid>`; a release tried once is not searched again. The
+  run's stats count the kept releases as `releases`.
+- **`listenbrainz_artist_similar`** (keyless). For the seed artists (top bucket first), the artist's MBID from its
+  song's recording (`recording-search`, then `/1/metadata/recording/?inc=artist`), labs `similar-artists` with
+  `harvest.listenbrainz_artist_algorithm`, the `harvest.lb_similar_artists` (6) nearest, and 2 recordings each from
+  `/1/popularity/top-recordings-for-artist/<mbid>`. Detail `lb-artist/<mbid> (<seed>) -> <artist>`.
+- **`llm_suggest`** (the language model, below). Once an ISO week, in the first shard of `harvest --broad` only:
+  `llm.seeds_per_week` (100) deep cuts with the whole profile, those by a profile artist dropped, each found on
+  Deezer and offered unless haystack has it already. Detail `llm/<model>/<ISO week>`. Needs `llm.enabled`,
+  `"seeds"` in `llm.jobs` and the key; each request's tokens and cost go in `llm_runs`, and the source skips for
+  the week once the week's recorded cost reaches `llm.weekly_budget_usd` (1.0).
+
+**Already known.** The harvest's summary has `known_share` per source: of what the source brought in, the share
+that was already a candidate (`dupe`), a library file or a liked song. `haystack sources` shows it over the
+harvest runs of the last 14 days, and `deezer_editorial` per chart, a chart no longer in
+`harvest.deezer_editorial_ids` marked `(dropped)`.
+
+**Retired.** A pool candidate is eligible for a batch and for Calibrate only while one of its `candidate_sources`
+rows is live: its source is not in `harvest.retired_sources`, and for `deezer_editorial` (`chart/<id>`) and
+`deezer_new_releases` (`editorial/<id>/...`) the id is still in `harvest.deezer_editorial_ids`. A candidate with
+no rows goes by its own `source`. A song another live source also found stays eligible.
 
 **`listenbrainz_recs`** (`harvest.listenbrainz_user`). Your weekly collaborative-filtering recommendations
 (`/1/cf/recommendation/user/<name>/recording`, no token) for a ListenBrainz account that records your listening.
@@ -244,8 +287,8 @@ token before it answers `/1/explore/lb-radio`.
 album of each song you Rated or liked, weighted 3 for 5 stars, 2 for 4 stars and 1 for 3 stars or a liked song
 with no Rating. A label whose name holds a word of `harvest.label_skip` (the three majors' labels, the big
 catalogue labels and the catalogue companies: Columbia, Universal, Warner, Rhino, Concord, BMG and so on; `[]`
-keeps them) is passed over and the
-next label takes its place; the run's stats count them as `majors_skipped`. For each label it searches Deezer's albums (`/search/album?q=label:"<name>"`; Deezer can't sort
+keeps them) is passed over and the next label takes its place; the run's stats count them as `majors_skipped`.
+For each label it searches Deezer's albums (`/search/album?q=label:"<name>"`; Deezer can't sort
 these by date, so the highest album id, the newest added, comes first), keeps albums whose label matches, and
 takes the top 2 tracks by rank from each of the `harvest.label_albums` (5) newest it hasn't seen. Detail
 `label/<name>/album/<id>`. It waits until Deezer's metadata (below) knows the labels.
@@ -504,9 +547,10 @@ alone reaches AUC 0.70 or adds 0.05 to the leave-one-out AUC. A request the mode
 16,000-token reply limit, leaves its songs without a chance: they are counted, and left out of both AUCs.
 
 `haystack llm suggest --dry-run [--n 100]` sends the whole profile, asks for n songs the listener probably hasn't
-heard, looks each one up on Deezer (one search each, through the shared throttle) and counts how many resolve,
-have a preview and are new to haystack. It offers and stores nothing. A seeds job is built if the rerank bar is
-met, or on its own if more than 60 % resolve. `judge --dry-run` prints the system prompt and the first request
+heard, with `llm_suggest`'s deep-cut prompt, looks each one up on Deezer (one search each, through the shared
+throttle) and counts how many are by a profile artist, resolve, have a preview and are new to haystack. It offers
+and stores nothing. The switch-on rule (ADR 0026): `llm_suggest` goes on only after a dry run where at least half
+of n are new with a preview, not known and not by a profile artist. `judge --dry-run` prints the system prompt and the first request
 and sends nothing, whether or not `llm.enabled` is on. Both commands open the database read-only and need no
 Spotify sign-in; `--debug` logs each request (never the key).
 
@@ -524,6 +568,9 @@ base_url = ""                  # openai_compatible only, e.g. "http://127.0.0.1:
 min_profile_tracks = 30        # fewer liked and rated songs than this: nothing is sent
 price_in_per_mtok = 4.0        # US dollars per million tokens, for the cost line
 price_out_per_mtok = 20.0
+jobs = []                      # unattended jobs: "seeds" turns on the llm_suggest source
+seeds_per_week = 100
+weekly_budget_usd = 1.0        # all jobs together, per ISO week, by the recorded cost
 ```
 
 **Calibrate** (`[calibrate]`, ADR 0015). Discoveries only ever shows the top of the pool, so the re-ranker hears
@@ -739,7 +786,7 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 |---|---|---|---|
 | library | daily 03:15 | rescan + embed new/changed files (+ To Rip check if signed in) | no |
 | harvest | daily 05:00 | harvest + embed candidates, re-score | no |
-| harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds | no |
+| harvest_broad | Sundays 04:00 | `harvest --broad 150`: a wider harvest from the week's seeds; its first shard also runs `llm_suggest` once a week, when it is on | no |
 | sync | hourly | plays, likes (songs you now have leave the pool), outcomes, expiry, the Calibrate top-up, To Rip, your playlists, token check | yes |
 | plays | every 15 minutes | Spotify's recently played alone, so its last 50 never overflow; a full page is recorded as a play gap | yes |
 | batch | Mondays 08:00 | clear Discoveries (`--clear-recent remove --clear-min-age-hours 24`), then add a batch | yes |
@@ -748,7 +795,9 @@ Two ways, the same jobs. Pick one per server: the container's scheduler doesn't 
 
 Heavy jobs run at nice 19. Each outside service's request rate is kept across processes by a throttle file in
 the state dir (`deezer.throttle`, `listenbrainz.throttle`, `lastfm.throttle`, `itunes.throttle`), so a manual run
-next to a scheduled one shares it.
+next to a scheduled one shares it. The scene sources (ADR 0026) add no file: `lastfm_tag_artists` shares
+`lastfm.throttle`, `listenbrainz_fresh` and `listenbrainz_artist_similar` share `listenbrainz.throttle`, and every
+Deezer lookup shares `deezer.throttle`.
 
 ### `haystack serve` (the container)
 
@@ -817,7 +866,7 @@ are the server's local time; a unit drop-in (`systemctl --user edit haystack-bat
 | `spotify-client-id`, `spotify-client-secret` | your Spotify app's credentials | `haystack secret set NAME` |
 | `api-token` | needle's bearer token | `haystack token new` |
 | `alert-webhook-url`, `alert-webhook-key` | optional, see Alerts | `haystack secret set NAME` |
-| `lastfm-api-key` | optional, for `lastfm_similar` | `haystack secret set NAME` |
+| `lastfm-api-key` | optional, for `lastfm_similar` and `lastfm_tag_artists` | `haystack secret set NAME` |
 | `listenbrainz-token` | optional, for `listenbrainz_radio` | `haystack secret set NAME` |
 | `llm-api-key` | optional, for the language model (`llm.provider = "anthropic"`, or a server that asks for one) | `haystack secret set NAME` |
 | refresh token | Spotify's long-lived login | `haystack auth` |

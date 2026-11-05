@@ -1,5 +1,6 @@
-"""Last.fm's public API (an API key, no sign-in): similar tracks, similar artists and an artist's top tracks
-(ADR 0020). Read-only methods only, at most one request per harvest.lastfm_min_interval across all processes.
+"""Last.fm's public API (an API key, no sign-in): similar tracks, similar artists, an artist's top tracks
+(ADR 0020) and a tag's top artists (ADR 0026). Read-only methods only, at most one request per
+harvest.lastfm_min_interval across all processes.
 Collaborative filtering over a listener base many times ListenBrainz's; the answers are names, which the harvest
 resolves on Deezer like listenbrainz_similar's."""
 from __future__ import annotations
@@ -83,3 +84,8 @@ class Lastfm:
         j = self._get("artist.getTopTracks", artist=artist, limit=limit) or {}
         return [{"artist": _name(t.get("artist")) or artist, "title": t["name"]}
                 for t in _list((j.get("toptracks") or {}).get("track")) if t.get("name")][:limit]
+
+    def tag_top_artists(self, tag: str, limit: int = 50) -> list[str]:
+        """The artists Last.fm's listeners tag `tag` most, first first (tag.getTopArtists)."""
+        j = self._get("tag.getTopArtists", tag=tag, limit=limit) or {}
+        return [_name(a) for a in _list((j.get("topartists") or {}).get("artist")) if _name(a)][:limit]

@@ -59,13 +59,17 @@ per_week = 30                  # new songs a week
 outstanding = 30               # at most this many waiting for a verdict
 
 [harvest]
-# The last four do nothing until they are set up (README, "Optional"): lastfm_similar needs the lastfm-api-key
-# secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the listenbrainz-token secret, deezer_label a
-# few kept songs whose album Deezer has described.
+# Some do nothing until they are set up (README, "Optional"): lastfm_similar and lastfm_tag_artists need the
+# lastfm-api-key secret, listenbrainz_recs listenbrainz_user, listenbrainz_radio the listenbrainz-token secret,
+# deezer_label a few kept songs whose album Deezer has described, and llm_suggest the language model with "seeds"
+# in [llm] jobs.
 sources = ["deezer_chart", "deezer_editorial", "deezer_new_releases",
            "deezer_artist_radio", "deezer_related", "deezer_style_search", "listenbrainz_similar",
-           "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label"]
+           "lastfm_similar", "listenbrainz_recs", "listenbrainz_radio", "deezer_label",
+           "lastfm_tag_artists", "listenbrainz_fresh", "listenbrainz_artist_similar", "llm_suggest"]
+# A source listed here harvests nothing more, and what only it found is no longer offered.
 retired_sources = []
+# retired_sources = ["deezer_chart"]
 # Where artist radio, related artists and ListenBrainz start: "verdicts" (your 4-5 star Ratings and kept
 # discoveries first, then liked songs, then the library) or "recent" (recent liked songs, then the library).
 seed_policy = "verdicts"
@@ -110,8 +114,9 @@ enabled = false
 # outbox = "~/.local/state/backup-alert/outbox"
 
 [llm]
-# An optional language model (ADR 0019), off until you turn it on. For now only `haystack llm judge` and
-# `haystack llm suggest --dry-run` use it, by hand. What each request sends: README, "Optional: a language model".
+# An optional language model (ADR 0019), off until you turn it on. `haystack llm judge` and
+# `haystack llm suggest --dry-run` use it by hand, and the jobs below on their own. What each request sends:
+# README, "Optional: a language model".
 enabled = false
 provider = "anthropic"            # needs pip install "haystack-music[llm]" and the llm-api-key secret
 model = "claude-opus-5-5"
@@ -121,3 +126,8 @@ model = "claude-opus-5-5"
 min_profile_tracks = 30           # liked and rated songs needed before a profile is worth sending
 price_in_per_mtok = 4.0           # your model's price in US dollars per million tokens, for the cost line
 price_out_per_mtok = 20.0         # (0 and 0 for a local model)
+# The model's unattended jobs. "seeds" adds the llm_suggest source to the weekly broad harvest: deep cuts in your
+# styles by artists you don't have yet. Try `haystack llm suggest --dry-run --tracks` first.
+jobs = []
+# jobs = ["seeds"]
+weekly_budget_usd = 1.0           # the jobs stop for the week once their recorded cost reaches this

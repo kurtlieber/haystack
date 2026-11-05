@@ -14,6 +14,7 @@ from dataclasses import replace
 import numpy as np
 
 from . import calibrate, db, library, rerank, songs, vectors
+from . import sources as source_stats
 from .deezer import Deezer
 from .known import Known
 from .matching import Index, TrackRef, compare
@@ -230,7 +231,7 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     fraction = b["exploration_fraction"] if explore_fraction is None else explore_fraction
     size = size or b["size"]
     rng = rng or random.Random()
-    retired = set(cfg["harvest"].get("retired_sources", []))
+    retired = source_stats.retired_candidates(con, cfg)   # no live source holds them (ADR 0026)
     asked = set(calibrate.picked(con).values())          # in the Calibrate queue: never also a Discoveries offer
     have = Known(con)                                 # songs the listener has, on any release (ADR 0021)
     skipped = 0
@@ -238,7 +239,7 @@ def select_for_batch(con, cfg: dict, rng: random.Random | None = None, *, size: 
     for r in con.execute("SELECT * FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         r = dict(r)
-        if r["source"] in retired or r["id"] in asked:
+        if r["id"] in retired or r["id"] in asked:
             continue
         if have.why(r):                                   # a like, a file or a judged track under another release
             skipped += 1

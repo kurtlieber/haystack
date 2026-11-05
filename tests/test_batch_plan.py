@@ -226,3 +226,18 @@ def test_plan_reports_the_spread_and_each_picks_band(tmp_path, monkeypatch):
     cfg["batch"].update(diversity=0.0, max_style_share=1.0, max_per_nearest=0)
     plain = batch.plan(con, cfg, rng=random.Random(1))
     assert all(t["style"].startswith("style ") for t in plain["tracks"])      # no class names: by number
+
+
+def test_a_dropped_charts_songs_leave_the_plan_unless_a_live_source_also_found_them(tmp_path, monkeypatch):
+    con, cfg, path = _world(tmp_path, monkeypatch)
+    _no_network(monkeypatch)
+    cfg["harvest"]["deezer_editorial_ids"] = [0, 113]
+    for cid in (1, 3):                      # the two best of the pool, both found through chart 116 only
+        con.execute("UPDATE candidates SET source='deezer_editorial', spotify_id=?, spotify_status=NULL WHERE id=?",
+                    (sid(f"c{cid}"), cid))
+        con.execute("INSERT INTO candidate_sources(candidate_id, source, detail) VALUES(?, 'deezer_editorial', "
+                    "'chart/116')", (cid,))
+    con.execute("INSERT INTO candidate_sources(candidate_id, source, detail) VALUES(3, 'lastfm_similar', 'x')")
+    con.commit()
+    ids = {t["artist"] for t in batch.plan(db.connect_readonly(path), cfg, rng=random.Random(1))["tracks"]}
+    assert "Artist 1" not in ids and "Artist 3" in ids

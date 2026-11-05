@@ -26,6 +26,10 @@ SOURCE_LABELS = {
     "listenbrainz_recs": "your ListenBrainz recommendations",
     "listenbrainz_radio": "ListenBrainz's LB Radio",
     "lastfm_similar": "Last.fm similar songs",
+    "lastfm_tag_artists": "Last.fm's top artists of your styles",
+    "listenbrainz_fresh": "fresh releases in your styles",
+    "listenbrainz_artist_similar": "ListenBrainz similar artists",
+    "llm_suggest": "the language model's deep cuts",
 }
 STYLES_SHOWN = 3
 

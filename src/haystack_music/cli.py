@@ -167,7 +167,8 @@ def cmd_harvest(cfg, a) -> int:
         if a.per_seed:
             for k in ("broad_radio_per_seed", "broad_related_per_seed", "broad_lb_per_seed"):
                 cfg["harvest"][k] = a.per_seed
-        h = Harvester(con, cfg, seeds=seeds, liked_seeds=liked)
+        lead = bool(a.broad) and (not a.shard or a.shard.split("/")[0] == "0")
+        h = Harvester(con, cfg, seeds=seeds, liked_seeds=liked, lead=lead)
         out.update(h.run(a.sources.split(",") if a.sources else None, a.limit_per_source, retry=retry))
         if a.styles:
             out["style_backfill_extra"] = h.backfill_styles(a.styles)
@@ -472,8 +473,8 @@ def cmd_llm(cfg, a) -> int:
     if a.debug:
         logging.getLogger("haystack_music.llm").setLevel(logging.DEBUG)
     if a.action == "suggest" and not a.dry_run:
-        print("llm suggest: only --dry-run for now (ADR 0019: a seeds job comes after the measurements)",
-              file=sys.stderr)
+        print("llm suggest: only --dry-run; the seeds job is the llm_suggest source of `harvest --broad`, "
+              "switched on by llm.jobs (ADR 0026)", file=sys.stderr)
         return 2
     sending = not (a.action == "judge" and a.dry_run)
     if sending and not cfg["llm"]["enabled"]:
@@ -538,14 +539,16 @@ def _print_suggest(r: dict, a) -> None:
     print(f"llm suggest: asked {r['provider']} {r['model']} for {r['n']}: {r['returned']} returned"
           + (f" ({r['reason']})" if r["reason"] else ""))
     if r["returned"]:
-        print(f"llm suggest: {r['resolved']} on Deezer ({r['resolve_rate']:.0%}), {r['with_preview']} with a preview, "
-              f"{r['known']} already known, {r['new']} new with a preview; "
-              + ("more than 60 % resolve: a seeds job is worth building" if r["meets"] else "60 % or fewer resolve"))
+        print(f"llm suggest: {r['in_profile']} by an artist in the profile (dropped), {r['resolved']} on Deezer "
+              f"({r['resolve_rate']:.0%}), {r['with_preview']} with a preview, {r['known']} already known, "
+              f"{r['new']} new with a preview; "
+              + (f"at least {r['bar']} new: llm_suggest may be switched on (llm.jobs = [\"seeds\"])" if r["meets"]
+                 else f"fewer than {r['bar']} new: leave llm_suggest off"))
     print(f"llm suggest: {r['tokens_in']} tokens in, {r['tokens_out']} out: about ${r['cost_usd']:.2f}")
     if a.tracks:
         for s in r["suggestions"]:
-            mark = "known" if s["known"] else ("new" if s["deezer"] and s["preview"] else
-                                               ("no preview" if s["deezer"] else "not on Deezer"))
+            mark = "profile" if s["in_profile"] else "known" if s["known"] else (
+                "new" if s["deezer"] and s["preview"] else ("no preview" if s["deezer"] else "not on Deezer"))
             print(f"  {mark:13} {s['artist']} - {s['title']}  ({s['why']})")
 
 
@@ -828,25 +831,37 @@ def cmd_sources(cfg, a) -> int:
         h = cfg["harvest"]
         live = [x for x in h["sources"] if x not in h.get("retired_sources", [])]
         caps = sources.caps(cfg, live, kept)
+        known = sources.known_share(con)
+        skips = sources.last_skips(con)
 
         def pct(v):
             return "-" if v is None else f"{v:.0%}"
 
-        print(f"{'source':24} {'cands':>6} {'embedded':>8} {'offered':>7} {'decided':>7} {'kept':>5} {'kept rate':>9}"
-              f"  cap")
+        print(f"{'source':28} {'cands':>6} {'embedded':>8} {'offered':>7} {'decided':>7} {'kept':>5} {'kept rate':>9}"
+              f" {'known':>6}  cap")
         for s in sorted(set(cand) | set(kept["per_source"]) | set(h["sources"])):
             c = cand.get(s, {}); r = kept["per_source"].get(s, {})
             cap = (f"{caps[s]['cap']} (x{caps[s]['multiplier']:.2f})" if s in caps else
                    "retired" if s in h.get("retired_sources", []) else "-")
-            print(f"{s:24} {c.get('total', 0):6} {c.get('embedded', 0):8} {r.get('offered', 0):7} "
-                  f"{r.get('decided', 0):7} {r.get('kept', 0):5} {pct(r.get('kept_rate')):>9}  {cap}")
+            if s in caps and s in skips:
+                cap += f"; skipped: {skips[s]}"
+            print(f"{s:28} {c.get('total', 0):6} {c.get('embedded', 0):8} {r.get('offered', 0):7} "
+                  f"{r.get('decided', 0):7} {r.get('kept', 0):5} {pct(r.get('kept_rate')):>9} "
+                  f"{pct(known['per_source'].get(s, {}).get('known_share')):>6}  {cap}")
+        if known["charts"]:
+            ids = {int(x) for x in h["deezer_editorial_ids"]}
+            print("\ndeezer_editorial by chart: " + "; ".join(
+                f"{e} {pct(k['known_share'])} known of {k['intake']}" + ("" if int(e) in ids else " (dropped)")
+                for e, k in known["charts"].items()))
         print(f"\n{'seed':24} {'offered':>7} {'decided':>7} {'kept':>5} {'kept rate':>9}")
         for s, r in kept["per_seed"].items():
             print(f"{s:24} {r['offered']:7} {r['decided']:7} {r['kept']:5} {pct(r['kept_rate']):>9}")
         o = kept["overall"]
         print(f"\noverall: offered {o['offered']}, decided {o['decided']}, kept {o['kept']}, "
               f"kept rate {pct(o['kept_rate'])}")
-        print("kept: a Rating of 3 stars or more, or liked without a Rating. cap: new candidates per harvest"
+        print(f"kept: a Rating of 3 stars or more, or liked without a Rating. known: the share of a source's intake "
+              f"in the last {sources.KNOWN_DAYS} days that was already a candidate, a liked song or a library file. "
+              "cap: new candidates per harvest"
               + (f", scaled by the kept rate from {cfg['sources']['min_offers_before_retire']} decided offers."
                  if h.get("adaptive_caps", True) else "."))
         return 0
