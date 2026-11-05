@@ -55,7 +55,7 @@ _Avoid_: liked song (ambiguous)
 ### Traits
 
 **Trait**:
-One of the seven measured qualities of a track's sound: tempo, valence, energy, danceability, acousticness, instrumentalness and loudness.
+One of the eight measured qualities of a track's sound: tempo, valence, energy, danceability, acousticness, instrumentalness, loudness and harmony (harmonic movement). needle shows the first seven.
 _Avoid_: audio feature (Spotify's retired term), metric, stat
 
 **Reading**:

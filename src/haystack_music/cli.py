@@ -643,6 +643,10 @@ def cmd_traits(cfg, a) -> int:
     def run(con):
         if a.action == "backfill":
             return traits.backfill(con, Deezer(cfg["harvest"]["deezer_min_interval"]), a.limit)
+        if a.action == "backfill-harmony":
+            out = traits.harmony_backfill(con, Deezer(cfg["harvest"]["deezer_min_interval"]), a.limit)
+            print(json.dumps(out))
+            return out
         if a.action == "retempo":
             out = traits.retempo(con)
             print(json.dumps(out))
@@ -1034,9 +1038,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["fetch", "check"])
     s.set_defaults(fn=cmd_models)
 
-    s = sub.add_parser("traits", help="Readings: backfill stored previews, measure TRACK on demand, show TRACK, "
+    s = sub.add_parser("traits", help="Readings: backfill stored previews, backfill-harmony (the harmony Reading "
+                                      "for previews measured before it), measure TRACK on demand, show TRACK, "
                                       "retempo (fold stored drum & bass and jungle tempos; token-free)")
-    s.add_argument("action", choices=["backfill", "measure", "show", "retempo"])
+    s.add_argument("action", choices=["backfill", "backfill-harmony", "measure", "show", "retempo"])
     s.add_argument("track", nargs="?", help="Spotify track id (measure, show)")
     s.add_argument("--limit", type=int, default=150)
     s.set_defaults(fn=cmd_traits)

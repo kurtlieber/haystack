@@ -50,7 +50,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `report.py` | `haystack report`: offers, Verdicts, the pool, the latest eval, plays per week and the gates, as counts and shares, read-only |
 | `sync.py`, `batch.py`, `clear.py` | hourly sync, weekly batch, and the pre-batch Discoveries clear |
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002); a Song's verdict, the newest on any release of a recording (by ISRC), for playlist cards and Rate your likes (ADR 0021) |
-| `traits.py`, `baseline.py` | Readings of the seven Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
+| `traits.py`, `baseline.py` | Readings of the eight Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
 | `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
 | `originals.py` | possible covers and live versions (ADR 0022): four signs (the title, a live take, a borrowed ISRC, Deezer popularity) checked once per track by the API's worker, and the Swap: the cover's Verdicts taken back and its Original put in its place in your own playlists and Liked Songs. The only code that edits your own playlists |
@@ -171,6 +171,7 @@ haystack verdict export FILE         every verdict, with title and artists, to a
 haystack verdict import FILE [--pending]   add a file's verdicts (by id: importing it again adds nothing)
 haystack models fetch|check          the Essentia models: download the missing ones (into models/)
 haystack traits backfill [--limit N] Readings for stored previews (Discoveries and likes first)
+haystack traits backfill-harmony [--limit N]   the harmony Reading for previews measured before 0.13.0
 haystack metadata backfill [--limit N]   Deezer's facts about each track: judged ones, liked songs, then the pool
 haystack songs backfill [--limit N]  ISRCs for older candidates, the pool first, then every row joins its Song
 haystack songs show ISRC|ID          a Song and every candidate, Spotify track and library file that joined it
@@ -311,6 +312,17 @@ a clip of these styles often reads at half time (85) or at two thirds (115). Eac
 Readings the same way (the style may be stored after them); `haystack traits retempo` does it at once. Halftime,
 dubstep, trap and hardcore are left as measured: they are played at both levels, so no range fits them. A drum &
 bass track whose clip the style head hears as another style is not folded.
+
+**Harmony** (harmonic movement, ADR 0027). HPCP chroma (12 bins, 2048-sample frames, hop 512, spectral peaks
+40-5000 Hz) on the mono 44.1 kHz clip, averaged into sixteenth-note slots on the beat grid RhythmExtractor2013
+found (the tempo pass's ticks), sixteen slots to a bar. The Reading is the median, over every pair of whole bars,
+of the mean absolute difference between their chroma (`traits.bar_chroma`, `traits.movement`); fewer than 6 bars
+gives none. On 446 rated previews it ran 0.07-0.27, median 0.2. Previews measured before 0.13.0 get it from
+`traits.harmony_backfill`: each harvest takes `harvest.harmony_backfill_per_run` (300) in the backfill's order,
+two Deezer requests each and no models, and marks the row with the new `models` version, so a clip with too few
+bars, or whose Deezer preview is gone (an Apple preview's row), isn't asked again. `haystack traits
+backfill-harmony` runs it at once. The re-ranker takes it as `trait:harmony` like the other Traits; the language
+model's profile leaves it out (`llm.PROFILE_TRAITS`) until the judge's run 2 is measured.
 
 **Deezer's metadata** (ADR 0017). A new candidate keeps its Deezer album id and rank from the track object the
 harvest already has. After the sources, each daily harvest fetches what is still missing for up to

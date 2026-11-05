@@ -119,7 +119,7 @@ class Worker:
 
 
 ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7, "acousticness": 0.1,
-              "instrumentalness": 0.4, "loudness": -8.0}
+              "instrumentalness": 0.4, "loudness": -8.0, "harmony": 0.2}
 
 
 @pytest.fixture

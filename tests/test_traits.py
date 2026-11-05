@@ -287,3 +287,115 @@ def test_models_fetch_gets_every_model_once(tmp_path):
     assert all(u.startswith(traits.BASE) for u in s.urls) and len(s.urls) == 2 * len(traits.MODELS)
     assert traits.missing_models(tmp_path) == [] and not list(tmp_path.glob(".*.part"))
     assert traits.fetch_models(tmp_path, session=s) == [] and len(s.urls) == 2 * len(traits.MODELS)
+
+
+# ---------------- harmony (dotfiles #450) ----------------
+
+def _grid(bars: int, beat: float = 0.5, fps: float = 100.0):
+    """Beat times for `bars` bars of four beats, and frame times at `fps`."""
+    beats = np.arange(bars * 4 + 1) * beat
+    return beats, np.arange(0, beats[-1], 1 / fps)
+
+
+def test_a_bar_is_sixteen_slots_and_too_few_bars_have_no_reading():
+    beats, times = _grid(6)
+    chroma = np.zeros((len(times), 12), np.float32)
+    chroma[:, 0] = times                                        # rises through the clip
+    bars = traits.bar_chroma(chroma, times, beats)
+    assert bars.shape == (6, 16, 12)
+    assert bars[0, 0, 0] < bars[0, 15, 0] < bars[1, 0, 0]       # slots and bars in time order
+    short, t5 = _grid(5)
+    assert traits.bar_chroma(np.zeros((len(t5), 12)), t5, short) is None
+    assert traits.bar_chroma(chroma, times, [0.5]) is None
+
+
+def test_a_held_loop_has_no_movement_and_a_chord_every_bar_has_some():
+    beats, times = _grid(8)
+    loop = np.zeros((len(times), 12), np.float32)
+    loop[:, [0, 4, 7]] = 1.0                                    # one chord throughout
+    assert traits.movement(traits.bar_chroma(loop, times, beats)) == 0.0
+    moving = loop.copy()
+    bar = np.searchsorted(beats[::4], times, side="right") - 1
+    for b in range(8):                                          # a new chord each bar, round the circle of fifths
+        moving[bar == b] = 0.0
+        moving[np.ix_(bar == b, [(7 * b) % 12, (7 * b + 4) % 12, (7 * b + 7) % 12])] = 1.0
+    assert traits.movement(traits.bar_chroma(moving, times, beats)) > 0.2
+
+
+def test_harmony_reads_a_riff_over_a_loop_lower_than_changing_chords():
+    pytest.importorskip("essentia.standard")
+    sr, beat = 44100, 60 / 128
+    rng = np.random.default_rng(0)
+
+    def tone(freqs, secs):
+        t = np.arange(int(secs * sr)) / sr
+        return sum(np.sin(2 * np.pi * f * t) + 0.5 * np.sin(4 * np.pi * f * t) for f in freqs) * np.exp(-t * 3)
+
+    def kick():
+        t = np.arange(int(0.25 * sr)) / sr
+        return np.sin(2 * np.pi * (50 + 80 * np.exp(-t * 30)) * t) * np.exp(-t * 12) * 3
+
+    def render(notes_of_bar):
+        out = np.zeros(int(30 * sr) + sr)
+        for b in range(int(30 / (4 * beat)) + 1):
+            for at, snd in [(k * beat, kick()) for k in range(4)] + notes_of_bar(b):
+                i = int((b * 4 * beat + at) * sr)
+                if i < len(out):
+                    k = min(len(snd), len(out) - i)
+                    out[i:i + k] += snd[:k]
+        out += rng.standard_normal(len(out)) * 0.01
+        return (out[:30 * sr] / np.abs(out).max()).astype(np.float32)
+
+    riff = [220.0, 261.6, 329.6, 293.7]
+    chords = [[220, 261.6, 329.6], [174.6, 220, 261.6], [196, 246.9, 293.7], [164.8, 196, 246.9],
+              [146.8, 174.6, 220], [233.1, 293.7, 349.2], [261.6, 329.6, 392], [185, 233.1, 277.2]]
+    loop = render(lambda b: [(k * beat, tone([f], beat)) for k, f in enumerate(riff)])
+    moving = render(lambda b: [(0.0, tone(chords[b % 8], 4 * beat))]
+                    + [(k * beat / 2, tone([440 * 2 ** (rng.integers(0, 12) / 12)], beat / 2)) for k in range(8)])
+    es = __import__("essentia.standard", fromlist=["x"])
+    beats = {n: es.RhythmExtractor2013(method="multifeature")(a)[1] for n, a in (("loop", loop), ("moving", moving))}
+    h_loop, h_moving = traits.harmony(loop, beats["loop"]), traits.harmony(moving, beats["moving"])
+    assert h_loop is not None and h_moving is not None
+    assert h_loop < 0.15 < h_moving, (h_loop, h_moving)
+
+
+def test_harmony_survives_a_put_and_a_get(tmp_path):
+    con = db.connect(tmp_path / "t.db")
+    traits.put(con, 5, {"tempo": 124.0, "harmony": 0.19})
+    assert traits.get(con, [5])[5] == {"tempo": 124.0, "harmony": 0.19}
+
+
+def test_the_harmony_backfill_measures_old_readings_once(tmp_path):
+    con = db.connect(tmp_path / "t.db")
+    for did in (1, 2, 3, 4, 5):
+        con.execute("INSERT INTO deezer_vectors(deezer_id, e512) VALUES(?, x'00')", (did,))
+        con.execute("INSERT INTO candidates(id, deezer_id, artist, title, source, state, vector_status, score) "
+                    "VALUES(?, ?, 'a', 't', 'x', 'pool', 'ok', ?)", (did, did, did / 10))
+    old = "effnet-heads-1+deam-msd-musicnn-2+rhythm2013+ebur128"
+    for did in (1, 2, 3):                                        # measured before the harmony Reading
+        con.execute("INSERT INTO readings(deezer_id, tempo, models) VALUES(?, 120.0, ?)", (did, old))
+    con.execute("INSERT INTO readings(deezer_id, models) VALUES(4, ?)", (old,))   # no preview then: nothing to do
+    traits.put(con, 5, {"tempo": 128.0, "harmony": 0.2})                         # measured now: has it
+    assert traits.backfill_order(con, 10, missing="harmony") == [3, 2, 1]
+    assert traits.backfill_order(con, 10) == []
+
+    class Dz:
+        def track(self, did):
+            return {"id": did, "preview": None if did == 1 else f"https://cdn/{did}"}
+
+        def preview_bytes(self, url):
+            return url.encode()
+
+    got = {b"https://cdn/3": 0.12, b"https://cdn/2": None}
+    out = traits.harmony_backfill(con, Dz(), 10, measure=got.__getitem__)
+    assert out == {"todo": 3, "done": 1, "no_reading": 1, "no_preview": 1, "errors": 0}
+    assert traits.get(con, [3])[3] == {"tempo": 120.0, "harmony": 0.12}
+    assert traits.get(con, [2])[2] == {"tempo": 120.0}
+    assert traits.backfill_order(con, 10, missing="harmony") == []             # none of the three is retried
+
+
+def test_every_trait_has_a_phrase_and_the_judges_profile_is_as_it_was_measured():
+    from haystack_music import llm, rerank
+    assert set(rerank.TRAIT_PHRASES) == set(traits.TRAITS)
+    assert llm.PROFILE_TRAITS == ("tempo", "valence", "energy", "danceability", "acousticness", "instrumentalness",
+                                  "loudness")                   # harmony waits on the judge's run 2 (dotfiles #309)

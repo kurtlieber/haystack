@@ -1,4 +1,4 @@
-"""Traits (ADR 0001): seven Readings per track, measured on the server from the 30 s Deezer preview.
+"""Traits (ADR 0001): eight Readings per track, measured on the server from the 30 s Deezer preview.
 
     danceability, acousticness, instrumentalness  classifier heads on the discogs-effnet-bs64-1 embeddings
                                                   (the same backbone pass the genre styles use)
@@ -8,6 +8,9 @@
                                                   own bpm when it agrees up to an octave; then drum & bass and
                                                   jungle are folded into 155-190 (fold_tempo)
     loudness                                      LoudnessEBUR128 integrated loudness, LUFS, stereo 44.1 kHz
+    harmony                                       harmonic movement: how much the notes and chords change from
+                                                  bar to bar (HPCP chroma on the tempo's beat grid, 0-1, low for a
+                                                  loop with nothing moving over it; dotfiles #450)
 
 Readings are model estimates from a clip, not Spotify's numbers. They are stored per Deezer track, like the
 preview vectors; spotify_deezer maps Spotify tracks the server had never seen (measured on demand)."""
@@ -25,8 +28,8 @@ from . import db, songs
 
 log = logging.getLogger("haystack_music.traits")
 
-TRAITS = ("tempo", "valence", "energy", "danceability", "acousticness", "instrumentalness", "loudness")
-MODELS_VERSION = "effnet-heads-1+deam-msd-musicnn-2+rhythm2013+ebur128"
+TRAITS = ("tempo", "valence", "energy", "danceability", "acousticness", "instrumentalness", "loudness", "harmony")
+MODELS_VERSION = "effnet-heads-1+deam-msd-musicnn-2+rhythm2013+ebur128+harmony-1"
 
 BASE = "https://essentia.upf.edu/models/"
 # Every Essentia model haystack runs: name -> (path under BASE, the class whose probability is the Reading, or
@@ -48,7 +51,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
     deezer_id INTEGER PRIMARY KEY,
     tempo REAL, tempo_confidence REAL, valence REAL, energy REAL, danceability REAL, acousticness REAL,
-    instrumentalness REAL, loudness REAL, models TEXT, measured_at TEXT
+    instrumentalness REAL, loudness REAL, harmony REAL, models TEXT, measured_at TEXT
 );
 """
 
@@ -59,6 +62,13 @@ CREATE TABLE IF NOT EXISTS readings (
 # hardcore are left alone: they are played at both levels, so no range is right for all of them.
 FAST_STYLES = {"Electronic---Drum n Bass": (155.0, 190.0), "Electronic---Jungle": (155.0, 190.0)}
 FAST_STYLE_MIN = 0.3        # below it the style guess is too weak (an indie song at 118 read as drum & bass)
+
+# Harmonic movement (dotfiles #450): chroma per sixteenth note on the beat grid, one block per bar of four beats.
+# On 446 rated previews (2026-11-05, ~/haystack-dev/experiments/repetition) the median chroma change between bars
+# separated kept from turned-down electronic picks at AUC 0.65; loop, timbre and build-up measures did not.
+H_FRAME, H_HOP = 2048, 512
+H_SLOTS = 4                 # sixteenth notes per beat
+H_MIN_BARS = 6              # fewer whole bars than this in the clip: no Reading
 
 _state: dict = {}
 
@@ -115,6 +125,31 @@ def fold_tempo(tempo, style_name: str | None, activation: float = 1.0):
         if lo <= tempo * f < hi:
             return tempo * f
     return tempo
+
+
+def bar_chroma(chroma: np.ndarray, frame_times: np.ndarray, beats) -> np.ndarray | None:
+    """Frame chroma [frames, 12] -> one block per bar [bars, 16 slots, 12]: each beat cut into H_SLOTS equal slots
+    and each slot the mean of its frames. None without enough beats for H_MIN_BARS bars."""
+    beats = np.atleast_1d(np.asarray(beats, np.float64))
+    beats = beats[np.isfinite(beats)]
+    if len(beats) < 2 or not len(chroma):
+        return None
+    edges = np.concatenate([np.linspace(beats[i], beats[i + 1], H_SLOTS + 1)[:-1] for i in range(len(beats) - 1)]
+                           + [beats[-1:]])
+    idx = np.searchsorted(frame_times, edges)
+    slots = np.array([chroma[a:max(b, a + 1)].mean(0) for a, b in zip(idx[:-1], idx[1:])], np.float32)
+    per_bar = 4 * H_SLOTS
+    nb = len(slots) // per_bar
+    if nb < H_MIN_BARS:
+        return None
+    return slots[:nb * per_bar].reshape(nb, per_bar, -1)
+
+
+def movement(bars: np.ndarray) -> float:
+    """The median, over every pair of bars, of their mean absolute chroma difference: 0.07 for a loop with nothing
+    moving over it, about 0.2 typically, 0.27 for a track whose chords and lines change every bar (446 previews)."""
+    nb = len(bars)
+    return float(np.median([np.abs(bars[i] - bars[j]).mean() for i in range(nb) for j in range(i + 1, nb)]))
 
 
 def finite(readings: dict) -> dict:
@@ -183,10 +218,38 @@ def _models():
     return _state
 
 
+def _harmony_algos():
+    if "hpcp" not in _state:
+        from . import embed
+        es = embed._es()
+        _state["hpcp"] = (es.Windowing(type="hann"), es.Spectrum(),
+                          es.SpectralPeaks(orderBy="magnitude", magnitudeThreshold=1e-5, maxPeaks=60,
+                                           sampleRate=44100, minFrequency=40, maxFrequency=5000),
+                          es.HPCP(size=12, sampleRate=44100, normalized="unitMax"))
+    return _state["hpcp"]
+
+
+def harmony(mono44: np.ndarray, beats) -> float | None:
+    """The harmony Reading of a clip: mono 44.1 kHz audio and the beat positions (s) RhythmExtractor2013 found.
+    None when the clip holds fewer than H_MIN_BARS bars."""
+    from . import embed
+    es = embed._es()
+    win, spec, peaks, hpcp = _harmony_algos()
+    chroma = []
+    for fr in es.FrameGenerator(np.ascontiguousarray(mono44, dtype=np.float32), frameSize=H_FRAME, hopSize=H_HOP,
+                                startFromZero=True):
+        f, a = peaks(spec(win(fr)))
+        chroma.append(hpcp(f, a))
+    chroma = np.array(chroma, np.float32).reshape(-1, 12)
+    times = (np.arange(len(chroma)) * H_HOP + H_FRAME / 2) / 44100.0
+    bars = bar_chroma(chroma, times, beats)
+    return None if bars is None else movement(bars)
+
+
 # ---------------- measuring ----------------
 
 def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm_hint=None, style=None) -> dict:
-    """The seven Readings of a clip. audio16: mono 16 kHz; stereo44: [n, 2] at 44.1 kHz; backbone: the
+    """The eight Readings of a clip. audio16: mono 16 kHz; stereo44: [n, 2] at 44.1 kHz; backbone: the
     discogs-effnet-bs64-1 patch embeddings [patches, 1280] the styles already computed; style: the clip's
     genre_discogs400 activations, for fold_tempo."""
     m = _models()
@@ -198,7 +261,7 @@ def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm
     va = np.asarray(m["deam"](np.ascontiguousarray(mus.reshape(-1, 200), dtype=np.float32))).reshape(-1, 2).mean(0)
     out["valence"], out["energy"] = deam_unit(va[0]), deam_unit(va[1])
     mono = np.ascontiguousarray(stereo44.mean(axis=1), dtype=np.float32)
-    bpm, _ticks, confidence, _est, _iv = m["rhythm"](mono)
+    bpm, ticks, confidence, _est, _iv = m["rhythm"](mono)
     tempo = reconcile_tempo(float(bpm), bpm_hint)
     if style is not None:
         from . import embed
@@ -206,6 +269,7 @@ def measure(audio16: np.ndarray, stereo44: np.ndarray, backbone: np.ndarray, bpm
     out["tempo"], out["tempo_confidence"] = tempo, float(confidence)
     _mom, _short, integrated, _range = m["loudness"](np.ascontiguousarray(stereo44, dtype=np.float32))
     out["loudness"] = float(integrated)
+    out["harmony"] = harmony(mono, ticks)
     return finite(out)
 
 
@@ -265,6 +329,7 @@ def deezer_bpm(dz, t: dict):
 
 def ensure(con) -> None:
     con.executescript(SCHEMA)
+    db._add_column(con, "readings", "harmony", "REAL")       # dotfiles #450 (0.13.0)
 
 
 def put(con, deezer_id: int, r: dict) -> None:
@@ -313,10 +378,19 @@ def retempo(con) -> dict:
 
 # ---------------- coverage ----------------
 
-def backfill_order(con, limit: int) -> list[int]:
-    """Stored previews without Readings, most needed first: Discoveries (the latest batch and any open offer),
-    liked songs (the Baseline and Rate your likes), Rated tracks, then the pool by score."""
-    rows = con.execute("""
+_NO_READINGS = "deezer_id NOT IN (SELECT deezer_id FROM readings)"
+# measured before the harmony Reading existed: some other Reading is there (a no-preview row has none) and the row's
+# models are not this version's. harmony_backfill sets the version, so a clip too short to have one isn't retried.
+_NO_HARMONY = ("deezer_id IN (SELECT deezer_id FROM readings WHERE harmony IS NULL AND COALESCE(models, '') != ? "
+               "AND COALESCE(tempo, energy, loudness, danceability) IS NOT NULL)")
+
+
+def backfill_order(con, limit: int, missing: str = "readings") -> list[int]:
+    """Stored previews without Readings (missing="readings") or measured before the harmony Reading
+    (missing="harmony"), most needed first: Discoveries (the latest batch and any open offer), liked songs (the
+    Baseline and Rate your likes), Rated tracks, then the pool by score."""
+    cond, args = (_NO_HARMONY, (MODELS_VERSION,)) if missing == "harmony" else (_NO_READINGS, ())
+    rows = con.execute(f"""
         SELECT deezer_id, MIN(pri) FROM (
           SELECT c.deezer_id, 0 AS pri FROM offers o JOIN candidates c ON c.id=o.candidate_id
             WHERE o.removed_at IS NULL OR o.batch_id=(SELECT MAX(id) FROM batches)
@@ -328,8 +402,8 @@ def backfill_order(con, limit: int) -> list[int]:
           UNION ALL SELECT c.deezer_id, 3 - COALESCE(c.score, 0) FROM candidates c
             WHERE c.state='pool' AND c.vector_status='ok')
         WHERE deezer_id IS NOT NULL AND deezer_id IN (SELECT deezer_id FROM deezer_vectors)
-          AND deezer_id NOT IN (SELECT deezer_id FROM readings)
-        GROUP BY deezer_id ORDER BY MIN(pri), deezer_id LIMIT ?""", (limit,)).fetchall()
+          AND {cond}
+        GROUP BY deezer_id ORDER BY MIN(pri), deezer_id LIMIT ?""", (*args, limit)).fetchall()
     return [r[0] for r in rows]
 
 
@@ -352,6 +426,46 @@ def backfill(con, dz, limit: int = 150, analyse=None) -> dict:
         except Exception as e:  # noqa: BLE001
             c["errors"] += 1
             log.warning("readings for deezer %s failed: %r", did, e)
+    return c
+
+
+def harmony_of_bytes(data: bytes) -> float | None:
+    """The harmony Reading alone for a preview's bytes: one 44.1 kHz decode and a beat pass, no models."""
+    from . import embed
+    mono = embed.decode_bytes(data, sr=44100)
+    if "rhythm_only" not in _state:
+        _state["rhythm_only"] = embed._es().RhythmExtractor2013(method="multifeature")
+    _bpm, ticks, _c, _e, _i = _state["rhythm_only"](np.ascontiguousarray(mono, dtype=np.float32))
+    return harmony(mono, ticks)
+
+
+def harmony_backfill(con, dz, limit: int = 300, measure=None) -> dict:
+    """The harmony Reading for previews measured before it existed (backfill_order, missing="harmony"); the other
+    Readings stay as they are. Two throttled Deezer requests per track, as backfill. measure: bytes -> harmony."""
+    measure = measure or harmony_of_bytes
+    ids = backfill_order(con, limit, missing="harmony")
+    c = dict(todo=len(ids), done=0, no_reading=0, no_preview=0, errors=0)
+    for did in ids:
+        try:
+            t = dz.track(did) or {}
+            if not t.get("preview"):
+                c["no_preview"] += 1
+                con.execute("UPDATE readings SET models=? WHERE deezer_id=?", (MODELS_VERSION, did))
+                continue
+            data = dz.preview_bytes(t["preview"])
+            try:
+                h = measure(data)
+            finally:
+                del data
+            if h is None or not np.isfinite(h):
+                h = None
+                c["no_reading"] += 1
+            else:
+                c["done"] += 1
+            con.execute("UPDATE readings SET harmony=?, models=? WHERE deezer_id=?", (h, MODELS_VERSION, did))
+        except Exception as e:  # noqa: BLE001
+            c["errors"] += 1
+            log.warning("harmony for deezer %s failed: %r", did, e)
     return c
 
 
