@@ -290,6 +290,8 @@ DEFAULTS: dict = {
         "broad_lb_per_seed": 3,
         "style_backfill_per_run": 150, # daily harvest: style vectors for older previews
         "traits_backfill_per_run": 150, # daily harvest: Readings for stored previews (Discoveries, likes first)
+        "harmony_backfill_per_run": 300,  # daily harvest: the harmony Reading for previews measured before it
+                                       # (0.13.0), in the same order; two Deezer requests each, no models
         "metadata_per_run": 150,       # daily harvest: Deezer's facts (album, rank, artist fans) for this many
                                        # tracks, judged ones and liked songs first, then the pool oldest first
         "isrc_backfill_per_run": 300,  # daily harvest: ISRCs (the Song, ADR 0025) for this many older candidates,

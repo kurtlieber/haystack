@@ -126,8 +126,9 @@ TRAIT_PHRASES = {   # trait: (above the usual range, below it)
     "tempo": ("faster", "slower"), "valence": ("brighter", "darker"), "energy": ("more energetic", "calmer"),
     "danceability": ("more danceable", "less danceable"), "acousticness": ("more acoustic", "less acoustic"),
     "instrumentalness": ("more instrumental", "more vocal"), "loudness": ("louder", "quieter"),
+    "harmony": ("more harmonic movement", "more of one loop"),
 }
-TRAIT_NOUN = {"valence": "mood"}           # "<noun> in your usual range"; the Trait's own name otherwise
+TRAIT_NOUN = {"valence": "mood", "harmony": "harmonic movement"}           # "<noun> in your usual range"; the Trait's own name otherwise
 NO_READING = 2                              # a trait side: the track has no Reading of it
 # feature: (phrase when the track is high on it, phrase when low); None: no phrase (the next feature is shown)
 PHRASES = {

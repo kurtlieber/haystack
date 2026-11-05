@@ -49,6 +49,9 @@ LOO_GAIN_BAR = 0.05        # or adds this much to the re-ranker's leave-one-out 
 NEW_BAR = 0.5              # llm_suggest is switched on after a dry run where at least this share of the songs asked
                            # for are new, on Deezer and with a preview (ADR 0026)
 TRAIT_UNITS = {"tempo": ("BPM", 0), "loudness": ("LUFS", 1)}   # the rest are 0-1, two decimals
+# The Traits the judge's profile names. harmony (0.13.0) is left out: plan 3 gates the blend on the judge's run 2
+# (dotfiles #309), so the prompt stays as it was measured.
+PROFILE_TRAITS = tuple(t for t in traits.TRAITS if t != "harmony")
 
 JUDGE_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["tracks"],
@@ -313,7 +316,7 @@ class Profile:
         n_st = sum(styles.values())
         usual = baseline.compute(self.con, self.cfg, exclude=drop)["traits"]
         tr = {}
-        for t in traits.TRAITS:
+        for t in PROFILE_TRAITS:
             u = usual.get(t)
             if u:
                 nd = TRAIT_UNITS.get(t, ("", 2))[1]

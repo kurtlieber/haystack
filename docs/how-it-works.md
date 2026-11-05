@@ -150,9 +150,10 @@ your verdicts) with a summary of your taste, asks how likely you are to keep eac
 against what you actually said. That measures whether the model's knowledge would help you before it gets any say
 in a batch; for now it gets none. The [README](../README.md#optional-a-language-model) lists exactly what is sent.
 
-## The seven Traits
+## The Traits
 
-needle shows seven numbers for every song, called **Traits**. Tempo is the big BPM number at the top of the song
+needle shows seven numbers for every song, called **Traits**. haystack measures an eighth, harmonic movement,
+that needle doesn't show yet (see the end of this section). Tempo is the big BPM number at the top of the song
 card. The other six (valence, energy, danceability, acousticness, instrumentalness and loudness) are the scales
 below it. If you remember Spotify's old "audio features", they're the same
 idea. Spotify no longer offers those to apps like this, so haystack measures its own from the song's 30-second
@@ -265,6 +266,20 @@ runs below zero: closer to 0 is louder.
 This is about how the record was made, not your volume knob. Streaming services even out the playback volume,
 but a loud master still tends to sound denser and more compressed, and a quiet one more open and dynamic. needle
 says "quieter" or "louder".
+
+### Harmonic movement
+
+**How much the chords and notes change from one bar to the next.** haystack lines the preview up on its beat,
+takes the notes sounding in each bar, and compares every bar with every other. A song that holds one loop for
+the whole clip, the same chord stab or riff over the same beat, scores low (0.15 or less); a typical song scores around
+0.2, and one whose chords keep moving 0.25 or more.
+
+It doesn't measure the beat. Almost every dance track loops its drums; this asks whether anything *over* the
+drums goes anywhere. It came from an experiment on a listener who turned down electronic songs that repeat the
+same few seconds: among their electronic songs, this one number told kept from turned-down better than chance
+(AUC 0.65), while measures of the beat or the sound's texture told nothing. The re-ranker uses it the way it
+uses the other Traits, only if it helps on your own verdicts. The 30-second preview is a slice of the song, so
+a track that changes just before or after it can be misjudged.
 
 ## What haystack doesn't do
 

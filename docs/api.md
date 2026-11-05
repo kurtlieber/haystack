@@ -89,7 +89,8 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
   or up to 5 when the listener plays it often):
   the weighted mean and the 25th–75th percentile (`lo`, `hi`), or `null` for a Trait with no Readings. Traits:
-  `tempo`, `valence`, `energy`, `danceability`, `acousticness`, `instrumentalness`, `loudness`.
+  `tempo`, `valence`, `energy`, `danceability`, `acousticness`, `instrumentalness`, `loudness`, `harmony` (0.13.0;
+  a client that doesn't know a Trait skips it).
 - **`queues.discoveries`**: the latest batch's offers plus any older offer still open, unreviewed first (in batch
   order), then the reviewed ones with their Verdict. `done` counts those with a Verdict. `next_batch_at` may be
   `null`.
@@ -164,7 +165,8 @@ most every 10 minutes.
   `confidence` and `reasons` show the re-ranker's view whenever a model was fitted, used for a batch or not.
 - `styles`: the top three Discogs styles with their scores; empty when unmeasured.
 - `readings`: only the Traits that were measured; `null` when none. `tempo` is BPM, `loudness` integrated LUFS,
-  the rest 0–1.
+  the rest 0–1. `harmony` is harmonic movement: how much the chords and notes change from bar to bar, in
+  practice 0.07–0.27: below about 0.15 one loop is held throughout, around 0.2 is typical.
 - `measure`: `ok` (has Readings), `pending` (being measured now), `no_preview` (nothing to measure) or `unknown`
   (not measured yet).
 - `original` (feature `card.original`): the recording this track may stand in for, its Original, or `null` when
@@ -310,3 +312,4 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
   `liked`, `playlists.verdicts` and `queues.likes` go by the Song.
 - 2026-10-23, haystack 0.9.0, `card.original`: `original` and `original_check` in a track card.
 - 2026-10-23, haystack 0.9.0, `swaps`: `POST /v1/swaps`; `spotify.pending_writes` counts Swaps too.
+- 2026-11-05, haystack 0.13.0: the `harmony` Trait in `baseline.traits` and a card's `readings` (ADR 0027).

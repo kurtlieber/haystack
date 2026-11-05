@@ -1042,6 +1042,8 @@ class Harvester:
         retried = self.retry_errors() if retry else {"skipped": True}
         styles = self.backfill_styles(h["style_backfill_per_run"]) if retry else {"skipped": True}
         readings = self._readings_backfill(h.get("traits_backfill_per_run", 150)) if retry else {"skipped": True}
+        harmony = (traits.harmony_backfill(self.con, self.dz, h.get("harmony_backfill_per_run", 300)) if retry
+                   else {"skipped": True})
         tempo = self._retempo() if retry else {"skipped": True}
         sources = [s for s in (sources or h["sources"]) if s not in h.get("retired_sources", [])]
         caps = self.caps(sources, cap)
@@ -1064,7 +1066,7 @@ class Harvester:
                  else {"skipped": True, "songs": songs.assign(self.con)})
         return {"per_source": self.stats, "known_share": source_stats.run_known_share(self.stats), "caps": caps,
                 "retry_previous_errors": retried, "style_backfill": styles,
-                "readings_backfill": readings, "tempo_fold": tempo, "metadata_backfill": meta,
+                "readings_backfill": readings, "harmony_backfill": harmony, "tempo_fold": tempo, "metadata_backfill": meta,
                 "preview_fallback": elsewhere, "isrc_backfill": isrcs,
                 "deezer_requests": self.dz.requests, "listenbrainz_requests": self.lb.requests,
                 "lastfm_requests": self._lastfm.requests if self._lastfm else 0,
