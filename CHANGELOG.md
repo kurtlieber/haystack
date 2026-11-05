@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/kurtlieber/haystack/compare/v0.12.0...v0.12.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **api:** haystack-api starts again; report imports review as a module ([#51](https://github.com/kurtlieber/haystack/issues/51)) ([9f2b913](https://github.com/kurtlieber/haystack/commit/9f2b9135d2cd4133431b3d645683b7dd521290a3))
+
 ## [0.12.0](https://github.com/kurtlieber/haystack/compare/v0.11.0...v0.12.0) (2026-11-05)
 
 
