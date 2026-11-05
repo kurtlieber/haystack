@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/kurtlieber/haystack/compare/v0.11.0...v0.12.0) (2026-11-05)
+
+
+### Features
+
+* scene feeds replace the chart family, and a retired source's songs leave the batches ([#49](https://github.com/kurtlieber/haystack/issues/49)) ([88cf78e](https://github.com/kurtlieber/haystack/commit/88cf78ea557524ba53ce5ad7d1f088cc639e3e63))
+
 ## [0.11.0](https://github.com/kurtlieber/haystack/compare/v0.10.1...v0.11.0) (2026-11-05)
 
 
