@@ -71,38 +71,57 @@ def seed_buckets(con, cfg: dict, rng: random.Random) -> dict[str, list[Seed]]:
     top: tracks Rated 4-5 stars and discoveries kept, in the last harvest.seed_recent_days; 5 stars first, then 4,
       then kept discoveries without a Rating,
     mid: the other liked songs (Rated 3 stars or more, or Unrated),
-    library: the library's files."""
-    from . import verdicts
+    library: the library's files.
+    A possible cover by its own title or artists (originals.marked, ADR 0022) is no seed in any bucket; how many were
+    left out is logged. A Swap takes the cover's Verdicts back, so a swapped cover is gone already."""
+    from . import originals, verdicts
     cur = verdicts.current(con)
     since = _since(cfg["harvest"]["seed_recent_days"])
-    names = {}
+    names, covers = {}, set()
     for sid, name, arts in con.execute("SELECT spotify_id, name, artists_json FROM spotify_tracks"):
         arts = json.loads(arts or "[]")
         if arts and name:
             names[sid] = (arts[0], name)
+            if originals.marked(name, arts):
+                covers.add(sid)
+    skipped: set[str] = set()
     top: dict[str, Seed] = {}
     for sid, v in cur.items():
         if v.kind == "rating" and (v.stars or 0) >= 4 and (v.given_at or "")[:10] >= since[:10] and sid in names:
-            top[sid] = Seed(*names[sid], stars=v.stars, origin="rating", bucket=0)
+            if sid in covers:
+                skipped.add(sid)
+            else:
+                top[sid] = Seed(*names[sid], stars=v.stars, origin="rating", bucket=0)
     for sid, artist, title, outcome in con.execute(
             """SELECT o.spotify_id, c.artist, c.title, o.outcome FROM offers o JOIN candidates c ON c.id=o.candidate_id
                WHERE o.outcome IN ('liked', 'rated') AND COALESCE(o.removed_at, o.added_at) >= ?""", (since,)):
         v = cur.get(sid)
         if sid not in top and artist and title and (v.keeps_heart if v else outcome == "liked"):
-            top[sid] = Seed(artist, title, stars=v.stars if v and v.kind == "rating" else None, origin="discovery",
-                            bucket=0)
+            if sid in covers or originals.marked(title, [artist]):
+                skipped.add(sid)
+            else:
+                top[sid] = Seed(artist, title, stars=v.stars if v and v.kind == "rating" else None,
+                                origin="discovery", bucket=0)
     mid = []
     for (sid,) in con.execute("SELECT spotify_id FROM likes WHERE removed_at IS NULL ORDER BY spotify_id"):
         v = cur.get(sid)
         if sid not in top and sid in names and (v is None or v.keeps_heart):
-            mid.append(Seed(*names[sid], stars=v.stars if v else None, origin="like", bucket=1))
+            if sid in covers:
+                skipped.add(sid)
+            else:
+                mid.append(Seed(*names[sid], stars=v.stars if v else None, origin="like", bucket=1))
     lib = []
-    for arts, artist_raw, title in con.execute(
-            "SELECT artists_json, artist_raw, title_raw FROM local_tracks WHERE present=1 ORDER BY id"):
+    for lid, arts, artist_raw, title in con.execute(
+            "SELECT id, artists_json, artist_raw, title_raw FROM local_tracks WHERE present=1 ORDER BY id"):
         arts = json.loads(arts or "[]")
         a = arts[0] if arts else (artist_raw or "")
         if a and title:
-            lib.append(Seed(a, title, origin="library", bucket=2))
+            if originals.marked(title, arts or [a]):
+                skipped.add(f"local/{lid}")
+            else:
+                lib.append(Seed(a, title, origin="library", bucket=2))
+    if skipped:
+        log.info("seeds: %d possible covers left out (originals.marked)", len(skipped))
     out = {"top": sorted(top.values(), key=lambda x: (x.artist, x.title)), "mid": mid, "library": lib}
     for v in out.values():
         rng.shuffle(v)
@@ -139,18 +158,24 @@ def pick_seeds(buckets: dict[str, list[Seed]], n: int, quotas: dict, exclude: se
 
 def broad_liked_seeds(con, cfg: dict, rng: random.Random) -> list[Seed]:
     """`harvest --broad`'s ListenBrainz seeds: every liked song, shuffled. Under seed_policy "verdicts" the liked
-    songs Passed or Disliked since are left out and the rest go by their stars (Unrated as 3), each tagged."""
-    from . import verdicts
+    songs Passed or Disliked since are left out and the rest go by their stars (Unrated as 3), each tagged. A
+    possible cover by its own title or artists (originals.marked, ADR 0022) is left out under either policy."""
+    from . import originals, verdicts
     tagged = cfg["harvest"].get("seed_policy", "verdicts") == "verdicts"
     cur = verdicts.current(con) if tagged else {}
-    out = []
+    out, skipped = [], 0
     for sid, arts, name in con.execute("""SELECT s.spotify_id, s.artists_json, s.name FROM likes l
                                           JOIN spotify_tracks s ON s.spotify_id=l.spotify_id
                                           WHERE l.removed_at IS NULL ORDER BY l.spotify_id"""):
         arts = json.loads(arts or "[]")
         v = cur.get(sid)
         if arts and name and (v is None or v.keeps_heart):
-            out.append(Seed(arts[0], name, stars=v.stars if v else None, origin="like" if tagged else None))
+            if originals.marked(name, arts):
+                skipped += 1
+            else:
+                out.append(Seed(arts[0], name, stars=v.stars if v else None, origin="like" if tagged else None))
+    if skipped:
+        log.info("broad seeds: %d possible covers left out (originals.marked)", skipped)
     rng.shuffle(out)
     if tagged:
         out.sort(key=lambda x: -(x.stars or 3))          # stable: random within each tier
