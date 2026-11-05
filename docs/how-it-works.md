@@ -60,8 +60,9 @@ is told):
 
 Artist radio, related artists, ListenBrainz and Last.fm start from **seeds**: the songs you rated 4 or 5 stars and the
 discoveries you kept lately come first, then your other liked songs, then your music folder. An artist is a seed
-at most once a week per source, so the harvest keeps moving. Once a week a wider harvest draws artists from
-across all the styles you like.
+at most once a week per source, so the harvest keeps moving. A song that looks like a cover (karaoke, a tribute,
+an instrumental version) is never a seed: the songs found from it would be more covers. Once a week a wider
+harvest draws artists from across all the styles you like.
 
 These sources only *suggest*. They never decide whether a song is good for you. Each candidate gets
 fingerprinted from its 30-second preview, exactly like your own songs. The preview comes from Deezer, or, for the
