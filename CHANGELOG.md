@@ -1,18 +1,5 @@
 # Changelog
 
-## Unreleased
-
-
-### Features
-
-* **sync:** plays are read every 15 minutes, so Spotify's last 50 never overflow: `haystack plays`, `schedule.plays = "every 15m"` (a new `every Nm` form) and `haystack-plays.timer` for the units; a poll that still gets a full page records a play gap, and `haystack status` shows the count and the latest (ADR 0023)
-* **clear:** a discovery nobody played is not a no: before each batch an unliked track played since it was added is a no as before, one never played goes back to the pool and counts toward `batch.max_unplayed_expiries` (the second retires it), and one whose time in Discoveries overlaps a play gap goes back without counting (ADR 0023)
-
-
-### Bug Fixes
-
-* **harvest:** `deezer_label` passes over the major labels, the big catalogue labels and the catalogue companies (`harvest.label_skip`, matched by whole words of the label's name) and the next label takes the slot: their album search returned a whole catalogue of every style (Columbia France's chanson for a listener of drum & bass); the run's stats count `majors_skipped` (ADR 0020 note)
-
 ## [0.9.0](https://github.com/kurtlieber/haystack/compare/v0.8.0...v0.9.0) (2026-10-23)
 
 

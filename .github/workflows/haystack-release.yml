@@ -1,0 +1,55 @@
+# haystack releases (ADR 0024). On every push to main, release-please keeps a release PR up to date from the
+# conventional commits: the next version in pyproject.toml and src/haystack_music/__init__.py, and its section in
+# CHANGELOG.md. Merging that PR is the release: release-please tags vX.Y.Z and creates the GitHub Release, and this
+# workflow then runs `image` for the tag, which publishes ghcr.io/kurtlieber/haystack and starts lieber.org's
+# deploy. A tag created with GITHUB_TOKEN starts no workflow, so `image` is called from here, not by its tag trigger.
+name: haystack-release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: haystack-release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # The release PR asks the repository owner for review, so it shows under "Review requested".
+      - name: Request review on the release PR
+        if: steps.rp.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRS: ${{ steps.rp.outputs.prs }}
+        run: |
+          for n in $(jq -r '.[].number' <<<"$PRS"); do
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$n/requested_reviewers" -f "reviewers[]=$GITHUB_REPOSITORY_OWNER" > /dev/null
+          done
+
+  image:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    secrets: inherit

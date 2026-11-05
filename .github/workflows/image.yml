@@ -1,7 +1,8 @@
 # The server image. On a pull request that touches it: build it and check that it starts and loads Essentia.
-# On a version tag (git tag v0.2.0 && git push origin v0.2.0): the same, then publish it to GitHub's container
-# registry as ghcr.io/kurtlieber/haystack:0.2.0, :0.2 and :latest, and start lieber.org's deploy so its haystack page
-# shows the new version. linux/amd64 only (see Dockerfile).
+# For a release: the same, then publish it to GitHub's container registry as ghcr.io/kurtlieber/haystack:0.2.0, :0.2
+# and :latest, and start lieber.org's deploy so its haystack page shows the new version. haystack-release calls this
+# with the tag it just made (ADR 0024); a version tag pushed by hand, or a run by hand with an existing tag, does the
+# same. linux/amd64 only (see Dockerfile).
 name: image
 
 on:
@@ -14,21 +15,47 @@ on:
       - .github/workflows/image.yml
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag to build and publish (e.g. v0.10.0)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and publish (e.g. v0.9.0)
+        required: true
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: image-${{ github.ref }}
+  group: image-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
     steps:
+      # The release tag: the caller's or the run's input, or the pushed tag. Empty on a pull request: build, don't
+      # publish.
+      - id: t
+        name: Release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ] && [[ $GITHUB_REF == refs/tags/v* ]]; then TAG=$GITHUB_REF_NAME; fi
+          if [ -n "$TAG" ] && ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::not a release tag: $TAG"; exit 1; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.t.outputs.tag }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -36,9 +63,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ steps.t.outputs.tag }},enable=${{ steps.t.outputs.tag != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.t.outputs.tag }},enable=${{ steps.t.outputs.tag != '' }}
+            type=raw,value=latest,enable=${{ steps.t.outputs.tag != '' }}
             type=raw,value=ci
 
       - name: Build
@@ -60,7 +89,7 @@ jobs:
           docker run --rm "$img" models check || test $? -eq 1   # 1: models not fetched, as expected
 
       - name: Log in to ghcr.io
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.t.outputs.tag != ''
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -68,7 +97,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.t.outputs.tag != ''
         run: |
           for t in $(echo "${{ steps.meta.outputs.tags }}" | grep -v ':ci$'); do
             docker push "$t"
@@ -79,15 +108,16 @@ jobs:
   # on its own.
   site:
     needs: image
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.image.outputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     env:
       GH_TOKEN: ${{ secrets.LIEBER_ORG_DEPLOY_TOKEN }}
+      TAG: ${{ needs.image.outputs.tag }}
     steps:
       - name: Start lieber.org's deploy
         run: |
-          if [ -z "$GH_TOKEN" ]; then echo "::warning::secret LIEBER_ORG_DEPLOY_TOKEN is not set; lieber.org shows $GITHUB_REF_NAME within three hours"; exit 0; fi
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::secret LIEBER_ORG_DEPLOY_TOKEN is not set; lieber.org shows $TAG within three hours"; exit 0; fi
           gh api -X POST repos/kurtlieber/lieber.org/actions/workflows/deploy.yml/dispatches -f ref=main
           echo "::notice::Started lieber.org's deploy"
