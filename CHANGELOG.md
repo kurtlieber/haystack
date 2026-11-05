@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/kurtlieber/haystack/compare/v0.12.1...v0.13.0) (2026-11-05)
+
+
+### Features
+
+* **traits:** a harmony Reading, harmonic movement across bars, for the re-ranker (dotfiles [#450](https://github.com/kurtlieber/haystack/issues/450)) ([#53](https://github.com/kurtlieber/haystack/issues/53)) ([a08ffc3](https://github.com/kurtlieber/haystack/commit/a08ffc3fe586802f73d13c6e67220087efcc231f))
+
 ## [0.12.1](https://github.com/kurtlieber/haystack/compare/v0.12.0...v0.12.1) (2026-11-05)
 
 
