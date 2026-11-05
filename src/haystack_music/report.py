@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from . import db, scoring, songs, vectors, verdicts
-from .review import nearest_label, style_names
+from . import review   # module, not names: review -> calibrate -> sources -> report imports this back
 
 WEEKS = 8       # plays and labels per ISO week: this many weeks, the current one last
 SHORT_MS = 30000    # a needle play under this is "short" in the plays table
@@ -128,7 +128,7 @@ def head(con, classes: list[str] | None = None, tracks: bool = False) -> dict:
     rows = _ranked(con, HEAD)
     if not rows:
         return {"n": 0}
-    names = style_names(classes or [])
+    names = review.style_names(classes or [])
     styles = vectors.get_styles(con, [r["deezer_id"] for r in rows])
     top1: Counter = Counter()
     for r in rows:
@@ -145,7 +145,7 @@ def head(con, classes: list[str] | None = None, tracks: bool = False) -> dict:
            "top1_styles": dict(top1.most_common())}
     if tracks:
         out["tracks"] = [{"score": round(r["score"], 4), "artist": r["artist"], "title": r["title"],
-                          "source": r["source"], "sounds_like": nearest_label(con, r["nearest"])} for r in rows]
+                          "source": r["source"], "sounds_like": review.nearest_label(con, r["nearest"])} for r in rows]
     return out
 
 
