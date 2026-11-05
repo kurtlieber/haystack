@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/kurtlieber/haystack/compare/v0.9.0...v0.10.0) (2026-11-05)
+
+
+### Features
+
+* **sync:** plays are read every 15 minutes, so Spotify's last 50 never overflow: `haystack plays`, `schedule.plays = "every 15m"` (a new `every Nm` form) and `haystack-plays.timer` for the units; a poll that still gets a full page records a play gap, and `haystack status` shows the count and the latest (ADR 0023) ([ee0a7c0](https://github.com/kurtlieber/haystack/commit/ee0a7c00e6a4ad617cddb9a87e996f7455e54468))
+* **clear:** a discovery nobody played is not a no: before each batch an unliked track played since it was added is a no as before, one never played goes back to the pool and counts toward `batch.max_unplayed_expiries` (the second retires it), and one whose time in Discoveries overlaps a play gap goes back without counting (ADR 0023) ([dc397ab](https://github.com/kurtlieber/haystack/commit/dc397ab0378f3d1a74fb0ff335e8c335a9052000))
+
+
+### Bug Fixes
+
+* **batch:** a candidate that is the same song as a like, a file or a judged track (by ISRC, else by artist, base title and length) is never offered or asked about, whichever release of it the harvest found (ADR 0021) ([0bc6924](https://github.com/kurtlieber/haystack/commit/0bc6924d8b1637dee6478adaaee6718b829c8a0a))
+* **harvest:** `deezer_label` passes over the major labels, the big catalogue labels and the catalogue companies (`harvest.label_skip`, matched by whole words of the label's name) and the next label takes the slot: their album search returned a whole catalogue of every style (Columbia France's chanson for a listener of drum & bass); the run's stats count `majors_skipped` (ADR 0020 note) ([7c0709b](https://github.com/kurtlieber/haystack/commit/7c0709b262111989c428e73c1b32a8ec69a06941), [573ad9b](https://github.com/kurtlieber/haystack/commit/573ad9b844ec5db3bf13c0d2d63dc4437f04a894))
+* **harvest:** a possible cover by its own title or artists (karaoke, a tribute, an instrumental) is no seed for artist radio, related artists, ListenBrainz or Last.fm, nor for the broad harvest: its similar tracks were more covers ([9f6daf3](https://github.com/kurtlieber/haystack/commit/9f6daf3dea0ba09007a6f0de50d341c92a1e8eb7))
+* **cli:** `haystack genres` no longer fails with `TypeError: 'int' object is not subscriptable`: it passes the config, not the top count, to `liked_genres` (kurtlieber/dotfiles#350) ([3619a8e](https://github.com/kurtlieber/haystack/commit/3619a8ec0630ef750e3a3a655288f628caf7beff))
+* `__version__`, and with it `/v1/health` and the Deezer and ListenBrainz User-Agent, said 0.8.0 in 0.9.0; a test now ties it to `pyproject.toml` ([8ecfebe](https://github.com/kurtlieber/haystack/commit/8ecfebec16aacd750b223e722a308d0372f0709a))
+
 ## [0.9.0](https://github.com/kurtlieber/haystack/compare/v0.8.0...v0.9.0) (2026-10-23)
 
 
