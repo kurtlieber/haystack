@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/kurtlieber/haystack/compare/v0.13.0...v0.14.0) (2026-11-05)
+
+
+### Features
+
+* **api:** list trait.harmony, so needle draws the harmonic movement scale (dotfiles [#450](https://github.com/kurtlieber/haystack/issues/450)) ([#55](https://github.com/kurtlieber/haystack/issues/55)) ([f61f56e](https://github.com/kurtlieber/haystack/commit/f61f56e57aa6120196baac08a8365333d910095c))
+
 ## [0.13.0](https://github.com/kurtlieber/haystack/compare/v0.12.1...v0.13.0) (2026-11-05)
 
 
