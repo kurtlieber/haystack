@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/kurtlieber/haystack/compare/v0.10.0...v0.10.1) (2026-11-05)
+
+
+### Documentation
+
+* **roadmap:** what comes after 0.10.0 ([#45](https://github.com/kurtlieber/haystack/issues/45)) ([7b773d0](https://github.com/kurtlieber/haystack/commit/7b773d064d9acd746846938ef700c951980aec5c))
+
 ## [0.10.0](https://github.com/kurtlieber/haystack/compare/v0.9.0...v0.10.0) (2026-11-05)
 
 
