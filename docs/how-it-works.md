@@ -152,10 +152,9 @@ in a batch; for now it gets none. The [README](../README.md#optional-a-language-
 
 ## The Traits
 
-needle shows seven numbers for every song, called **Traits**. haystack measures an eighth, harmonic movement,
-that needle doesn't show yet (see the end of this section). Tempo is the big BPM number at the top of the song
-card. The other six (valence, energy, danceability, acousticness, instrumentalness and loudness) are the scales
-below it. If you remember Spotify's old "audio features", they're the same
+needle shows eight numbers for every song, called **Traits**. Tempo is the big BPM number at the top of the song
+card. The other seven (valence, energy, danceability, acousticness, instrumentalness, loudness and harmonic
+movement) are the scales below it; a needle before 0.8.0 shows the first six of them. If you remember Spotify's old "audio features", they're the same
 idea. Spotify no longer offers those to apps like this, so haystack measures its own from the song's 30-second
 preview.
 
@@ -278,7 +277,8 @@ It doesn't measure the beat. Almost every dance track loops its drums; this asks
 drums goes anywhere. It came from an experiment on a listener who turned down electronic songs that repeat the
 same few seconds: among their electronic songs, this one number told kept from turned-down better than chance
 (AUC 0.65), while measures of the beat or the sound's texture told nothing. The re-ranker uses it the way it
-uses the other Traits, only if it helps on your own verdicts. The 30-second preview is a slice of the song, so
+uses the other Traits, only if it helps on your own verdicts. needle's scale runs from "repetitive" to "varied",
+and says "more repetitive" or "more varied" when a song is outside your usual range. The 30-second preview is a slice of the song, so
 a track that changes just before or after it can be misjudged.
 
 ## What haystack doesn't do

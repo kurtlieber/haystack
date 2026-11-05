@@ -29,7 +29,7 @@ clients have moved.
 ```json
 {"version": "0.6.0", "api": "1",
  "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label",
-              "card.song", "card.original", "swaps"]}
+              "card.song", "card.original", "swaps", "trait.harmony"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -57,6 +57,9 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   for another recording, a cover or a live take, and which one (ADR 0022, Track card).
 - `swaps`: `POST /v1/swaps` replaces a cover with its Original in the listener's own playlists and Liked Songs and
   takes back the cover's Verdicts (ADR 0022).
+- `trait.harmony`: `baseline.traits` and a track card's `readings` carry `harmony`, harmonic movement (ADR 0027).
+  A track measured before 0.13.0 has none until the harvest's backfill reaches it, so a client shows the Trait as
+  unmeasured on a card without it.
 
 ## Endpoints
 
@@ -89,8 +92,8 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - **`baseline`**: per Trait, over the tracks the listener likes (weighted by stars; an Unrated like counts as 3,
   or up to 5 when the listener plays it often):
   the weighted mean and the 25th–75th percentile (`lo`, `hi`), or `null` for a Trait with no Readings. Traits:
-  `tempo`, `valence`, `energy`, `danceability`, `acousticness`, `instrumentalness`, `loudness`, `harmony` (0.13.0;
-  a client that doesn't know a Trait skips it).
+  `tempo`, `valence`, `energy`, `danceability`, `acousticness`, `instrumentalness`, `loudness`, `harmony` (feature
+  `trait.harmony`; a client that doesn't know a Trait skips it).
 - **`queues.discoveries`**: the latest batch's offers plus any older offer still open, unreviewed first (in batch
   order), then the reviewed ones with their Verdict. `done` counts those with a Verdict. `next_batch_at` may be
   `null`.
@@ -312,4 +315,4 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
   `liked`, `playlists.verdicts` and `queues.likes` go by the Song.
 - 2026-10-23, haystack 0.9.0, `card.original`: `original` and `original_check` in a track card.
 - 2026-10-23, haystack 0.9.0, `swaps`: `POST /v1/swaps`; `spotify.pending_writes` counts Swaps too.
-- 2026-11-05, haystack 0.13.0: the `harmony` Trait in `baseline.traits` and a card's `readings` (ADR 0027).
+- 2026-11-05, haystack 0.13.0, `trait.harmony`: the `harmony` Trait in `baseline.traits` and a card's `readings` (ADR 0027).
