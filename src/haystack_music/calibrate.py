@@ -23,6 +23,7 @@ from datetime import datetime
 import numpy as np
 
 from . import db, verdicts
+from . import sources as source_stats
 from .known import Known
 
 log = logging.getLogger("haystack_music.calibrate")
@@ -199,7 +200,7 @@ def candidates(con, cfg: dict, variant: str | None = None) -> dict:
     rr = rerank.run(con, cfg, variant, res, "calibrate")
     out["rerank"] = rerank.summary(rr)
     chance = rr.get("chance") or {}
-    retired = set(cfg["harvest"].get("retired_sources", []))
+    retired = source_stats.retired_candidates(con, cfg)       # no live source holds them (ADR 0026)
     skip = known(con) | judged(con)
     asked = set(picked(con).values())
     bad = disliked_artists(con)
@@ -209,7 +210,7 @@ def candidates(con, cfg: dict, variant: str | None = None) -> dict:
                          "FROM candidates WHERE state='pool' AND vector_status='ok' "
                          "AND COALESCE(spotify_status,'') != 'not_found'"):
         cid = r["id"]
-        if cid not in pct[variant] or cid in asked or r["source"] in retired or r["artist_key"] in bad \
+        if cid not in pct[variant] or cid in asked or cid in retired or r["artist_key"] in bad \
                 or (r["spotify_id"] and r["spotify_id"] in skip) or have.why(r):
             continue
         ps = [p[cid] for p in pct.values() if cid in p]

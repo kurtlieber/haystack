@@ -576,3 +576,45 @@ def test_a_database_from_before_0_7_0_gets_the_provider_column_and_the_report_re
     cfg = config.load(tmp_path / "none.toml")
     assert report.pool(db.connect_readonly(path), cfg)["embedded_by_provider"] == {"deezer": 1}
     assert db.connect(path).execute("SELECT provider FROM deezer_vectors").fetchone()[0] == "deezer"
+
+
+def test_lastfm_tag_top_artists_client(quick):
+    top = {"topartists": {"artist": [{"name": "First"}, {"name": ""}, {"name": "Second"}]}}
+    s = Session(Resp(200, top), Resp(200, {"error": 6, "message": "Tag not found"}))
+    lf = Lastfm("k", session=s)
+    assert lf.tag_top_artists("drum and bass", 50) == ["First", "Second"]
+    assert s.calls[0][1]["method"] == "tag.getTopArtists" and s.calls[0][1]["tag"] == "drum and bass"
+    assert lf.tag_top_artists("no such tag") == []
+
+
+def test_listenbrainz_scene_clients(quick):
+    fresh = {"payload": {"releases": [
+        {"artist_credit_name": "Quiet", "release_name": "EP", "release_mbid": "q", "release_tags": ["dnb", 3],
+         "listen_count": 2},
+        {"artist_credit_name": "Loud", "release_name": "LP", "release_mbid": "l", "release_tags": None,
+         "listen_count": 40},
+        {"artist_credit_name": "", "release_name": "Nameless", "release_mbid": "n"}]}}
+    search = [{"recording_name": "Other Song", "artist_credit_name": "Band", "recording_mbid": "x"},
+              {"recording_name": "Song (Remastered)", "artist_credit_name": "Band feat. Guest", "recording_mbid": "r"}]
+    meta = {"r": {"artist": {"artists": [{"name": "Guest", "artist_mbid": "g"}, {"name": "Band", "artist_mbid": "b"}]}}}
+    sims = [{"artist_mbid": "b", "name": "Band", "score": 99}, {"artist_mbid": "s1", "name": "Low", "score": 1},
+            {"artist_mbid": "s2", "name": "High", "score": 50}, {"name": "No id"}]
+    tops = [{"artist_name": "High", "recording_name": "Big", "recording_mbid": "t1"},
+            {"artist_name": "High", "recording_name": "", "recording_mbid": "t0"},
+            {"artist_name": "High", "recording_name": "Bigger", "recording_mbid": "t2"},
+            {"artist_name": "High", "recording_name": "Biggest", "recording_mbid": "t3"}]
+    s = Session(Resp(200, fresh), Resp(200, search), Resp(200, meta), Resp(200, sims), Resp(200, tops),
+                Resp(200, []))
+    lb = ListenBrainz(session=s)
+    assert lb.fresh_releases(7) == [
+        {"artist": "Loud", "title": "LP", "release_mbid": "l", "tags": [], "listens": 40},
+        {"artist": "Quiet", "title": "EP", "release_mbid": "q", "tags": ["dnb"], "listens": 2}]
+    assert s.calls[0][0].endswith("/1/explore/fresh-releases/") and s.calls[0][1]["days"] == 7
+    assert lb.artist_mbid("Band", "Song") == "b"                    # the credited artist named Band, not the guest
+    assert s.calls[2][1] == {"recording_mbids": "r", "inc": "artist"}
+    assert lb.similar_artists("b", 6) == [{"name": "High", "mbid": "s2"}, {"name": "Low", "mbid": "s1"}]
+    assert s.calls[3][1]["algorithm"] == lb.artist_algorithm and "similar-artists" in s.calls[3][0]
+    assert lb.top_recordings("s2") == [{"artist": "High", "title": "Big", "mbid": "t1"},
+                                       {"artist": "High", "title": "Bigger", "mbid": "t2"}]
+    assert s.calls[4][0].endswith("/1/popularity/top-recordings-for-artist/s2")
+    assert lb.artist_mbid("Nobody", "Nothing") is None and lb.requests == 6

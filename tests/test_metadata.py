@@ -212,11 +212,12 @@ def test_only_the_first_shard_of_a_broad_harvest_retries_and_backfills(tmp_path,
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "t.db")
     monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(config, "STATUS_PATH", tmp_path / "state" / "status.json")
-    seen = []
+    seen, leads = [], []
 
     class FakeHarvester:
-        def __init__(self, con, cfg, seeds=None, liked_seeds=None):
+        def __init__(self, con, cfg, seeds=None, liked_seeds=None, lead=False):
             self.seeds = seeds
+            leads.append(lead)
 
         def run(self, sources, cap, retry=True):
             seen.append((len(self.seeds), retry))
@@ -229,3 +230,4 @@ def test_only_the_first_shard_of_a_broad_harvest_retries_and_backfills(tmp_path,
         a = cli.build_parser().parse_args(["harvest", "--broad", "4", "--no-score", *argv])
         assert cli.cmd_harvest(cfg, a) == 0
     assert seen == [(2, True), (2, False), (4, True), (2, False)]
+    assert leads == [True, False, True, True]               # llm_suggest runs in the first shard only
