@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from . import alert, calibrate, db, known, library, playlists, status, traits, verdicts
+from . import alert, calibrate, db, known, library, playlists, songs, status, traits, verdicts
 from .deezer import Deezer
 from .matching import Index, TrackRef, use_local_vector
 from .spotify import RECENTLY_PLAYED_LIMIT, Spotify
@@ -411,6 +411,7 @@ def run(con, cfg: dict, sp: Spotify | None = None) -> dict:
     out["likes"] = poll_likes(con, sp, cfg)
     lib = Index(library.library_refs(con))
     out["mapping"] = map_likes(con, cfg, lib)
+    out["songs"] = songs.assign(con)                              # new likes and files join their Songs (ADR 0025)
     out["known_songs"] = known.exclude_known(con, cfg, lib)      # songs the listener has now leave the pool
     out["liked_vectors"] = liked_preview_vectors(con, cfg, cfg["spotify"]["liked_preview_vectors_per_run"])
     out["offers"] = process_offers(con, sp, cfg, pl, lib)

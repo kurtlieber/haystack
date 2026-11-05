@@ -38,6 +38,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `secrets.py` | the secrets: 0600 files (default) or 1Password via `op`; a systemd credential overrides either |
 | `matching.py`, `textnorm.py` | Spotify ID -> ISRC -> fuzzy (artist + title + ±3 s + version-suffix check) |
 | `deezer.py`, `listenbrainz.py`, `lastfm.py`, `itunes.py`, `harvest.py` | candidate sources (reach only, never a score), seeds by Verdicts (ADR 0013), the optional sources and the iTunes preview fallback (ADR 0020); a cross-process throttle per service: Deezer 1.1 s, ListenBrainz 1.2 s, Last.fm 1 s, iTunes 3 s |
+| `songs.py` | the Song as a row of its own (ADR 0025): one per recording, by its ISRC, else by its names; every candidate, Spotify track and library file joins one; the ISRC backfill for older candidates |
 | `metadata.py` | what Deezer publishes about a track (ADR 0017): its album's label, release date and record type, its rank and its artist's fans, fetched once per album and artist, for the re-ranker and the track card |
 | `sources.py` | kept rate by source and by seed, and the harvest cap each source earns from it (ADR 0013) |
 | `vectors.py`, `scoring.py` | positives assembly, nearest-positive scoring, batch selection (1 per artist, ~20 % exploration moved by the outcomes, spread across styles; ADR 0010), like rates |
@@ -63,6 +64,13 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   (length + 4 samples of the `mdat` payload) is the fallback identity when a path or size changes (moves keep
   their embedding); mtime is never used. A 22-char **Spotify track ID** in the `MusicBrainz Track Id` tag (some
   rippers write it there) is the primary mapping key, then the ISRC, then a fuzzy match.
+* **Songs (ADR 0025).** A Song is a row of its own (`songs`): one per recording, by its ISRC where a track has one,
+  else by its names (the first artist, the base title and the hard version markers, so a live take or a remix is
+  another Song and a remaster with no code of its own is not). Every candidate, Spotify track and library file has
+  a `song_id`. A library file's ISRC is its own tag, else the ISRC of the Spotify track its Spotify id tag names.
+  Two Songs with different ISRCs are never joined by their names: a remaster often has a code of its own, and the
+  names rule (`known.same_song`) still catches it as a song the listener has. A Verdict's Song (ADR 0021) is still
+  the track's ISRC.
 * **Embeddings.** The primary vector is the 512-d track-similarity head; per-window 1280-d means are kept too
   (float16, same forward pass). A match is scored by the best window. A Deezer preview and your own file of the
   same song land a little apart, so with a library every preview vector is first mapped into the library's space
@@ -163,6 +171,8 @@ haystack verdict import FILE [--pending]   add a file's verdicts (by id: importi
 haystack models fetch|check          the Essentia models: download the missing ones (into models/)
 haystack traits backfill [--limit N] Readings for stored previews (Discoveries and likes first)
 haystack metadata backfill [--limit N]   Deezer's facts about each track: judged ones, liked songs, then the pool
+haystack songs backfill [--limit N]  ISRCs for older candidates, the pool first, then every row joins its Song
+haystack songs show ISRC|ID          a Song and every candidate, Spotify track and library file that joined it
 haystack traits measure|show TRACK   Readings for one Spotify track (measure: on demand)
 haystack traits retempo              fold the stored drum & bass and jungle tempos now (token-free, no network)
 haystack baseline                    your Baseline per Trait (mean, usual range)
@@ -268,6 +278,19 @@ through the same 1.1 s throttle; a failed request is tried again next time. `hay
 N` does the same at once (1000 by default; `--limit 0` only prints how much of the pool, the judged tracks and the
 liked songs have their album known). A large pool takes hours, so run it outside the harvest's hours: both share
 the throttle. `--no-retry` skips it with the other backfills.
+
+**ISRCs and Songs** (ADR 0025). A Deezer list (a chart, a radio, a playlist) gives track objects with no ISRC, so
+the harvest fetches `/track/{id}` once for each new candidate, before it checks the library and Liked Songs. That
+one request gives the ISRC and the bpm the Readings use. A new track whose ISRC is already a candidate's, under
+another Deezer id (a best-of, a deluxe edition), is a duplicate: its source is recorded on the candidate it
+duplicates. The library and Liked Songs check then matches by the ISRC first. Older candidates get theirs from the
+backfill: after the sources each daily harvest asks for up to `harvest.isrc_backfill_per_run` (300), the pool
+first (best scored first), then the judged and offered ones, excluded ones last. A track Deezer has no ISRC for is
+marked asked (`isrc_checked_at`) and not asked again; a failed request is. `haystack songs backfill --limit N`
+does the same at once (300 by default; `--limit 0` only joins rows to their Songs and prints the coverage), one
+throttled request per candidate, so run it outside the harvest's hours. Each harvest, sync and batch then joins
+every new row to its Song (`songs.assign`): a name-keyed Song whose track has its ISRC now takes the code, or
+folds into the Song that has it. `haystack report` prints how much of the pool has an ISRC.
 
 ## Scoring and batches
 
@@ -564,8 +587,9 @@ count toward the caps and the diversity.
 
 A pool candidate that is the same song as a liked song, a library file or a track with a verdict, an offer or a
 Calibrate pick, on any release (a remaster, a deluxe edition, a best-of, a longer cut), is never picked and never
-asked about (ADR 0021, note of 2026-10-23). The batch and the Calibrate top-up match each pool row by ISRC where
-the candidate has one, else by the names (`known.same_song`): the same artist, no hard version marker between the
+asked about (ADR 0021, note of 2026-10-23). The batch and the Calibrate top-up match each pool row by its Song
+first (ADR 0025: the same ISRC, or the same names for a track with no ISRC), then by ISRC, then by the names
+(`known.same_song`), which runs on every row: the same artist, no hard version marker between the
 titles, a length within 90 s, and the base titles equal once the version markers are stripped, or one the other
 plus a decoration such as `- From "Armageddon" Soundtrack`. The length is looser than the harvest's intake rule
 (3 s) because Deezer's length for the same recording often differs from Spotify's or the file's by 4 to 30 s, and

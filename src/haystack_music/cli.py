@@ -670,6 +670,32 @@ def cmd_metadata(cfg, a) -> int:
     return job("metadata", run)
 
 
+def cmd_songs(cfg, a) -> int:
+    from . import songs
+    if a.action == "show":
+        if not a.ref:
+            print("songs show needs an ISRC or a Song id", file=sys.stderr)
+            return 2
+        r = songs.show(db.connect_readonly(), a.ref)
+        if r is None:
+            print(f"no Song {a.ref}", file=sys.stderr)
+            return 1
+        print(json.dumps(r, indent=1, default=str))
+        return 0
+    from .deezer import Deezer
+
+    def run(con):
+        dz = Deezer(cfg["harvest"]["deezer_min_interval"])
+        out = songs.backfill(con, dz, a.limit)
+        cv = out["coverage"]
+        print(f"asked {out['todo']}: {out['found']} with an ISRC, {out['none']} without, {out['errors']} errors; "
+              f"ISRC known for {cv['pool']['with_isrc']}/{cv['pool']['n']} in the pool "
+              f"({cv['pool']['isrc_share']}), {cv['all']['with_isrc']}/{cv['all']['n']} in all; "
+              f"{dz.requests} Deezer requests")
+        return out
+    return job("songs", run)
+
+
 def cmd_baseline(cfg, a) -> int:
     from . import baseline
     print(json.dumps(baseline.compute(db.connect(), cfg), indent=1))
@@ -1006,6 +1032,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["backfill"])
     s.add_argument("--limit", type=int, default=1000, help="at most N tracks (0: just print the coverage)")
     s.set_defaults(fn=cmd_metadata)
+
+    s = sub.add_parser("songs", help="the Song of each track (ADR 0025): backfill asks Deezer for the ISRC of older "
+                                     "candidates, the pool first (token-free; run it outside the harvest's hours, "
+                                     "they share the throttle); show prints a Song and every track that joined it")
+    s.add_argument("action", choices=["backfill", "show"])
+    s.add_argument("ref", nargs="?", help="show: an ISRC or a Song id")
+    s.add_argument("--limit", type=int, default=300, help="backfill: at most N candidates (0: just join Songs "
+                                                          "and print the coverage)")
+    s.set_defaults(fn=cmd_songs)
 
     s = sub.add_parser("baseline", help="the listener's Baseline per Trait (star-weighted mean and usual range)")
     s.set_defaults(fn=cmd_baseline)

@@ -15,7 +15,7 @@ The listener's current judgment of a track: a Rating, a Pass or a Dislike. A tra
 _Avoid_: feedback, opinion
 
 **Song**:
-One recording, on however many releases: the album track, its remaster, the deluxe edition and the best-of are one Song, known by its ISRC. Each release is a track of its own on Spotify. A Song's verdict is the newest verdict on any of its tracks, and outside Discoveries and Calibrate it is the one that counts (ADR 0021).
+One recording, on however many releases: the album track, the deluxe edition and the best-of are one Song, known by its ISRC. A remaster often gets an ISRC of its own and is then another Song, though still a song the listener has. Each release is a track of its own on Spotify. The server keeps one row per Song, by ISRC where it has one, else by its names, and every candidate, Spotify track and library file joins one (ADR 0025). A Song's verdict is the newest verdict on any of its tracks, and outside Discoveries and Calibrate it is the one that counts (ADR 0021).
 _Avoid_: recording (fine in prose), release (one of its tracks)
 
 **Rating**:
