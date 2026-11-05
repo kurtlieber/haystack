@@ -88,6 +88,39 @@ computer, so nothing leaves your network.
 haystack 0.7.1 has the test, and you run it by hand. Once you turn the model on, it asks about the songs you've
 already judged, then shows how often the model was right and what that cost. It doesn't touch your batches.
 
+## Next: a song you know, sources that follow your scene, less Deezer
+
+These come one step at a time, each in a release of its own, and each is measured on real verdicts before the
+next one starts.
+
+**A song is a song, whichever release it's on.** The same song often sits on the album, a deluxe edition, a
+best-of and a remaster, each with its own id. Most of those releases share the code the music industry gives each
+recording (its ISRC), but a remaster often gets a code of its own. haystack already counts a verdict on one release
+for every release with the same code, and a batch already skips a song you have, have liked or have judged when
+the code or the artist and title match. Next, every candidate gets its code when it arrives, so matching by code
+covers the whole pool. Matching by artist and title stays, for the releases the code doesn't join, such as a
+remaster with a code of its own.
+
+**The language model gets a say in the order, if it earns it.** If the optional language model proves better than
+the sound alone at telling which songs you'll keep, haystack will blend its opinion into the order of its best
+matches. Your verdicts set how much it counts; it isn't a setting. It stays within the weekly spending cap you set,
+and Calibrate starts asking about the songs where the model and the sound disagree, because those teach haystack
+the most. If the test shows no clear gain, this step is dropped and the rest goes on without it.
+
+**Sources that follow your scene, not the charts.** Charts bring a lot of songs you already know or don't want.
+haystack will lean on sources that follow the music you keep: artists like the ones you rate highly, the styles
+you listen to and new releases in them, small labels, and songs the language model suggests. As now, a source
+that brings little you keep gets less room, and you can retire it. A new source that needs an account or the
+language model stays off until you set it up.
+
+**Deezer becomes one provider among others.** Today every candidate is a Deezer track underneath. haystack will
+let a candidate come from, and be fingerprinted through, Apple as well, so it keeps working if Deezer's catalogue
+or previews go away.
+
+**Where a song comes from.** From MusicBrainz and ListenBrainz, haystack will learn a song's country, its language
+and how widely it's listened to, and learn from your verdicts whether any of that matters to you. needle will show
+the country and language under the title.
+
 ## Smaller changes
 
 - **A Dislike will reach the artist.** Disliking a song will also count a little against the same artist's other
