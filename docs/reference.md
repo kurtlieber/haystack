@@ -195,7 +195,9 @@ by an artist and title search with the same version check as the Spotify matchin
 %; a share a bucket can't fill passes to the next): **top**, the tracks you Rated 4-5 stars and the discoveries you
 kept in the last `seed_recent_days` (90), 5 stars first; **mid**, your other liked songs (Unrated or 3 stars or
 more); **library**, your files. Seeds have distinct artists, and an artist seeded for a source in the last week is
-skipped while there are others (`harvest_seeds` keeps the history). Each candidate's source detail ends in
+skipped while there are others (`harvest_seeds` keeps the history). A possible cover by its own title or artists
+(`originals.marked`: ADR 0022's markers or an instrumental suffix) is no seed in any bucket, and the run logs how
+many it left out: a karaoke cover's similar tracks are more karaoke. Each candidate's source detail ends in
 `seed=<stars or origin>`, so `haystack sources` can show the kept rate by seed. With no Ratings yet this is about
 70 % liked songs and 30 % library, as before; `"recent"` keeps the 0.3 rule (70 % from the 200 most recent liked
 songs, the rest library, untagged).
@@ -307,11 +309,11 @@ variants use the liked songs' previews as positives. Older previews are backfill
 
 **Broad harvest.** `harvest --broad 150` seeds artist radio and related artists from 150 artists stratified over
 genre buckets (sqrt-weighted, liked songs first) and ListenBrainz similar-recordings from every liked song (with
-`seed_policy = "verdicts"`, 5-star ones first and Passed ones left out). It runs weekly (`harvest_broad`, Sundays);
-the seed sample follows `harvest.broad_seed_rng` and the ISO week, so each week draws different artists and every
-shard of one week draws the same. `--shard i/N` splits the seeds across parallel processes (the 1.1 s Deezer
-throttle is shared); only shard 0 retries errors and runs the backfills. Chart + editorial-chart candidates
-are capped at `harvest.chart_max_share` (20 %) of the pool, and of each batch (3 of 15).
+`seed_policy = "verdicts"`, 5-star ones first, Passed ones and possible covers left out). It runs weekly
+(`harvest_broad`, Sundays); the seed sample follows `harvest.broad_seed_rng` and the ISO week, so each week draws
+different artists and every shard of one week draws the same. `--shard i/N` splits the seeds across parallel
+processes (the 1.1 s Deezer throttle is shared); only shard 0 retries errors and runs the backfills. Chart +
+editorial-chart candidates are capped at `harvest.chart_max_share` (20 %) of the pool, and of each batch (3 of 15).
 
 **Eval** (`haystack eval`, ADR 0009): each variant scores the past offers and judged Calibrate picks like
 candidates, and the eval asks how well it ranks the ones you **kept** (a Rating of 3★ or more, or liked without a
