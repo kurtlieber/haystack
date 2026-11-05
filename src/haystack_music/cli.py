@@ -710,7 +710,7 @@ def cmd_serve(cfg, a) -> int:
 
 def cmd_genres(cfg, a) -> int:
     from . import evaluate
-    print(json.dumps(evaluate.liked_genres(db.connect(), a.top), indent=1))
+    print(json.dumps(evaluate.liked_genres(db.connect(), cfg, a.top), indent=1))
     return 0
 
 
