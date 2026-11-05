@@ -5,30 +5,17 @@
 
 ### Features
 
-* **clear:** a never-played discovery is unplayed, not a no ([dc397ab](https://github.com/kurtlieber/haystack/commit/dc397ab0378f3d1a74fb0ff335e8c335a9052000))
-* plays every 15 minutes with play gaps, and a never-played discovery is unplayed, not a no ([a5f2107](https://github.com/kurtlieber/haystack/commit/a5f210728a99ae4ee2f26279963dd07d948541c7))
-* **sync:** plays are polled every 15 minutes and a full page is recorded as a gap ([ee0a7c0](https://github.com/kurtlieber/haystack/commit/ee0a7c00e6a4ad617cddb9a87e996f7455e54468))
+* **sync:** plays are read every 15 minutes, so Spotify's last 50 never overflow: `haystack plays`, `schedule.plays = "every 15m"` (a new `every Nm` form) and `haystack-plays.timer` for the units; a poll that still gets a full page records a play gap, and `haystack status` shows the count and the latest (ADR 0023) ([ee0a7c0](https://github.com/kurtlieber/haystack/commit/ee0a7c00e6a4ad617cddb9a87e996f7455e54468))
+* **clear:** a discovery nobody played is not a no: before each batch an unliked track played since it was added is a no as before, one never played goes back to the pool and counts toward `batch.max_unplayed_expiries` (the second retires it), and one whose time in Discoveries overlaps a play gap goes back without counting (ADR 0023) ([dc397ab](https://github.com/kurtlieber/haystack/commit/dc397ab0378f3d1a74fb0ff335e8c335a9052000))
 
 
 ### Bug Fixes
 
-* __version__ says 0.9.0, and a test ties it to pyproject.toml ([582c27d](https://github.com/kurtlieber/haystack/commit/582c27deb4bd6af5185d57a27972003fdfa946e8))
-* __version__ says 0.9.0, and a test ties it to pyproject.toml ([8ecfebe](https://github.com/kurtlieber/haystack/commit/8ecfebec16aacd750b223e722a308d0372f0709a))
-* **batch:** a candidate that is the same song as a like, a file or a judged track is never offered or asked about ([cfdf644](https://github.com/kurtlieber/haystack/commit/cfdf644109756c5611697d7f328b95dbcf33fce2))
-* **batch:** a candidate that is the same song as a like, a file or a judged track is never offered or asked about ([0bc6924](https://github.com/kurtlieber/haystack/commit/0bc6924d8b1637dee6478adaaee6718b829c8a0a))
-* **cli:** haystack genres passes the config, not the top count, to liked_genres ([0248a20](https://github.com/kurtlieber/haystack/commit/0248a2063d619fa236b229fe7bcae4a105c275ca))
-* **cli:** haystack genres passes the config, not the top count, to liked_genres ([3619a8e](https://github.com/kurtlieber/haystack/commit/3619a8ec0630ef750e3a3a655288f628caf7beff))
-* **harvest:** label_skip drops the catalogue companies too (BMG, Bicycle Music, Primary Wave, ...) ([573ad9b](https://github.com/kurtlieber/haystack/commit/573ad9b844ec5db3bf13c0d2d63dc4437f04a894))
-* **harvest:** possible covers are no harvest seeds ([1fbba81](https://github.com/kurtlieber/haystack/commit/1fbba81dedb06d31de73170b95683cc42f0aca9f))
-* **harvest:** possible covers are no harvest seeds ([9f6daf3](https://github.com/kurtlieber/haystack/commit/9f6daf3dea0ba09007a6f0de50d341c92a1e8eb7))
-* **harvest:** the label source passes over the majors' labels ([2d40753](https://github.com/kurtlieber/haystack/commit/2d40753b6ecdd24795f29c9d61f49647626e5816))
-* **harvest:** the label source passes over the majors' labels ([7c0709b](https://github.com/kurtlieber/haystack/commit/7c0709b262111989c428e73c1b32a8ec69a06941))
-
-
-### Documentation
-
-* **adr:** 0024 says how the first release finds v0.9.0 ([5ef47fe](https://github.com/kurtlieber/haystack/commit/5ef47fe3fa066ad3504b077fa4f76b1387a76aa2))
-* possible covers are no harvest seeds ([#44](https://github.com/kurtlieber/haystack/issues/44)) ([bc1e7ab](https://github.com/kurtlieber/haystack/commit/bc1e7ab12f7a32acd7353a3c2604e74784f2a108))
+* **batch:** a candidate that is the same song as a like, a file or a judged track (by ISRC, else by artist, base title and length) is never offered or asked about, whichever release of it the harvest found (ADR 0021) ([0bc6924](https://github.com/kurtlieber/haystack/commit/0bc6924d8b1637dee6478adaaee6718b829c8a0a))
+* **harvest:** `deezer_label` passes over the major labels, the big catalogue labels and the catalogue companies (`harvest.label_skip`, matched by whole words of the label's name) and the next label takes the slot: their album search returned a whole catalogue of every style (Columbia France's chanson for a listener of drum & bass); the run's stats count `majors_skipped` (ADR 0020 note) ([7c0709b](https://github.com/kurtlieber/haystack/commit/7c0709b262111989c428e73c1b32a8ec69a06941), [573ad9b](https://github.com/kurtlieber/haystack/commit/573ad9b844ec5db3bf13c0d2d63dc4437f04a894))
+* **harvest:** a possible cover by its own title or artists (karaoke, a tribute, an instrumental) is no seed for artist radio, related artists, ListenBrainz or Last.fm, nor for the broad harvest: its similar tracks were more covers ([9f6daf3](https://github.com/kurtlieber/haystack/commit/9f6daf3dea0ba09007a6f0de50d341c92a1e8eb7))
+* **cli:** `haystack genres` no longer fails with `TypeError: 'int' object is not subscriptable`: it passes the config, not the top count, to `liked_genres` (kurtlieber/dotfiles#350) ([3619a8e](https://github.com/kurtlieber/haystack/commit/3619a8ec0630ef750e3a3a655288f628caf7beff))
+* `__version__`, and with it `/v1/health` and the Deezer and ListenBrainz User-Agent, said 0.8.0 in 0.9.0; a test now ties it to `pyproject.toml` ([8ecfebe](https://github.com/kurtlieber/haystack/commit/8ecfebec16aacd750b223e722a308d0372f0709a))
 
 ## [0.9.0](https://github.com/kurtlieber/haystack/compare/v0.8.0...v0.9.0) (2026-10-23)
 
