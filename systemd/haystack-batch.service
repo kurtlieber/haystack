@@ -4,6 +4,12 @@ Documentation=https://github.com/kurtlieber/haystack#readme
 Wants=network-online.target
 After=network-online.target
 OnFailure=haystack-alert@%n.service
+# A failed batch is retried for a day (see Restart= below), so an outage over Monday morning doesn't cost the
+# week. 16 starts at most in 2 days: the first run and 15 retries, the last one about 26 hours in. The next
+# failure hits this limit, the unit fails and OnFailure= alerts once. Within those 2 days a manual start needs
+# `systemctl --user reset-failed haystack-batch.service` first.
+StartLimitIntervalSec=2d
+StartLimitBurst=16
 
 [Service]
 Type=oneshot
@@ -18,4 +24,13 @@ IOSchedulingClass=idle
 MemoryHigh=8G
 TimeoutStartSec=1h
 SyslogIdentifier=haystack-batch
+# Retry a failure (no network, Spotify down) after 15, 30 and 60 minutes, then every 2 hours, as
+# scheduler.RETRY does for `haystack serve`. RestartMode=direct (systemd 254+) skips OnFailure= between
+# attempts, so only the final failure alerts. Exit 3 isn't retried: only `haystack auth` fixes it.
+Restart=on-failure
+RestartMode=direct
+RestartSec=15min
+RestartSteps=3
+RestartMaxDelaySec=2h
+RestartPreventExitStatus=3
 # exit 3 = Spotify not authorised yet: run `haystack auth`
