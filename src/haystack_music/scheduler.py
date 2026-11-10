@@ -12,7 +12,9 @@ replay a batch. A job that has never run starts at once, except the batch and th
 wait for their time. Until the
 first batch is done, it follows every good library or harvest run (the units: OnSuccess= of the library unit). The
 harvest fills the pool, so without a library a new install gets its first batch the same day; with one, the
-first batch skips until the library is embedded. A failure (any exit but 3, needs auth) sends an alert."""
+first batch skips until the library is embedded. A failure (any exit but 3, needs auth) sends an alert. A failed
+batch is retried first (RETRY, as haystack-batch.service's Restart= does), so an outage costs a few hours, not
+the week; only its last failure alerts."""
 from __future__ import annotations
 
 import logging
@@ -41,6 +43,11 @@ JOBS = {
 FIRST_BATCH = ["first-batch", *CLEAR]
 WAIT_IF_NEVER_RUN = {"batch", "harvest_broad"}
 TICK = 30            # seconds between checks: a job starts at most this late
+EXIT_NEEDS_AUTH = 3  # not retried: only `haystack auth` fixes it
+# Minutes to wait before each retry of a failed job: 15, 30, 60, then every 2 hours, the last retry about 26
+# hours after the first failure. Matches haystack-batch.service (RestartSec=, RestartSteps=,
+# RestartMaxDelaySec=, StartLimitBurst= = 1 + the number of retries).
+RETRY = {"batch": (15, 30, 60, *(120,) * 12)}
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,13 @@ class Scheduler:
 
     def _job(self, job: str, args: list[str]) -> None:
         code = self.run(job, args)
+        for wait in RETRY.get(job, ()):
+            if code in (0, EXIT_NEEDS_AUTH) or self.stopping.is_set():
+                break
+            log.warning("schedule: %s exited %s; trying again in %d min", job, code, wait)
+            if self.stopping.wait(wait * 60):
+                return
+            code = self.run(job, args)
         if self.stopping.is_set():
             return
         if code == 0 and job in ("library", "harvest"):

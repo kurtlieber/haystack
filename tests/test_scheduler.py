@@ -159,3 +159,66 @@ def test_plays_is_scheduled_by_default():
     assert s.specs["plays"].every == 15
     assert scheduler.JOBS["plays"] == ["plays"]
     assert s.specs["sync"].hourly                                          # the hourly sync still polls plays too
+
+
+def _sched_seq(seq):
+    """A scheduler whose jobs exit with the codes in seq[job], in turn (the last one repeats)."""
+    ran = []
+
+    def run(job, args):
+        ran.append(job)
+        codes = seq.get(job, [0])
+        return codes[min(len([j for j in ran if j == job]), len(codes)) - 1]
+    return scheduler.Scheduler(config.load(), run=run), ran
+
+
+def test_a_failed_batch_is_retried_and_only_its_last_failure_alerts(monkeypatch):
+    sent = []
+    monkeypatch.setattr(alert, "send", lambda cfg, job, msg, *a, **kw: sent.append(job) or True)
+    monkeypatch.setattr(scheduler, "RETRY", {"batch": (0, 0, 0)})
+    s, ran = _sched_seq({"batch": [1]})
+    s.launch("batch"); _join(s)
+    assert ran == ["batch"] * 4 and sent == ["batch"]
+
+    sent.clear()
+    s, ran = _sched_seq({"batch": [1, 1, 0]})
+    s.launch("batch"); _join(s)
+    assert ran == ["batch"] * 3 and sent == []
+
+    s, ran = _sched_seq({"batch": [3], "harvest": [1]})
+    s.launch("batch"); s.launch("harvest"); _join(s)
+    assert sorted(ran) == ["batch", "harvest"]                     # needs auth, and other jobs: no retry
+    assert sent == ["harvest"]
+
+
+def test_a_stop_during_the_retry_wait_ends_the_batch_without_an_alert(monkeypatch):
+    sent = []
+    monkeypatch.setattr(alert, "send", lambda cfg, job, msg, *a, **kw: sent.append(job) or True)
+    s, ran = _sched_seq({"batch": [1]})
+    s.stopping.set()
+    s.launch("batch"); _join(s)
+    assert ran == ["batch"] and sent == []
+
+
+def _span(v: str) -> float:
+    """A systemd time span in minutes ("15min", "2h", "2d")."""
+    for unit, mins in (("min", 1), ("h", 60), ("d", 1440)):
+        if v.endswith(unit):
+            return float(v.removesuffix(unit)) * mins
+    raise ValueError(v)
+
+
+def test_the_batch_unit_retries_like_the_scheduler():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "systemd" / "haystack-batch.service").read_text()
+    kv = dict(line.split("=", 1) for line in text.splitlines() if "=" in line and not line.startswith("#"))
+    assert kv["Restart"] == "on-failure" and kv["RestartMode"] == "direct"
+    assert kv["RestartPreventExitStatus"] == str(scheduler.EXIT_NEEDS_AUTH)
+    first, top, steps = _span(kv["RestartSec"]), _span(kv["RestartMaxDelaySec"]), int(kv["RestartSteps"])
+    retries = int(kv["StartLimitBurst"]) - 1
+    ratio = (top / first) ** (1 / steps)                           # systemd.service(5), RestartSteps=
+    unit = tuple(round(min(first * ratio ** i, top)) for i in range(retries))
+    assert unit == scheduler.RETRY["batch"]
+    assert sum(unit) >= 24 * 60                                    # retried for at least a day
+    # every start fits in the start-limit window, even if each attempt runs to TimeoutStartSec=
+    assert sum(unit) + top + (retries + 1) * _span(kv["TimeoutStartSec"]) < _span(kv["StartLimitIntervalSec"])

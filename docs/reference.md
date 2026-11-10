@@ -824,7 +824,9 @@ comma-separated days, or `off`), in local time (`TZ`).
 * Until the first batch is done, it follows every good library or harvest run. Without a library, a new install
   gets it the day it is signed in; with one, it waits for the library embedding.
 * A job still running at its next time is skipped, not doubled. Different jobs may overlap.
-* A failing job (any exit but 3) sends an alert, if alerts are on.
+* A failing job (any exit but 3) sends an alert, if alerts are on. A failed batch is retried first, after 15,
+  30 and 60 minutes, then every 2 hours, the last retry about 26 hours in; only the last failure alerts. A
+  restart of `haystack serve` drops the pending retries.
 * `docker compose stop` gives running jobs 20 s to stop; they resume or redo their work on the next run.
 * `--no-api` runs only the scheduler. Without the `api-token` secret the API stays off with a warning (set it
   with `haystack token new`, then restart).
@@ -859,7 +861,10 @@ systemctl --user enable --now haystack-api.service   # needle
 Turn on lingering once (`sudo loginctl enable-linger $USER`) so the timers run without a login session. Times
 are the server's local time; a unit drop-in (`systemctl --user edit haystack-batch.timer`, override
 `OnCalendar=`) moves them. Follow a job: `journalctl --user -u haystack-library -f`. A unit failure runs
-`haystack-alert@%n.service` (`OnFailure=`).
+`haystack-alert@%n.service` (`OnFailure=`). The batch unit first retries a failure for about a day, as the
+container does (`Restart=on-failure` with `RestartMode=direct`, systemd 254 or later), and alerts only when it
+gives up. To start it by hand within 2 days of giving up, run `systemctl --user reset-failed
+haystack-batch.service` first.
 
 ## Secrets
 `[secrets] backend` picks where the secrets live:
