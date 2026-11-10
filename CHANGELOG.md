@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/kurtlieber/haystack/compare/v0.14.0...v0.14.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **batch:** retry a failed batch for a day before alerting ([#57](https://github.com/kurtlieber/haystack/issues/57)) ([bef1454](https://github.com/kurtlieber/haystack/commit/bef1454073f6b46a1e2abdf520d20b0e7308a3db))
+
 ## [0.14.0](https://github.com/kurtlieber/haystack/compare/v0.13.0...v0.14.0) (2026-11-05)
 
 
