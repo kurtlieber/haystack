@@ -15,9 +15,10 @@ import queue
 import re
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, db, originals, playlists, review, verdicts
+from . import __version__, db, originals, playlists, review, taste, verdicts
 
 log = logging.getLogger("haystack_music.api")
 VERSION = "1"
@@ -25,7 +26,7 @@ VERSION = "1"
 # only when its feature name is listed; a server without the `server` object has none of them.
 FEATURES: tuple[str, ...] = ("why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played",
                               "card.label", "card.song", "card.original", "swaps",
-                              "trait.harmony")
+                              "trait.harmony", "taste")
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
@@ -96,6 +97,21 @@ def parse_play(p) -> tuple:
     if done is not None and not isinstance(done, bool):
         raise ValueError("malformed play: completed must be true or false")
     return p["track"], p["started_at"], ms, None if done is None else int(done)
+
+
+def parse_taste_query(query: str) -> dict:
+    """GET /v1/taste's query -> kwargs for taste.brief: days (1-3650) and min_n (1-10000), each at most once.
+    Raises ValueError with a reason."""
+    q = urllib.parse.parse_qs(query, keep_blank_values=True)
+    out = {}
+    for name, hi in (("days", 3650), ("min_n", 10000)):
+        if name not in q:
+            continue
+        v = q[name]
+        if len(v) != 1 or not v[0].isdigit() or not 1 <= int(v[0]) <= hi:
+            raise ValueError(f"{name} must be a whole number from 1 to {hi}")
+        out[name] = int(v[0])
+    return out
 
 
 def server_info() -> dict:
@@ -316,6 +332,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.worker.playlists(PLAYLISTS_EVERY)
             st["server"] = server_info()
             return self._send(200, st)
+        if path == "/v1/taste":
+            try:
+                kw = parse_taste_query(self.path.partition("?")[2])
+            except ValueError as e:
+                return self._error(400, str(e))
+            return self._send(200, taste.brief(self._con(), self.server.cfg, self.server.classes or [], **kw))
         m = PLAYLIST_PATH.match(path)
         if m:
             pl = playlists.cards(self._con(), self._cards(), m.group(1))

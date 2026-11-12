@@ -124,4 +124,8 @@ _Avoid_: score (the similarity the picks start from), match, certainty
 
 **Taste profile**:
 What a request to the optional language model says about the listener: the artists they rate and like most with their mean stars, the artists of songs they turned down, their top styles and their Usual ranges. It is built without the songs the request asks about, and never carries a Verdict on them.
-_Avoid_: Baseline (the typical Reading per Trait), history, model of the listener
+_Avoid_: Baseline (the typical Reading per Trait), Taste brief (what a client reads), history, model of the listener
+
+**Taste brief**:
+What `GET /v1/taste` serves a client that writes song ideas (spindle): how often each style, tempo band and instrumental level gets 5★, over every Song with a Verdict and over those that were new to the listener, the recent 5★ and disliked new Songs, the most-played 5★ Songs, and the Baseline. Counts from stored Verdicts, styles and Readings, with no language model (ADR 0028).
+_Avoid_: Taste profile (what haystack's own language model is told), taste summary, profile
