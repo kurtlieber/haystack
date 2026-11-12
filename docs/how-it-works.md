@@ -288,6 +288,9 @@ a track that changes just before or after it can be misjudged.
 - **It doesn't rank by popularity.** An obscure B-side and a chart hit get the same chance if they sound right.
   Chart songs fill at most a fifth of a batch, and if you keep passing on them, haystack learns that too.
 - **It doesn't read lyrics or genre tags** to choose. The fingerprint is all sound.
+- **It doesn't learn from songs made for you.** If an app such as spindle has a music service make songs for you
+  and haystack keeps them for it (`[generated] enabled`), your stars and notes on those songs stay with them. They
+  are not verdicts on your songs and never change what haystack finds, how it ranks or your usual ranges.
 - **It doesn't share your taste with anyone.** Your ratings and fingerprints stay in haystack's database on your
   server. The optional places to look are told only names: of songs, artists, styles or labels, never your
   ratings. The optional language model, if you turn it on, gets a summary of your taste (your favourite artists

@@ -234,6 +234,63 @@ def test_live_payloads_keep_every_documented_key_and_type(server, defs):
     assert documented - seen == set(), "give these a non-null value in the test world"
 
 
+GENERATED_ROOTS = ("generated_response", "generated_takes", "generated_notes")
+
+
+@pytest.fixture
+def store(tmp_path):
+    """The generated-song store switched on (ADR 0029): an idea with two takes, one rated with a note and then
+    re-rated, one kept and disliked; a take with no idea; one malformed item per POST."""
+    cfg = config.load(tmp_path / "none.toml")
+    cfg["generated"]["enabled"] = True
+    srv = api.Server(("127.0.0.1", 0), cfg, TOKEN, Worker(), db_path=tmp_path / "t.db")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv
+    srv.shutdown()
+
+
+def store_payloads(srv) -> list[tuple[str, object]]:
+    """(fixture section, live payload) for each of the store's routes."""
+    out = []
+    for name, method, path, body in (
+            ("generated_response", "POST", "/v1/generated/ideas",
+             {"ideas": [{"id": "contract-i1", "created_at": "2026-01-06T00:00:00Z", "service": "acme",
+                         "idea": {"title": "Synthetic"}, "reason": "a test", "request": {"prompt": "synthetic"},
+                         "takes": [{"id": "take-1", "title": "Synthetic", "model": "m1"}, {"id": "take-2"}]},
+                        {"id": "contract-i2"}]}),
+            ("generated_response", "POST", "/v1/generated/verdicts",
+             {"verdicts": [{"id": "contract-v1", "service": "acme", "take": "take-1", "kind": "rating", "stars": 3,
+                            "note": "first", "given_at": "2026-01-06T01:00:00Z"},
+                           {"id": "contract-v2", "service": "acme", "take": "take-1", "kind": "rating", "stars": 5,
+                            "note": "better", "given_at": "2026-01-06T02:00:00Z"},
+                           {"id": "contract-v3", "service": "acme", "take": "take-2", "kind": "dislike",
+                            "given_at": "2026-01-06T03:00:00Z"},
+                           {"id": "contract-v4", "service": "acme", "take": "take-0", "kind": "rating", "stars": 2,
+                            "given_at": "2026-01-06T04:00:00Z"},
+                           {"id": "contract-v5", "kind": "pass"}]}),
+            ("generated_response", "POST", "/v1/generated/kept",
+             {"kept": [{"id": "contract-k1", "service": "acme", "take": "take-2", "kept_at": "2026-01-07T00:00:00Z"},
+                       {"id": "contract-k2"}]}),
+            ("generated_takes", "GET", "/v1/generated/takes", None),
+            ("generated_notes", "GET", "/v1/generated/notes", None)):
+        code, value = call(srv, method, path, body)
+        assert code == 200, (path, value)
+        out.append((name, value))
+    return out
+
+
+def test_the_stores_payloads_keep_every_documented_key_and_type(store, defs):
+    seen: set = set()
+    errs = []
+    for name, value in store_payloads(store):
+        errs += check(value, defs[name], name, defs, seen)
+    assert errs == []
+    documented = set()
+    for name in GENERATED_ROOTS:
+        key_paths(defs[name], name, defs, documented)
+    assert documented - seen == set(), "give these a non-null value in the test world"
+
+
 def test_every_fixture_section_is_checked(defs):
     used: set = set()
 
@@ -250,7 +307,7 @@ def test_every_fixture_section_is_checked(defs):
                 else:
                     refs(s)
     roots = {"health", "state", "card", "playlist", "verdicts_response", "plays_response", "swaps_response",
-             "playlist_put_response"}
+             "playlist_put_response", *GENERATED_ROOTS}
     for name in roots:
         refs(defs[name])
     assert set(defs) == roots | used
@@ -274,5 +331,5 @@ def test_server_object_and_features_are_documented(server):
     assert __version__ == tomllib.loads(PYPROJECT.read_text())["project"]["version"]   # a release bumps both
     assert h["version"] == "1"                     # the old field keeps its meaning: the API version
     doc = API_DOC.read_text()
-    for f in api.FEATURES:
+    for f in [*api.FEATURES, *api.OPTIONAL_FEATURES]:      # a feature a config switches on, too
         assert re.search(rf"`{re.escape(f)}`", doc), f"feature {f} is not in docs/api.md"

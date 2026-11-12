@@ -355,6 +355,7 @@ The ones people change most:
 | `llm.enabled` | `false` | Let `haystack llm` ask a language model about your songs. See [Optional: a language model](#optional-a-language-model). |
 | `alert.enabled` | `false` | Send a webhook when a job fails or the Spotify sign-in is running out. Set the `alert-webhook-url` secret first. |
 | `alert.outbox` | `""` | Instead of the webhook, write each alert as a JSON file to this folder, for another program to send on. No secret needed. See [Alerts](docs/reference.md#alerts). |
+| `generated.enabled` | `false` | Keep the songs an app such as spindle has a music service make for you, with your ratings and notes on them, under `/v1/generated/`. They never change what haystack finds for you. See [api.md](docs/api.md#generated-songs). |
 
 For example, 25 songs every Friday evening, with a music folder:
 

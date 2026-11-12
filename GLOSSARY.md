@@ -42,6 +42,26 @@ _Avoid_: real song, master
 The listener's decision that a Possible cover should give way to its Original: the cover's verdicts are taken back, and in the listener's own playlists and Liked Songs the Original takes its place. The one edit haystack makes to the listener's own playlists.
 _Avoid_: replace, dedupe
 
+### Generated songs
+
+Songs a client such as spindle has a music service make, kept in the optional generated-song store (ADR 0029). None of these is a Song or a Verdict, and none changes what haystack recommends.
+
+**Idea**:
+What a client asked a music service for: the idea in the client's own form (its style, its lyrics and who wrote them), the reason the client chose it, and the exact request it sent.
+_Avoid_: prompt (only part of the request), generation
+
+**Take**:
+One piece of audio a music service made from an Idea, known by the service and the service's id for it. One Idea usually has several. It is not a Song: haystack never harvests, measures or offers it.
+_Avoid_: Song, clip, track, generation
+
+**Verdict on a take**:
+The listener's judgment of a Take: 1–5 stars or a Dislike, with an optional note on what worked and what didn't. There is no Pass. Append-only; the latest by when it was given is current (ADR 0005). It is not a Verdict, and the re-ranker, the Baseline and the Review never read it.
+_Avoid_: Verdict (on its own), rating (when a Dislike is meant), feedback
+
+**Kept**:
+A Take the listener has filed in their own collection. The first time counts.
+_Avoid_: saved, liked, downloaded
+
 ### Liking
 
 **Liked Songs**:
