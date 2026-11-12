@@ -15,10 +15,10 @@ import queue
 import re
 import threading
 import time
-import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
-from . import __version__, db, originals, playlists, review, taste, verdicts
+from . import __version__, db, generated, originals, playlists, review, taste, verdicts
 
 log = logging.getLogger("haystack_music.api")
 VERSION = "1"
@@ -27,10 +27,15 @@ VERSION = "1"
 FEATURES: tuple[str, ...] = ("why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played",
                               "card.label", "card.song", "card.original", "swaps",
                               "trait.harmony", "taste")
+# Features listed only when the server's config switches them on (ADR 0029): name -> whether it is on.
+OPTIONAL_FEATURES = {"generated": generated.enabled}
 MAX_BODY = 1 << 20
 TRACK_PATH = re.compile(r"^/v1/tracks/([0-9A-Za-z]{22})$")
 PLAYLIST_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})$")
 PLAYLIST_TRACKS_PATH = re.compile(r"^/v1/playlists/([0-9A-Za-z]{22})/tracks$")
+# The generated-song store's outbox routes (ADR 0029): path -> (body key, most items per request).
+GENERATED_POSTS = {"/v1/generated/ideas": ("ideas", 100), "/v1/generated/verdicts": ("verdicts", 500),
+                   "/v1/generated/kept": ("kept", 500)}
 QUEUES = ("discoveries", "likes", "playlists", "calibrate")
 MEASURE_AHEAD = 20      # per queue; the harvest's backfill measures the rest
 CHECK_AHEAD = 20        # per queue or playlist: the next tracks checked for a possible cover (a card asked for: first)
@@ -102,7 +107,7 @@ def parse_play(p) -> tuple:
 def parse_taste_query(query: str) -> dict:
     """GET /v1/taste's query -> kwargs for taste.brief: days (1-3650) and min_n (1-10000), each at most once.
     Raises ValueError with a reason."""
-    q = urllib.parse.parse_qs(query, keep_blank_values=True)
+    q = parse_qs(query, keep_blank_values=True)
     out = {}
     for name, hi in (("days", 3650), ("min_n", 10000)):
         if name not in q:
@@ -114,9 +119,20 @@ def parse_taste_query(query: str) -> dict:
     return out
 
 
-def server_info() -> dict:
-    """The `server` object of /v1/health and /v1/state: haystack's version, the API version and its features."""
-    return {"version": __version__, "api": VERSION, "features": list(FEATURES)}
+def server_info(cfg: dict | None = None) -> dict:
+    """The `server` object of /v1/health and /v1/state: haystack's version, the API version and its features,
+    with each optional one this config switches on."""
+    return {"version": __version__, "api": VERSION,
+            "features": list(FEATURES) + [f for f, on in OPTIONAL_FEATURES.items() if on(cfg)]}
+
+
+def parse_notes_query(query: str) -> int:
+    """`GET /v1/generated/notes?limit=` -> how many notes. Raises ValueError with a reason."""
+    q = parse_qs(query)
+    raw = q.get("limit", [str(generated.NOTES_LIMIT)])[-1]
+    if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= generated.NOTES_MOST:
+        raise ValueError(f"limit must be a whole number from 1 to {generated.NOTES_MOST}")
+    return int(raw)
 
 
 class Worker(threading.Thread):
@@ -319,7 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         if path == "/v1/health":
-            return self._send(200, {"ok": True, "version": VERSION, "time": db.now(), "server": server_info()})
+            return self._send(200, {"ok": True, "version": VERSION, "time": db.now(),
+                                    "server": server_info(self.server.cfg)})
         if path == "/v1/state":
             verdicts.judge_picks(self._con())       # a Calibrate pick judged by a verdict from anywhere
             st = review.state(self._con(), self.server.cfg, self._cards())
@@ -330,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._check([c for c in st["queues"][qname]["items"] if not c["verdict"]], CHECK_AHEAD)
             if self.server.worker:
                 self.server.worker.playlists(PLAYLISTS_EVERY)
-            st["server"] = server_info()
+            st["server"] = server_info(self.server.cfg)
             return self._send(200, st)
         if path == "/v1/taste":
             try:
@@ -359,6 +376,14 @@ class Handler(BaseHTTPRequestHandler):
                 card["measure"] = "pending"
                 return self._send(202, card)
             return self._send(200, card)
+        if self.server.generated and path == "/v1/generated/takes":
+            return self._send(200, generated.takes(self._con()))
+        if self.server.generated and path == "/v1/generated/notes":
+            try:
+                limit = parse_notes_query(self.path.partition("?")[2])
+            except ValueError as e:
+                return self._error(400, str(e))
+            return self._send(200, generated.notes(self._con(), limit))
         self._error(404, "no such endpoint")
 
     def do_POST(self):
@@ -421,6 +446,12 @@ class Handler(BaseHTTPRequestHandler):
                             "VALUES(?,?,?,?,?)", (track, started, "needle", ms, done))
                 accepted.append(p["id"])
             return self._send(200, {"accepted": accepted, "rejected": rejected})
+        if self.server.generated and path in GENERATED_POSTS:
+            key, most = GENERATED_POSTS[path]
+            items = body.get(key) if isinstance(body, dict) else None
+            if not isinstance(items, list) or len(items) > most:
+                return self._error(400, f"expected {{\"{key}\": [...]}} (at most {most})")
+            return self._send(200, generated.receive(self._con(), key, items))
         self._error(404, "no such endpoint")
 
     def do_PUT(self):
@@ -455,6 +486,13 @@ class Server(ThreadingHTTPServer):
         self.networks = [ipaddress.ip_network(n) for n in cfg["api"]["allow_networks"]]
         self.local = threading.local()
         self.classes = classes
+        self.generated = generated.enabled(cfg)
+        if self.generated:              # the store's tables exist only once it is switched on (ADR 0029)
+            con = db.connect(db_path)
+            try:
+                generated.ensure(con)
+            finally:
+                con.close()
 
 
 def load_token(cfg: dict) -> str:

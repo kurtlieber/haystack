@@ -59,6 +59,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `scheduler.py` | `haystack serve`'s job schedule (`[schedule]`), in place of the systemd timers |
 | `alert.py` | optional alerts: a webhook POST or a file in an outbox (`haystack:` prefix) |
 | `llm.py` | the optional language model (ADR 0019): a taste profile and the judged songs' metadata, sent blind; the model's chance measured against your Verdicts, and a dry run of its suggestions; providers `anthropic` (the SDK, an optional extra) and `openai_compatible`; nothing is imported or sent while `llm.enabled` is false |
+| `generated.py` | the optional generated-song store (ADR 0029): the Ideas a client such as spindle sends a music service, their Takes and the listener's verdicts and notes on them, under `/v1/generated/`; its tables exist only once `generated.enabled` is true, and no other module names them |
 
 
 ### Key rules
@@ -121,6 +122,12 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
   switches itself on once it has 40 labels and beats similarity alone.
 * **Spotify dev mode (2026).** No audio-features / recommendations / browse / artist top tracks / batch track
   fetch; search capped at 10. None of these are used.
+* **Generated songs stay apart (ADR 0029).** With `generated.enabled`, the API keeps a client's Ideas, Takes and
+  the verdicts on them in `generated_ideas`, `generated_takes` and `generated_verdicts`. Only `generated.py` names
+  those tables: harvest, scoring, the re-ranker, the Baseline, the Review and the language model never read them,
+  and `tests/test_generated.py` fails if a batch plan, the Baseline or the Review state does. Verdicts on Takes
+  are append-only by a client id, the latest by `given_at` current (ADR 0005). Switched off, the routes and the
+  feature go and the tables stay.
 
 ## Commands
 

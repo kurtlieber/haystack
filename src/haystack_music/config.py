@@ -342,6 +342,10 @@ DEFAULTS: dict = {
         "seeds_per_week": 100,         # songs asked for in one llm_suggest run
         "weekly_budget_usd": 1.0,      # the jobs stop for the ISO week once their recorded cost reaches this
     },
+    # The generated-song store (ADR 0029), for a client that has a music service make songs (spindle): its ideas,
+    # takes and the listener's verdicts and notes on them, under /v1/generated/. Off: no tables, no routes. Its
+    # verdicts never change what haystack recommends.
+    "generated": {"enabled": False},
 }
 
 

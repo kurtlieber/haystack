@@ -63,6 +63,9 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
   unmeasured on a card without it.
 - `taste`: `GET /v1/taste` serves the Taste brief, what the listener's Verdicts say about styles, tempo and
   instrumental level, for a client that writes song ideas from it (ADR 0028).
+- `generated`: the generated-song store under `/v1/generated/`, for a client that has a music service make songs,
+  such as spindle (ADR 0029, Generated songs). It is the one feature listed only when the server's config switches
+  it on (`[generated] enabled`); without it those routes answer `404` like any unknown path.
 
 ## Endpoints
 
@@ -77,6 +80,11 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 | GET | `/v1/playlists/{id}` | one playlist with a track card per song |
 | PUT | `/v1/playlists/{id}/tracks` | the songs of a playlist, as the client read them |
 | GET | `/v1/taste` | the Taste brief (feature `taste`) |
+| POST | `/v1/generated/ideas` | records Ideas with their Takes; idempotent by id (feature `generated`) |
+| POST | `/v1/generated/verdicts` | records verdicts on Takes; idempotent by id (feature `generated`) |
+| POST | `/v1/generated/kept` | marks Takes kept; idempotent by id (feature `generated`) |
+| GET | `/v1/generated/takes` | every Take with its current verdict, and every Idea (feature `generated`) |
+| GET | `/v1/generated/notes` | the newest notes on Takes (feature `generated`) |
 
 ### `GET /v1/state`
 
@@ -342,6 +350,91 @@ lists, and `min_n` (1–10000, default 8), the smallest style group the style ta
   "plays": 3, "readings": {"tempo": 128.0, …}, "styles": [["Synthwave", 0.62], …]}`. `title` and `artist` may be
   `null`; `readings` is `null` for a track with none; `styles` holds the top three, as on a track card.
 - `traits`: the Baseline, as `baseline.traits` in `GET /v1/state`.
+### Generated songs
+
+Feature `generated` (ADR 0029). Songs a client such as spindle has a music service make, and what the listener
+thinks of them, kept apart from everything else: a Take is not a Song, its verdict is not a Verdict, and nothing
+here changes what haystack harvests, scores, re-ranks, offers or counts in the Baseline.
+
+- An **Idea** is what the client asked the service for: `idea`, an object in the client's own form (which may say
+  who wrote the lyrics and the style), the `reason` it chose it, and `request`, exactly what it sent.
+- A **Take** is one piece of audio the service made, named by `service` (the service's short name: `a-z`, `0-9`,
+  `_` and `-`, at most 32) and `id` (the service's id for it, at most 128 characters). One Idea may have several.
+- A **verdict on a Take** is a Rating of 1-5 stars or a Dislike, with an optional `note`. There is no Pass. A
+  Take's current verdict is its latest by `given_at`; the older ones stay (ADR 0005).
+- A Take is **kept** once the listener has filed it in their own collection.
+
+The three POSTs work like `POST /v1/verdicts`: each item has a client-made `id` (8-64 characters), a resend is
+accepted and changes nothing, a malformed item is rejected with its reason and the others are stored. Times are
+UTC ISO 8601. The answer is `{"accepted": ["…"], "rejected": [{"id": "…", "error": "…"}]}`; a body that is not
+the expected object, or has too many items, gets `400`. The body is at most 1 MiB.
+
+#### `POST /v1/generated/ideas`
+
+```json
+{"ideas": [{"id": "3f0c9a6e-…", "created_at": "2026-11-12T09:30:00Z", "service": "acme",
+            "idea": {"title": "Night Bus", "style": "dark synthwave, 104 bpm", "lyrics_by": "model"},
+            "reason": "5★ synthwave between 100 and 110 bpm, none made yet",
+            "request": {"prompt": "…", "model": "m5"},
+            "takes": [{"id": "a1b2…", "title": "Night Bus", "model": "m5"}]}]}
+```
+
+- At most 100 Ideas; `takes` at most 20 per Idea. `idea` is required; `reason` (at most 4,000 characters),
+  `request` and a Take's `title` (500) and `model` (200, the service's model that made it) may be left out or
+  `null`. `idea` and `request` are at most 64 KiB each.
+- The Idea as first stored stays. Sent again with more Takes, it adds the ones haystack lacks; a Take already
+  known gets only the Idea, `title` or `model` it has none of.
+
+#### `POST /v1/generated/verdicts`
+
+```json
+{"verdicts": [{"id": "9d1e…", "service": "acme", "take": "a1b2…", "kind": "rating", "stars": 4,
+               "note": "the hook is great, the verse drags", "given_at": "2026-11-12T10:02:11Z"}]}
+```
+
+- At most 500. `kind` is `rating` (with `stars` 1-5) or `dislike` (no `stars`); `note` is optional, at most 4,000
+  characters.
+- A verdict may name a Take haystack has not heard of yet, such as one made before the client recorded its Ideas:
+  it is stored with no Idea, and an Idea recorded later claims it.
+
+#### `POST /v1/generated/kept`
+
+```json
+{"kept": [{"id": "c77a…", "service": "acme", "take": "a1b2…", "kept_at": "2026-11-12T10:05:00Z"}]}
+```
+
+- At most 500. The first mark stays: a Take kept again keeps its first `kept_at`. An unknown Take is stored as for
+  a verdict.
+
+#### `GET /v1/generated/takes`
+
+```json
+{"takes": [{"service": "acme", "id": "a1b2…", "idea": "3f0c9a6e-…", "title": "Night Bus", "model": "m5",
+            "kept_at": null,
+            "verdict": {"kind": "rating", "stars": 4, "note": "the hook is great, the verse drags",
+                        "given_at": "2026-11-12T10:02:11Z"}}],
+ "ideas": {"3f0c9a6e-…": {"created_at": "2026-11-12T09:30:00Z", "service": "acme",
+                          "idea": {"title": "Night Bus", "style": "dark synthwave, 104 bpm", "lyrics_by": "model"},
+                          "reason": "5★ synthwave between 100 and 110 bpm, none made yet",
+                          "request": {"prompt": "…", "model": "m5"}}}}
+```
+
+- Every Take, those of the newest Idea first (a Take with no Idea by when haystack first heard of it). `idea` is
+  `null` for a Take with no Idea yet, `verdict` `null` for one with none.
+- `ideas` holds every Idea by its id, each as it was first stored.
+
+#### `GET /v1/generated/notes`
+
+`?limit=` 1-500, default 50; anything else is `400`.
+
+```json
+{"notes": [{"service": "acme", "take": "a1b2…", "idea": "3f0c9a6e-…", "title": "Night Bus", "kind": "rating",
+            "stars": 4, "note": "the hook is great, the verse drags", "given_at": "2026-11-12T10:02:11Z",
+            "current": true}]}
+```
+
+- The newest verdicts that carry a note, by `given_at`, whether or not they are still the Take's current one:
+  `current` says which. A client writing its next Ideas reads them for what the listener said.
 
 ## Changes
 
@@ -362,3 +455,5 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 - 2026-10-23, haystack 0.9.0, `swaps`: `POST /v1/swaps`; `spotify.pending_writes` counts Swaps too.
 - 2026-11-05, haystack 0.13.0, `trait.harmony`: the `harmony` Trait in `baseline.traits` and a card's `readings` (ADR 0027).
 - 2026-11-12, haystack 0.15.0, `taste`: `GET /v1/taste`, the Taste brief (ADR 0028).
+- 2026-11-12, haystack 0.15.0, `generated`: the generated-song store under `/v1/generated/`, listed in
+  `features` only when the server switches it on (ADR 0029).

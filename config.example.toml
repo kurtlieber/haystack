@@ -131,3 +131,9 @@ price_out_per_mtok = 20.0         # (0 and 0 for a local model)
 jobs = []
 # jobs = ["seeds"]
 weekly_budget_usd = 1.0           # the jobs stop for the week once their recorded cost reaches this
+
+[generated]
+# The generated-song store (ADR 0029), for an app such as spindle that has a music service make songs for you: its
+# ideas, the takes it got and your ratings and notes on them, under /v1/generated/ (docs/api.md). Off, haystack
+# keeps none of it. Your ratings of these songs never change what haystack finds for you.
+enabled = false
