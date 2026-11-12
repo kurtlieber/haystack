@@ -292,4 +292,5 @@ a track that changes just before or after it can be misjudged.
   server. The optional places to look are told only names: of songs, artists, styles or labels, never your
   ratings. The optional language model, if you turn it on, gets a summary of your taste (your favourite artists
   with their mean stars, the artists you turned down, your top styles and Trait ranges), never a verdict on the
-  songs it's asked about.
+  songs it's asked about. The Taste brief, how often each style, tempo and amount of singing gets 5 stars from you,
+  goes only to an app you give haystack's API token to, such as spindle, which writes song ideas from it.

@@ -126,8 +126,9 @@ ALL_TRAITS = {"tempo": 120.0, "valence": 0.5, "energy": 0.6, "danceability": 0.7
 def server(tmp_path):
     """Two offers (one rated and re-ranked, one exploration with Readings), a rated Calibrate pick with Readings
     and the re-ranker's chance, an Unrated like, a rated like with Readings (the Baseline), a playlist holding both
-    offers, a Spotify write that failed, Deezer's label for every track with a Deezer id, an ISRC for each, and a
-    possible cover among the offers and the picks."""
+    offers, a Spotify write that failed, Deezer's label for every track with a Deezer id, an ISRC for each, a
+    possible cover among the offers and the picks, and two songs new to the listener for the Taste brief: one rated 5
+    stars and played, one disliked."""
     path = tmp_path / "t.db"
     con = db.connect(path)
     con.execute("INSERT INTO batches(id, created_at, size) VALUES(1, '2026-01-05T00:00:00Z', 2)")
@@ -181,6 +182,17 @@ def server(tmp_path):
                 "VALUES(77, 'Synthetic Records', '2020-01-02', 'single', 'x')")
     con.execute("UPDATE candidates SET album_id=77")
     con.execute("UPDATE liked_map SET album_id=77")
+    for cid, name, kind, stars in ((4, "fav1", "rating", 5), (5, "nope1", "dislike", None)):   # the Taste brief's lists
+        con.execute("INSERT INTO spotify_tracks(spotify_id, name, artists_json, isrc) VALUES(?,?,?,?)",
+                    (sid(name), f"Track {cid + 2}", json.dumps([f"Artist {cid + 2}"]), f"XXSYN26{cid + 2:05d}"))
+        con.execute("INSERT INTO candidates(id, deezer_id, artist, title, source, state, vector_status, spotify_id) "
+                    "VALUES(?, ?, ?, ?, 'deezer_related', 'pool', 'ok', ?)",
+                    (cid, cid, f"Artist {cid + 2}", f"Track {cid + 2}", sid(name)))
+        vectors.put_deezer_vector(con, cid, np.ones(512), np.zeros(1280), 10, 30.0, np.eye(400)[20 + cid])
+        traits.put(con, cid, ALL_TRAITS)
+        verdicts.record(con, sid(name), kind, stars, queue="discoveries")
+    con.execute("INSERT INTO plays(spotify_id, played_at, context) VALUES(?, '2026-01-06T00:00:00Z', 'needle')",
+                (sid("fav1"),))
     srv = api.Server(("127.0.0.1", 0), config.load(tmp_path / "none.toml"), TOKEN, Worker(), db_path=path,
                      classes=[f"Parent---Style{i}" for i in range(400)])
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -215,7 +227,8 @@ def payloads(srv) -> dict:
              {"swaps": [{"id": "contract-s1", "track": sid("like1"), "original": sid("orig"),
                          "given_at": "2026-01-07T00:00:00Z"}, {"id": "contract-s2", "track": "short"}]}),
             ("playlist_put_response", "PUT", f"/v1/playlists/{sid('mix')}/tracks",
-             {"snapshot_id": "s2", "tracks": [{"id": sid("disc1"), "title": "Track 1", "artists": ["Artist 1"]}]})):
+             {"snapshot_id": "s2", "tracks": [{"id": sid("disc1"), "title": "Track 1", "artists": ["Artist 1"]}]}),
+            ("taste", "GET", "/v1/taste?min_n=1", None)):
         code, out[name] = call(srv, method, path, body)
         assert code == 200, (name, out[name])
     return out
@@ -229,7 +242,7 @@ def test_live_payloads_keep_every_documented_key_and_type(server, defs):
     assert errs == []
     documented = set()
     for name in ("health", "state", "card", "playlist", "verdicts_response", "plays_response", "swaps_response",
-                 "playlist_put_response"):
+                 "playlist_put_response", "taste"):
         key_paths(defs[name], name, defs, documented)
     assert documented - seen == set(), "give these a non-null value in the test world"
 
@@ -250,7 +263,7 @@ def test_every_fixture_section_is_checked(defs):
                 else:
                     refs(s)
     roots = {"health", "state", "card", "playlist", "verdicts_response", "plays_response", "swaps_response",
-             "playlist_put_response"}
+             "playlist_put_response", "taste"}
     for name in roots:
         refs(defs[name])
     assert set(defs) == roots | used
