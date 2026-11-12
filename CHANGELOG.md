@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/kurtlieber/haystack/compare/v0.14.1...v0.15.0) (2026-11-12)
+
+
+### Features
+
+* **api:** keep generated songs and their verdicts in an optional store for spindle (dotfiles [#523](https://github.com/kurtlieber/haystack/issues/523)) ([#60](https://github.com/kurtlieber/haystack/issues/60)) ([5c1954c](https://github.com/kurtlieber/haystack/commit/5c1954c990b7e2d504487a1503c0edd89b0edb05))
+* **api:** serve the Taste brief at GET /v1/taste for spindle (dotfiles [#523](https://github.com/kurtlieber/haystack/issues/523)) ([#59](https://github.com/kurtlieber/haystack/issues/59)) ([9ac9300](https://github.com/kurtlieber/haystack/commit/9ac93002c9d4ee11959695edc7ac437c7f5139eb))
+
 ## [0.14.1](https://github.com/kurtlieber/haystack/compare/v0.14.0...v0.14.1) (2026-11-10)
 
 
