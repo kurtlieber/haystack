@@ -2,8 +2,8 @@
 
 The technical side of haystack: how it works, every command, the scoring details, the two ways to run it,
 secrets, sign-in and alerts. To install and configure it, start with the [README](../README.md). For the same
-ideas without the jargon, see [How haystack works](how-it-works.md). needle's API is in [api.md](api.md); the
-decisions behind the design are in [adr/](adr/).
+ideas without the jargon, see [How haystack works](how-it-works.md). The API needle and spindle use is in
+[api.md](api.md); the decisions behind the design are in [adr/](adr/).
 
 ## Where things live
 
@@ -52,6 +52,7 @@ score = max cosine(candidate preview, aligned to the library, any positive windo
 | `verdicts.py` | Your Verdicts (1-5 star Ratings, Pass, Dislike) on any track, append-only (ADR 0005), and the Spotify writes they imply: the heart, Discoveries, To Rip (ADR 0002); a Song's verdict, the newest on any release of a recording (by ISRC), for playlist cards and Rate your likes (ADR 0021) |
 | `traits.py`, `baseline.py` | Readings of the eight Traits from the Deezer preview (ADR 0001), backfill and on-demand measuring, the tempo fold for drum & bass and jungle; the Baseline and usual range |
 | `review.py`, `api.py` | needle's private API (ADR 0004, ADR 0006): track cards, the Review queues (Discoveries, Calibrate, Rate your likes), verdicts and plays in |
+| `taste.py` | the Taste brief for `GET /v1/taste` (ADR 0028): per style, tempo band and instrumental level, how many Songs got 5★, 4-5★ or a Pass or Dislike, over all of them and over those new to the listener; the recent 5★ and disliked new Songs and the most-played 5★. Read-only, no model; imports only the Baseline and the Readings |
 | `playlists.py` | Your playlists for needle's Playlist review: listed hourly, songs re-read when a playlist changes; Followed playlists' songs come from needle's engine (ADR 0008). Read-only towards Spotify |
 | `originals.py` | possible covers and live versions (ADR 0022): four signs (the title, a live take, a borrowed ISRC, Deezer popularity) checked once per track by the API's worker, and the Swap: the cover's Verdicts taken back and its Original put in its place in your own playlists and Liked Songs. The only code that edits your own playlists |
 | `status.py` | `status.json` in the state dir, `notify-send` (no-op without a desktop session) |

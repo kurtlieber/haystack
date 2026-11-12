@@ -1,8 +1,9 @@
 # HTTP API (v1)
 
-The contract between the server and its clients (needle today). The server owns it: a client depends on this
-document, never on the server's code or database. Why it looks this way: ADR 0004 (a private HTTP API), ADR 0005
-(Verdicts), ADR 0006 (one snapshot plus idempotent writes), ADR 0022 (possible covers and the Swap).
+The contract between the server and its clients (needle, and spindle for `GET /v1/taste`). The server owns it: a
+client depends on this document, never on the server's code or database. Why it looks this way: ADR 0004 (a private
+HTTP API), ADR 0005 (Verdicts), ADR 0006 (one snapshot plus idempotent writes), ADR 0022 (possible covers and the
+Swap).
 
 ## Transport
 
@@ -29,7 +30,7 @@ clients have moved.
 ```json
 {"version": "0.6.0", "api": "1",
  "features": ["why.band", "rerank", "why.reasons", "queue.calibrate", "plays.ms_played", "card.label",
-              "card.song", "card.original", "swaps", "trait.harmony"]}
+              "card.song", "card.original", "swaps", "trait.harmony", "taste"]}
 ```
 
 - `version`: the haystack release. Shown to people; a client never branches on it.
@@ -60,6 +61,8 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 - `trait.harmony`: `baseline.traits` and a track card's `readings` carry `harmony`, harmonic movement (ADR 0027).
   A track measured before 0.13.0 has none until the harvest's backfill reaches it, so a client shows the Trait as
   unmeasured on a card without it.
+- `taste`: `GET /v1/taste` serves the Taste brief, what the listener's Verdicts say about styles, tempo and
+  instrumental level, for a client that writes song ideas from it (ADR 0028).
 - `generated`: the generated-song store under `/v1/generated/`, for a client that has a music service make songs,
   such as spindle (ADR 0029, Generated songs). It is the one feature listed only when the server's config switches
   it on (`[generated] enabled`); without it those routes answer `404` like any unknown path.
@@ -76,6 +79,7 @@ Each feature is listed here with the fields it brings, and in "Changes" below:
 | GET | `/v1/tracks/{id}` | one track card; `202` while the track is being measured |
 | GET | `/v1/playlists/{id}` | one playlist with a track card per song |
 | PUT | `/v1/playlists/{id}/tracks` | the songs of a playlist, as the client read them |
+| GET | `/v1/taste` | the Taste brief (feature `taste`) |
 | POST | `/v1/generated/ideas` | records Ideas with their Takes; idempotent by id (feature `generated`) |
 | POST | `/v1/generated/verdicts` | records verdicts on Takes; idempotent by id (feature `generated`) |
 | POST | `/v1/generated/kept` | marks Takes kept; idempotent by id (feature `generated`) |
@@ -306,6 +310,46 @@ Playlist summary:
 - `404` for a playlist not in the listener's library. This never writes the playlist to Spotify; the only edit
   haystack makes to the listener's own playlists is a Swap's.
 
+### `GET /v1/taste`
+
+Feature `taste` (ADR 0028). The Taste brief: what the listener's Verdicts say about styles, tempo and instrumental
+level, for a client that writes song ideas from it (spindle). Read-only and cheap: the server computes it from what
+it has stored, with no model call. Query, both optional: `days` (1–3650, default 45), the window of the recent
+lists, and `min_n` (1–10000, default 8), the smallest style group the style tables show; anything else is `400`.
+
+```json
+{"generated_at": "…Z", "days": 45, "min_n": 8, "style_on": 0.1,
+ "counts": {"songs": 1200, "measured": 1150, "new": 400, "recent_five_stars": 30, "recent_dislikes": 90},
+ "totals": {"all": <tally>, "new": <tally>},
+ "styles": {"all": [{"style": "Synthwave", "genre": "Electronic", "n": 40, "five": 12, "four_five": 25,
+                     "down": 6}, …], "new": […]},
+ "instrumentalness": {"all": [{"lo": 0, "hi": 0.05, "n": 300, "five": 50, "four_five": 120, "down": 70}, …],
+                      "new": […]},
+ "tempo": {"all": [{"lo": 0, "hi": 95, …}, …, {"lo": 200, "hi": null, …}], "new": […]},
+ "recent": {"five_stars": [<song>, …], "dislikes": [<song>, …]},
+ "most_played": [<song>, …],
+ "traits": {"tempo": {"mean": 118.2, "lo": 98.0, "hi": 128.0, "n": 380}, "…": null}}
+```
+
+- A Song is counted once, by its ISRC (a track without one is a Song of its own), with its newest Verdict on any of
+  its releases. `counts.songs` is every Song with a Verdict; `measured` those with styles; `new` the measured ones
+  whose Verdict came from the Discoveries or Calibrate queue, songs that were new to the listener.
+- `<tally>` is counts, not rates: `{"n", "five", "four_five", "down"}`, the Songs, those rated 5★, those rated 4★ or
+  5★, and those whose Verdict is a Pass or a Dislike. `totals.all` is over every Song, `totals.new` over the new
+  ones.
+- `styles`: per style (`genre` is its parent), a tally of the Songs where the style's activation is at least
+  `style_on`. Only styles with at least `min_n` Songs, the highest share of 5★ first, then the larger group. `all`
+  is over the measured Songs, `new` over the new ones. Empty when the server has no style names.
+- `instrumentalness` and `tempo`: a tally per band, every band present even when empty, over the Songs with that
+  Reading. A band is `lo` ≤ value < `hi`; instrumentalness's last band includes 1, tempo's last has `hi: null`.
+- `recent.five_stars`: the new Songs rated 5★ in the last `days` days, newest first, at most 25.
+  `recent.dislikes`: the new Songs disliked in that window, at most 15. `counts.recent_five_stars` and
+  `counts.recent_dislikes` count them all. `most_played`: the Songs rated 5★ that the listener played, most plays
+  first, at most 15.
+- `<song>`: `{"id": "<track id>", "title": "…", "artist": "…", "kind": "rating", "stars": 5, "given_at": "…Z",
+  "plays": 3, "readings": {"tempo": 128.0, …}, "styles": [["Synthwave", 0.62], …]}`. `title` and `artist` may be
+  `null`; `readings` is `null` for a track with none; `styles` holds the top three, as on a track card.
+- `traits`: the Baseline, as `baseline.traits` in `GET /v1/state`.
 ### Generated songs
 
 Feature `generated` (ADR 0029). Songs a client such as spindle has a music service make, and what the listener
@@ -410,5 +454,6 @@ One line per addition to `/v1`: the date, the haystack release that has it, and 
 - 2026-10-23, haystack 0.9.0, `card.original`: `original` and `original_check` in a track card.
 - 2026-10-23, haystack 0.9.0, `swaps`: `POST /v1/swaps`; `spotify.pending_writes` counts Swaps too.
 - 2026-11-05, haystack 0.13.0, `trait.harmony`: the `harmony` Trait in `baseline.traits` and a card's `readings` (ADR 0027).
+- 2026-11-12, haystack 0.15.0, `taste`: `GET /v1/taste`, the Taste brief (ADR 0028).
 - 2026-11-12, haystack 0.15.0, `generated`: the generated-song store under `/v1/generated/`, listed in
   `features` only when the server switches it on (ADR 0029).

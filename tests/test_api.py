@@ -398,3 +398,24 @@ def test_cover_checks_wait_behind_measuring_and_one_needle_waits_on_goes_first(t
         ("effects", None), ("measure", sid("m1")), ("original_soon", sid("c2")), ("original_soon", sid("c1")),
         ("original", sid("c1"))]
     assert w.checking == {sid("c1"), sid("c2")}
+
+
+def test_the_taste_brief_is_served_and_listed_as_a_feature(world):
+    srv, _, con = world
+    code, b = call(srv, "GET", "/v1/taste")
+    assert code == 200
+    assert b["counts"]["songs"] == 2 and b["totals"]["all"]["four_five"] == 1      # blind's 4 stars, like2's Pass
+    assert b["days"] == 45 and b["traits"].keys() == set(traits.TRAITS)
+    assert "taste" in call(srv, "GET", "/v1/health")[1]["server"]["features"]
+    assert call(srv, "GET", "/v1/taste", token=None)[0] == 401
+    assert call(srv, "POST", "/v1/taste", {})[0] == 404
+
+
+def test_the_taste_brief_takes_its_window_and_smallest_style_group(world):
+    srv, _, _ = world
+    code, b = call(srv, "GET", "/v1/taste?days=200&min_n=1")
+    assert code == 200 and (b["days"], b["min_n"]) == (200, 1)
+    assert [r["n"] for r in b["styles"]["all"]] == [1]                  # blind's style; like2 has none
+    for bad in ("days=0", "days=x", "min_n=0", "days=100000", "min_n=1&min_n=2"):
+        code, err = call(srv, "GET", f"/v1/taste?{bad}")
+        assert code == 400 and "error" in err, bad
